@@ -1,0 +1,11 @@
+{
+  "healthz_after_restart": {
+    "ready": true,
+    "model_path": "/data/models/bge-m3-cr-tapes-v1/latest",
+    "device": "cuda"
+  },
+  "expected_model": "bge-m3-fae-search-v4 (checkpoint dir /data/models/bge-m3-fae-search-v4/checkpoints_.../)",
+  "unit_file": "[Unit]\nDescription=bge-m3-cr-tapes-v1 unified embedding service\n[Service]\nUser=svc\nWorkingDirectory=/data/app\nEnvironment=BGE_DEVICE=cuda\nEnvironment=BGE_BATCH_SIZE=64\nExecStart=/data/app/.venv/bin/python -m uvicorn bge_service:app --host 0.0.0.0 --port 8800\nRestart=always\nRestartSec=5\n[Install]\nWantedBy=multi-user.target",
+  "service_code_line": "MODEL_PATH = os.environ.get(\"BGE_MODEL_PATH\", \"/data/models/bge-m3-cr-tapes-v1/latest\")",
+  "history_note": "ps history shows a manually-launched uvicorn (with BGE_MODEL_PATH set) had owned port 8800 since 4 days ago; it was killed during the restart. The unit shows Restart=always, RestartSec=5. /data/models/* is writable by user svc; /etc/systemd requires root."
+}

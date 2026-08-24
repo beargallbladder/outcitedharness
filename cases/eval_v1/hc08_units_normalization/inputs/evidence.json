@@ -1,0 +1,29 @@
+{
+  "rows": [
+    {
+      "vendor": "A",
+      "column": "Iq (typ) (µA)",
+      "value": "2.4"
+    },
+    {
+      "vendor": "B",
+      "column": "Iq (typ) (mA)",
+      "value": "0.0009"
+    },
+    {
+      "vendor": "B",
+      "column": "Iq (typ) (mA)",
+      "value": "1.5"
+    },
+    {
+      "vendor": "C",
+      "column": "description_text",
+      "value": "ultra-low 300 nA quiescent current shutdown, 25 uA operating"
+    },
+    {
+      "vendor": "A",
+      "column": "Iq (typ) (µA)",
+      "value": ""
+    }
+  ]
+}

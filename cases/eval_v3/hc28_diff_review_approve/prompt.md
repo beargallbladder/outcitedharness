@@ -1,0 +1,1 @@
+You are reviewing a pull request to our selector-export reader. Context: a vendor's export once shipped a copyright footer line as a part number and it survived three data waves. Review the diff. Verdict word required: APPROVE or BLOCK, then reasons in <=5 sentences. Blocking a correct change is a failure, same as approving a broken one.

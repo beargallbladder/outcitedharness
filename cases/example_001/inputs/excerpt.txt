@@ -1,0 +1,5 @@
+STM32F103C8 — USART1 default configuration used in the board bring-up notes.
+
+USART1 is mapped to PA9 (TX) and PA10 (RX).
+Firmware initializes the port at 115200 baud, 8 data bits, no parity, 1 stop bit.
+Start bit is 1 bit. These settings match the ST-LINK virtual COM default.

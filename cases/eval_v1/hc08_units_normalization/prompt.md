@@ -1,0 +1,1 @@
+Normalize quiescent current to MICROAMPS (µA) for each row. Vendor A states 'Iq (typ) (µA)'; vendor B states 'Iq (typ) (mA)'; vendor C states quiescent current inline as text. Return a JSON array of numbers (µA), same order, null where the value is genuinely absent.

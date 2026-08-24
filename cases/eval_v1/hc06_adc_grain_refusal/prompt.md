@@ -1,0 +1,1 @@
+You maintain a per-part parametric database where each part may have AT MOST one integer value for adc_channels, OR a per-package map, OR an explicit refusal {"no_single_value": true, "reason": ...}. Writing a wrong single number is worse than refusing. For each part in evidence, output what should be stored. Return JSON keyed by part number.

@@ -1,0 +1,19 @@
+@@ -44,6 +44,17 @@
++_JUNK_MPN_PATTERNS = (
++    re.compile(r'copyright|all rights reserved|\u00a9'),
++    re.compile(r'^\d[\d,]* results? found$'),
++    re.compile(r'^(products? compare|show more|load more)$', re.I),
++)
++
++def is_junk_mpn(s: str) -> bool:
++    t = (s or '').strip().lower()
++    if not t or len(t) < 4 or len(t) > 40:
++        return True
++    return any(p.search(t) for p in _JUNK_MPN_PATTERNS)
++
+@@ -61,7 +72,7 @@ def read_rows(path):
+     for r in rows[1:]:
+         pn = cell(r, 'Part Number')
+-        if not pn:
++        if not pn or is_junk_mpn(pn):
+             continue

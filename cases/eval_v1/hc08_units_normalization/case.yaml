@@ -1,0 +1,21 @@
+id: hc08_units_normalization
+title: hc08 units normalization
+category: units
+tags:
+- easy-medium
+- units
+input_files:
+- inputs/evidence.json
+evaluation:
+  type: exact_json
+  ignore_order: false
+  tolerance: 0.01
+historical:
+  notes: 'REAL PIPELINE STEP: the power substrate bake (2026-08-22) normalizes TI''s
+    mixed µA/mA Iq columns to a µA canon; ST states mA, TI states µA or mA depending
+    on subcategory. Row 4''s trap is real: descriptions often state BOTH a shutdown
+    current (300 nA) and an operating quiescent current (25 µA) — the field wants
+    operating Iq. Frontier models pass; the historical failure in cheap models is
+    unit-blind'
+reference_answer:
+  file: expected/answer.json

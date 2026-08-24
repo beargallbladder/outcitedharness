@@ -1,0 +1,19 @@
+id: hc22_sql_asof_semantics
+title: hc22 sql asof semantics
+category: sql_data
+tags:
+- medium
+- sql_data
+input_files:
+- inputs/evidence.json
+evaluation:
+  type: exact_json
+  ignore_order: false
+historical:
+  notes: 'REAL PRODUCTION CODE (lib/db/cr-artifacts.ts, verbatim) and the semantics
+    behind every /categories page: stale weeks carry forward with an as_of stamp rather
+    than zeroing. The trap is (c): a target BEFORE the earliest artifact returns null,
+    not the earliest week — models that reach for ''closest week'' instead of reading
+    `week <= $2` get it wrong. String comparison on ISO weeks works here because ou'
+reference_answer:
+  file: expected/answer.json

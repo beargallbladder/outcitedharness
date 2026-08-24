@@ -1,0 +1,4 @@
+{
+  "diff": "@@ -44,6 +44,17 @@\n+_JUNK_MPN_PATTERNS = (\n+    re.compile(r'copyright|all rights reserved|\\u00a9'),\n+    re.compile(r'^\\d[\\d,]* results? found$'),\n+    re.compile(r'^(products? compare|show more|load more)$', re.I),\n+)\n+\n+def is_junk_mpn(s: str) -> bool:\n+    t = (s or '').strip().lower()\n+    if not t or len(t) < 4 or len(t) > 40:\n+        return True\n+    return any(p.search(t) for p in _JUNK_MPN_PATTERNS)\n+\n @@ -61,7 +72,7 @@ def read_rows(path):\n     for r in rows[1:]:\n         pn = cell(r, 'Part Number')\n-        if not pn:\n+        if not pn or is_junk_mpn(pn):\n             continue",
+  "test_included": "def test_footer_is_junk():\n    assert is_junk_mpn('\\u00a9 2006-2026 NXP Semiconductors. All rights reserved.')\n    assert is_junk_mpn('1,115 results found')\n    assert not is_junk_mpn('S32K144HAT0MLLT')\n    assert not is_junk_mpn('LPC55S69JBD100')"
+}

@@ -1,0 +1,36 @@
+id: hc24_authz_wallet_review
+title: hc24 authz wallet review
+category: middle_tier_review
+tags:
+- medium-hard
+- middle_tier_review
+input_files:
+- inputs/evidence.json
+evaluation:
+  type: keyword_rubric
+  groups:
+  - - every aisle
+    - all aisles
+    - everything
+    - unrestricted
+    - bypasses the wallet
+  - - wallet_slugs is decorative
+    - wallet is ignored
+    - ops believes the wallet is enforced
+    - selective publication
+    - unpublished
+    - paying for
+  - - explicit all-access
+    - wildcard
+    - '''*'''
+    - all_access
+    - separate flag
+    - check the wallet for custom
+    - wallet_slugs for custom too
+historical:
+  notes: 'REAL INCIDENT 2026-08-05 (verbatim production code): a partner''s key was
+    on ''custom'' tier, so its production credential could read the ENTIRE corpus
+    including six unpublished aisles — the only thing limiting their surface was their
+    own frontend''s route table. Repo rule since: entitlement must be enforced by
+    tier+wallet on our side, never by trusting a consumer''s routes; ''custom'' short-circuiting
+    s'

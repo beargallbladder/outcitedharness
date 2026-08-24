@@ -1,0 +1,1 @@
+REAL INCIDENT, encoded as repo discipline rule #10 ('sha-check, never presence-check, on artifact ingest'): a re-shipped corrected artifact was skipped on kind+week presence while carrying a new sha, silently keeping poisoned data live. The precise fix: fetch stored sha, hash the file, skip ONLY on sha equality.

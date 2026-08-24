@@ -1,0 +1,25 @@
+{
+  "parts": [
+    {
+      "part": "MSP430FR2475",
+      "vendor_parametric_column": "12",
+      "datasheet_per_package": {
+        "TPT (48-pin)": 12,
+        "TRHA (40-pin)": 10,
+        "TRHB (32-pin)": 8
+      }
+    },
+    {
+      "part": "TMS320F280230",
+      "vendor_parametric_column": "6,7,8,13",
+      "datasheet_per_package": null
+    },
+    {
+      "part": "TMS320F280039C",
+      "vendor_parametric_column": "14",
+      "datasheet_per_package": {
+        "all packages": 14
+      }
+    }
+  ]
+}

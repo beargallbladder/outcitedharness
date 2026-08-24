@@ -1,0 +1,18 @@
+id: example_001
+title: Extract UART frame parameters from a datasheet excerpt
+category: structured_extraction
+tags:
+  - uart
+  - datasheet
+  - smoke
+input_files:
+  - inputs/excerpt.txt
+reference_answer:
+  file: expected/answer.json
+evaluation:
+  type: exact_json
+  ignore_order: true
+historical:
+  local_failed: false
+  frontier_succeeded: true
+  notes: Smoke-test case for the first local tournament. Both live local models should solve this.

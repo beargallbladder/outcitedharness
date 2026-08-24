@@ -1,0 +1,1 @@
+A script pulls a JSON blob out of Postgres like this and json.loads fails with 'Expecting value: line 1 column 77'. The blob is valid JSON when inspected in the DB. Diagnose and fix (either side of the pipe is fair game).

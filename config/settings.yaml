@@ -1,0 +1,11 @@
+results_dir: results
+db_path: results/harness.db
+health_timeout_s: 8
+default_timeout_s: 180
+tournament_parallel: true
+max_answer_preview_chars: 800
+system_prompt: |
+  You are completing a benchmark task.
+  Follow the instructions exactly.
+  Do not mention other models.
+  If JSON is requested, return valid JSON only.

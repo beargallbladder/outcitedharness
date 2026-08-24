@@ -1,0 +1,29 @@
+id: lv02_sentinel_sql
+title: Live sentinel filter
+category: sql_data
+tags:
+- live_sandbox
+- three_node_slot
+input_files:
+- inputs/HOUSE_RULES.md
+- inputs/good_consumer.sql
+- inputs/naked_query.sql
+evaluation:
+  type: keyword_rubric
+  groups:
+  - - __unknown__
+    - sentinel
+    - '''n'''
+  - - not in
+    - exclude
+    - filter
+    - category !=
+    - <>
+  - - inflate
+    - overcount
+    - phantom
+    - not mentions
+    - not data
+    - coverage row
+historical:
+  notes: 'Real rule #8. The good consumer already does this; the naked one does not.'

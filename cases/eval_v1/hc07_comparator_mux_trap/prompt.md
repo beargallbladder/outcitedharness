@@ -1,0 +1,1 @@
+From the extracted datasheet text below, determine how many ADC input channels part TMS320F28002x-style 'F2001' has. The database field is adc_channels (ADC-capable input channels). If the part has no ADC, the correct answer is 0. Return JSON: {"adc_channels": int, "reasoning": str<=40 words}.

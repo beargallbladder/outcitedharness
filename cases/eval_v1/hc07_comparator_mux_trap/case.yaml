@@ -1,0 +1,21 @@
+id: hc07_comparator_mux_trap
+title: hc07 comparator mux trap
+category: extraction_judgment
+tags:
+- hard
+- extraction_judgment
+input_files:
+- inputs/evidence.json
+evaluation:
+  type: json_fields
+  fields:
+    adc_channels: 0
+historical:
+  notes: 'REAL FAILURE MODE from the ADC ground-truth wave: text extraction ''returns
+    8'' for parts like this because the comparator mux table says ''8 input channels''
+    — but they are COMPARATOR inputs and the ADC module is absent. The crawler''s
+    vision+judgment wave wrote null/0 with evidence for nine such parts and TI''s
+    own column later said 0 for all nine (9/9 vindicated). Text-in models at 7B-30B
+    historicall'
+reference_answer:
+  file: expected/answer.json

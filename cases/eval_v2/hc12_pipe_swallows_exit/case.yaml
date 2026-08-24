@@ -1,0 +1,25 @@
+id: hc12_pipe_swallows_exit
+title: hc12 pipe swallows exit
+category: ci_shell
+tags:
+- easy-medium
+- ci_shell
+input_files:
+- inputs/evidence.json
+evaluation:
+  type: keyword_rubric
+  groups:
+  - - exit code of tail
+    - exit status of the last command
+    - pipe returns tail
+    - pipeline exit
+  - - pipefail
+    - PIPESTATUS
+    - run pytest without the pipe
+    - capture the exit code first
+    - tee
+historical:
+  notes: 'REAL INCIDENT, now a standing repo rule (''never pytest | tail — a pipe
+    swallowed a red test once''): a red suite shipped because set -e saw tail''s exit
+    0. Both fixes accepted: set -o pipefail, or run pytest bare and read $?/PIPESTATUS[0].
+    This is the single highest-frequency footgun class in our orchestration scripts.'

@@ -1,0 +1,1 @@
+FR2475 must NOT be stored as 12 (that is the max-package ceiling; per-package map or refusal required). F280230 must be a refusal or a multi-value representation, never one number. F280039C must be exactly 14 (uniform across packages — refusing here is over-caution and loses a real value).

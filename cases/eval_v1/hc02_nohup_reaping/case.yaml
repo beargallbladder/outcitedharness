@@ -1,0 +1,33 @@
+id: hc02_nohup_reaping
+title: hc02 nohup reaping
+category: ops_debugging
+tags:
+- easy-medium
+- ops_debugging
+input_files:
+- inputs/evidence.json
+evaluation:
+  type: keyword_rubric
+  groups:
+  - - process group
+    - process-group
+    - parent shell
+    - wrapper shell
+    - session
+  - - reaped
+    - killed
+    - terminated
+    - torn down
+  - - setsid
+    - double-fork
+    - daemon
+    - persistent shell
+    - launchd
+    - disown + new session
+historical:
+  notes: 'REAL RECURRING INCIDENT: this exact pattern silently killed weekly collection
+    fires multiple times (documented in the repo runbook as ''the #1 reason weekly
+    fires looked started then vanished'') and killed a 1000-query baseline run on
+    2026-08-22. nohup blocks SIGHUP but the harness tears down the process GROUP on
+    wrapper exit. Frontier models (sonnet/fable-class) diagnose it immediately; the
+    trap is'

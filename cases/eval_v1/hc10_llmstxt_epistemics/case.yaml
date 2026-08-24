@@ -1,0 +1,22 @@
+id: hc10_llmstxt_epistemics
+title: hc10 llmstxt epistemics
+category: epistemics
+tags:
+- hard
+- epistemics
+input_files:
+- inputs/evidence.json
+evaluation:
+  type: command
+  command:
+  - python3
+  - expected/validate.py
+historical:
+  notes: 'REAL ANALYSIS ERROR 2026-08-21, corrected after the operator challenged
+    it: an initial report called the 8-bit claim ''vendor-confirmed'' from the llms.txt
+    omission; the correction downgraded it to ''consistent with'' because a curated
+    agent index is an authority-of-some, never an authority-of-all. This tri-state
+    discipline (declared true / explicitly denied / silent-unknown) is the same rule
+    the elim'
+reference_answer:
+  file: expected/answer.json

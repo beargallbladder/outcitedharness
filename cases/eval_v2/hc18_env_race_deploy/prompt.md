@@ -1,0 +1,1 @@
+An operator updates a service's environment variable via the hosting API while a build for that service is ALREADY RUNNING, then waits for that build to go live and declares the change shipped. Two hours later the service is observed still using the old value. Explain the mechanism and write the correct ship sequence (pseudocode or prose).

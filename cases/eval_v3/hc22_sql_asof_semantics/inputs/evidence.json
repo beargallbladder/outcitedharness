@@ -1,0 +1,27 @@
+{
+  "code": "export async function findArtifactWeekAsOf(kind: string, targetWeek: string): Promise<string | null> {\n  const r = await db.query<{ week: string }>(\n    `SELECT week FROM cr_artifacts\n       WHERE artifact_kind = $1 AND week <= $2\n       ORDER BY week DESC LIMIT 1`,\n    [kind, targetWeek]\n  )\n  return r.rows[0]?.week ?? null\n}",
+  "cr_artifacts_rows": [
+    {
+      "artifact_kind": "hero_rollup",
+      "week": "2026-W24"
+    },
+    {
+      "artifact_kind": "hero_rollup",
+      "week": "2026-W28"
+    },
+    {
+      "artifact_kind": "hero_rollup",
+      "week": "2026-W31"
+    },
+    {
+      "artifact_kind": "recall_pack",
+      "week": "2026-W30"
+    }
+  ],
+  "calls": {
+    "a": "findArtifactWeekAsOf('hero_rollup', '2026-W30')",
+    "b": "findArtifactWeekAsOf('hero_rollup', '2026-W31')",
+    "c": "findArtifactWeekAsOf('hero_rollup', '2026-W23')",
+    "d": "findArtifactWeekAsOf('recall_pack', '2026-W52')"
+  }
+}

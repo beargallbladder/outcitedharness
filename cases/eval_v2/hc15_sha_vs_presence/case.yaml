@@ -1,0 +1,35 @@
+id: hc15_sha_vs_presence
+title: hc15 sha vs presence
+category: code_review
+tags:
+- medium
+- code_review
+input_files:
+- inputs/evidence.json
+evaluation:
+  type: keyword_rubric
+  groups:
+  - - presence
+    - existence check
+    - skips on kind+week
+    - already present
+  - - sha
+    - hash
+    - content
+  - - compare the on-disk sha against the stored sha
+    - re-upload when the sha differs
+    - force update on content change
+    - stored sha
+    - existing sha
+    - hash differs
+    - hashes differ
+    - skip only if sha
+    - skip only on sha
+    - same hash
+    - content changed
+    - bytes changed
+historical:
+  notes: 'REAL INCIDENT, encoded as repo discipline rule #10 (''sha-check, never presence-check,
+    on artifact ingest''): a re-shipped corrected artifact was skipped on kind+week
+    presence while carrying a new sha, silently keeping poisoned data live. The precise
+    fix: fetch stored sha, hash the file, skip ONLY on sha equality.'

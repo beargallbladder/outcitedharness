@@ -1,0 +1,28 @@
+id: hc25_serverless_fs_503
+title: hc25 serverless fs 503
+category: middle_tier_bug
+tags:
+- medium-hard
+- middle_tier_bug
+input_files:
+- inputs/evidence.json
+evaluation:
+  type: keyword_rubric
+  groups:
+  - - not in the bundle
+    - excluded by size
+    - only the .gz ships
+    - 109 MB
+    - bundler
+  - - readVerifiedReleaseArtifactUtf8
+    - gz fallback
+    - gunzip
+    - use the helper
+  - - dev has both files
+    - works locally because the raw file exists on disk
+historical:
+  notes: 'REAL PRODUCTION 503 (facade family-series routes, 2026-08-21): raw readFileSync
+    on a >50MB artifact that only ships as a gz twin. The fix in production was exactly
+    the helper swap described — it also restored sha verification, which the raw read
+    skipped. Models that propose ''increase the bundle limit'' or ''read the gz inline
+    without verification'' get the mechanism but miss the release-integrity con'

@@ -1,0 +1,41 @@
+# 27B is CONTROL. Monsters are on trial for a 3-Spark chair.
+# PASS only. PARTIAL counts as a miss.
+
+control: dgx_qwen
+local_second: m5_qwen
+challengers:
+  - deepseek_flash
+  - hy3
+  - minimax
+  - glm52
+frontier: frontier
+critic_model: dgx_qwen
+
+buckets:
+  CODE:
+    - hc11_dict_sort_typeerror
+    - hc12_pipe_swallows_exit
+    - hc13_symlink_flip_macos
+    - hc14_base64_wrap_json
+    - hc16_gz_twin_drift
+    - hc17_allowlist_exact_match
+    - hc20_dual_write_queue
+    - sr01_wallet
+    - sr02_ingest_sha
+  PDF:
+    - hc03_opn_decode_inference
+    - hc06_adc_grain_refusal
+    - hc07_comparator_mux_trap
+    - hc08_units_normalization
+    - hc09_pin_cap_code_review
+  VISION: []
+  REASONING:
+    - hc04_tristate_canfd
+    - hc05_systemd_landmine
+    - hc10_llmstxt_epistemics
+    - hc15_sha_vs_presence
+    - hc18_env_race_deploy
+    - hc24_authz_wallet_review
+    - hc25_serverless_fs_503
+    - lv05_diff_block
+    - lv06_diff_approve

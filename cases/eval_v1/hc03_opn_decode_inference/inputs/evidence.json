@@ -1,0 +1,22 @@
+{
+  "decoded_examples": [
+    {
+      "Ordering code": "GD32F503VGT6",
+      "Flash (KB)": 1024,
+      "Package": "LQFP100",
+      "Temperature operating range": "Industrial -40 to +85 C"
+    },
+    {
+      "Ordering code": "GD32F503VGT7",
+      "Flash (KB)": 1024,
+      "Package": "LQFP100",
+      "Temperature operating range": "Industrial -40 to +105 C"
+    },
+    {
+      "Ordering code": "GD32F503RCL6",
+      "Flash (KB)": 256,
+      "Package": "BGA64",
+      "Temperature operating range": "Industrial -40 to +85 C"
+    }
+  ]
+}

@@ -1,0 +1,4 @@
+{
+  "script": "#!/usr/bin/env bash\nset -e\npython3 -m pytest tests/unit -q | tail -5\necho \"tests green, deploying\"\n./deploy.sh\n",
+  "observed": "pytest printed '1 failed, 990 passed' in the tail output, then 'tests green, deploying' ran anyway."
+}

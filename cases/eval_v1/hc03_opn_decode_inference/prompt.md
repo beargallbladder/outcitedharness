@@ -1,0 +1,1 @@
+GigaDevice GD32F503 ordering codes are positional. Using ONLY the three decoded examples in evidence, decode the ordering code GD32F503RGT6. Return JSON: {"pins": int, "package_family": str, "flash_kb": int, "temp_max_c": int}.

@@ -1,0 +1,1 @@
+On macOS, an operator flips a 'current' symlink to point at a new release directory. After running the commands below, the release directory is polluted: there is now a symlink INSIDE releases/v2 named 'current'. Explain why and give the correct atomic flip for macOS.

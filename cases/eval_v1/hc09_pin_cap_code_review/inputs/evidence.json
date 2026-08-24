@@ -1,0 +1,3 @@
+{
+  "code": "def pick_pin_summary(pin_rows, max_rows=None):\n    \"\"\"Collapse extracted pin-table rows to the anchor payload.\"\"\"\n    rows = [r for r in pin_rows if r.get(\"pin\") and r.get(\"function\")]\n    rows.sort(key=lambda r: _pin_sort_key(r[\"pin\"]))\n    v = [\n        {\n            \"pin\": r[\"pin\"],\n            \"function\": r[\"function\"],\n            \"alt\": (r.get(\"alt_functions\") or [])[:6],\n        }\n        for r in rows\n    ]\n    return {\"n_pins\": len(v[:80]), \"pins\": v[:80]}\n"
+}

@@ -1,0 +1,4 @@
+{
+  "code": "async function sendMessage(msg: Message) {\n  const fname = filename(msg);\n  // stage locally first so nothing is ever lost\n  await fs.writeFile(path.join(LOCAL_QUEUE, fname), render(msg));\n  try {\n    await fs.writeFile(path.join(SMB_MOUNT_INBOX, fname), render(msg));\n  } catch (e) {\n    log.warn(`mount write failed, message queued: ${e.message}`);\n  }\n  return { sent: true, id: msg.id };\n}",
+  "context": "A cron 'drain' job exists but was written months ago and — unknown to most operators — was never scheduled on two of four machines. The SMB mountpoint can also be silently stale: the OS reports it mounted while reads/writes go to a dead session or fall through to the underlying empty directory."
+}

@@ -1,0 +1,3 @@
+id: sr02_ingest_sha
+title: Presence-check ingest must become sha-check
+max_turns: 16

@@ -1,0 +1,30 @@
+id: hc14_base64_wrap_json
+title: hc14 base64 wrap json
+category: data_pipeline
+tags:
+- medium
+- data_pipeline
+input_files:
+- inputs/evidence.json
+evaluation:
+  type: keyword_rubric
+  groups:
+  - - '76'
+    - wraps
+    - newline
+    - line-wrapped
+    - MIME
+  - - strip the newlines
+    - replace(chr(10)
+    - translate
+    - b64decode ignores? no —
+    - remove whitespace before decoding
+    - regexp_replace
+    - set bytea_output
+    - encode without wrapping
+historical:
+  notes: 'REAL BUG (measure-recall-depth-zones script): Postgres encode(...,''base64'')
+    line-wraps at 76 chars per MIME convention; python b64decode chokes or truncates
+    on embedded newlines depending on validate flags, and the char-76 error is the
+    tell. Our fix stripped chr(10) in SQL. A model that only says ''the JSON is malformed''
+    without spotting 76-char wrapping fails.'

@@ -1,0 +1,29 @@
+id: hc11_dict_sort_typeerror
+title: hc11 dict sort typeerror
+category: python_bug
+tags:
+- easy-medium
+- python_bug
+input_files:
+- inputs/evidence.json
+evaluation:
+  type: keyword_rubric
+  groups:
+  - - duplicate
+    - equal first element
+    - same name
+    - tie
+    - ties
+  - - compares the second element
+    - falls back to the dict
+    - tuple comparison
+    - second item
+  - - key=
+    - sort by the name only
+    - sorted(pairs, key=lambda
+    - itemgetter(0)
+historical:
+  notes: 'REAL BUG in our FAE registry (fixed 2026-08): two orderables with the same
+    normalized name made tuple sorting fall through to dict comparison. Passed every
+    test until real data contained a duplicate. The subtle part a weak model misses:
+    it works fine WHEN NAMES ARE UNIQUE, so ''it crashes always'' is a wrong diagnosis.'

@@ -1,0 +1,32 @@
+{
+  "sample_rows": [
+    {
+      "model": "gpt-5-mini",
+      "time_window": "2026-W28"
+    },
+    {
+      "model": "gpt-5-mini",
+      "time_window": "2026-W34"
+    },
+    {
+      "model": "claude-sonnet",
+      "time_window": "2026-W28"
+    },
+    {
+      "model": "claude-sonnet",
+      "time_window": "2026-W34"
+    },
+    {
+      "model": "qwen3.7-plus",
+      "time_window": "2026-W28"
+    },
+    {
+      "model": "kimi-thinking",
+      "time_window": "2026-W28"
+    },
+    {
+      "model": "gemini-flash",
+      "time_window": "2026-W34"
+    }
+  ]
+}

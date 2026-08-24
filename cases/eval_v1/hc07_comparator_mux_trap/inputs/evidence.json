@@ -1,0 +1,3 @@
+{
+  "extracted_text": "3.5 Analog Subsystem. The device provides a comparator subsystem (CMPSS) with 8 multiplexed comparator inputs CMPIN1..CMPIN8 shared with GPIO pins. Comparator inputs are routed through the analog mux matrix. NOTE: This device variant does not integrate the 12-bit ADC module; ADC registers are reserved. See Section 3.6 for the comparator input mux table listing 8 input channels."
+}

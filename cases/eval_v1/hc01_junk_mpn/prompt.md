@@ -1,0 +1,1 @@
+You are ingesting vendor selector export rows. Each candidate string below was captured from the Part Number column. Return a JSON array of booleans, one per candidate, true if the string is a REAL orderable part number and false if it is junk (footer, boilerplate, non-part text). Answer with ONLY the JSON array.

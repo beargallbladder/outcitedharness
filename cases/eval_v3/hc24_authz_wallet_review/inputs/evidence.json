@@ -1,0 +1,4 @@
+{
+  "code": "export function slugInWallet(user: ApiUser, slug: string): boolean {\n  if (user.api_tier === 'custom') return true\n  if (user.api_tier === 'free') {\n    return user.free_slug === slug\n  }\n  return user.wallet_slugs.includes(slug)\n}",
+  "caller": "if (aisle && !slugInWallet(user, aisle)) {\n  return designWinsProblem(403, 'forbidden', 'Aisle is not in this wallet', {...})\n}"
+}

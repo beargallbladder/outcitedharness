@@ -1,0 +1,32 @@
+id: hc26_fe_param_precedence
+title: hc26 fe param precedence
+category: frontend_bug
+tags:
+- medium
+- frontend_bug
+input_files:
+- inputs/evidence.json
+evaluation:
+  type: keyword_rubric
+  groups:
+  - - q || brief
+    - q takes precedence
+    - q wins
+    - backwards
+    - precedence is inverted
+  - - brief || q
+    - brief first
+    - refined intent
+    - picture flow output should win
+  - - bav99s
+    - stale
+    - raw seed
+    - homepage
+    - diode part number
+historical:
+  notes: 'REAL BUG, found live by the operator during a demo walkthrough (2026-08-22
+    09:42): a typed diode MPN from the homepage box beat four screens of MCU-intent
+    picture choices because initialBrief used q || brief. The shipped fix flipped
+    precedence to the refined param and routed MPN-shaped q values to the part resolver
+    instead of the semantic engine — a model that ALSO notices ''bav99s is a part
+    number'

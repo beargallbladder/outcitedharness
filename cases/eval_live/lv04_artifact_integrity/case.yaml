@@ -1,0 +1,33 @@
+id: lv04_artifact_integrity
+title: Live sha-vs-presence + gz twin
+category: middle_tier_bug
+tags:
+- live_sandbox
+- three_node_slot
+input_files:
+- inputs/HOUSE_RULES.md
+- inputs/ingest.ts
+- inputs/catalogue-series-count.ts
+evaluation:
+  type: keyword_rubric
+  groups:
+  - - sha
+    - sha256
+    - presence
+    - already in cr_artifacts
+    - kind+week
+  - - gz
+    - gunzip
+    - '109'
+    - bundle
+    - not in the bundle
+    - excluded
+  - - local
+    - dev
+    - both files
+    - on disk
+    - prod
+    - enoent
+    - '503'
+historical:
+  notes: Combined hc15+hc25 against the real files.

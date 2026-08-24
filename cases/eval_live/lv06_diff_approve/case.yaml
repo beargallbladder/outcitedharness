@@ -1,0 +1,16 @@
+id: lv06_diff_approve
+title: Live must-APPROVE junk MPN
+category: diff_review
+tags:
+- live_sandbox
+- three_node_slot
+input_files:
+- inputs/HOUSE_RULES.md
+- inputs/diff.patch
+evaluation:
+  type: command
+  command:
+  - python3
+  - expected/validate.py
+historical:
+  notes: Approve-with-notes. Discrimination case.

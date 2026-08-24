@@ -1,0 +1,32 @@
+id: hc09_pin_cap_code_review
+title: hc09 pin cap code review
+category: code_review
+tags:
+- medium-hard
+- code_review
+input_files:
+- inputs/evidence.json
+evaluation:
+  type: keyword_rubric
+  groups:
+  - - v[:80]
+    - slice
+    - truncat
+    - cap
+    - hard-cap
+    - '80'
+  - - n_pins should be len(v)
+    - count before truncation
+    - len(v) not len(v[:80])
+    - report the full count
+  - - test
+    - assert
+    - '176'
+    - exactly-80
+    - regression
+historical:
+  notes: 'REAL BUG (fixed in commit 8a1ff6db): pick_pin_summary hard-capped pin tables
+    at v[:80], silently stranding pin rows across hundreds of devices — 2,145 anchors
+    sat at exactly 80 pins. The fix recovered +25,560 pin rows and changed hard-filter
+    atoms on 453 anchors; a regression test (test_pick_pin_summary_uncapped) now locks
+    it. Good models spot the slice immediately; the subtler point is that n_pin'

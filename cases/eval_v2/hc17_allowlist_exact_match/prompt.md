@@ -1,0 +1,1 @@
+A storefront BFF gates API responses on a release allowlist. When the backend rotated its release id from 'catalog-W46-v4' to 'catalog-W46-v5', the storefront hard-failed with 'Release gate failed' even though ops had set ALLOWED_RELEASES='catalog-W46-*'. Find the bug and fix the matcher (keep it dependency-free).

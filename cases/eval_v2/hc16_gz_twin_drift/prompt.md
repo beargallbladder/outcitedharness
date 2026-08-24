@@ -1,0 +1,1 @@
+A serverless API verifies release artifacts against a manifest of sha256 pins before serving. After a data fix was committed to records.jsonl, production began returning 503 release_unavailable with a sha mismatch — but the sha of records.jsonl on the release branch MATCHES the manifest. Explain the failure and give both the immediate fix and the structural guard.

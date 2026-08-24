@@ -1,0 +1,15 @@
+@@ -12,9 +12,13 @@ def bake_row(r):
+     comm = (r.get('Communication interface') or '').lower()
+     can_count = parse_count(r.get('CAN (#)'))
+     if can_count is not None:
+         row['has_can'] = can_count > 0
+         row['n_can'] = can_count
+-        if 'can fd' in comm or 'can-fd' in (r.get('CAN (#)') or '').lower():
+-            row['has_can_fd'] = True
+-        elif can_count == 0:
+-            row['has_can_fd'] = False
++        # simplify: the comm string is the vendor's own summary — if FD
++        # were present they would list it. Absence in the summary is a no.
++        row['has_can_fd'] = ('can fd' in comm or 'can-fd' in comm)
+     elif 'can' in comm:
+         row['has_can'] = True

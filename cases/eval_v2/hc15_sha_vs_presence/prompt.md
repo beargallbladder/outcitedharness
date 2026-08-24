@@ -1,0 +1,1 @@
+Review this artifact-ingest upsert. Users report that after an upstream team re-ships a corrected artifact for the same week, production keeps serving the OLD bytes forever. Find the flaw and specify the fix precisely.

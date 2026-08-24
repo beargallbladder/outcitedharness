@@ -1,0 +1,4 @@
+{
+  "code": "def get_orderables(base_row, members):\n    pairs = []\n    for m in members:\n        name = (m.get(\"opn\") or \"\").upper()\n        pairs.append((name, m))\n    return [m for _, m in sorted(pairs)]\n",
+  "traceback": "TypeError: '<' not supported between instances of 'dict' and 'dict'\n  File \"registry.py\", line 1741, in get_orderables\n    return [m for _, m in sorted(pairs)]"
+}

@@ -1,0 +1,5 @@
+{
+  "code": "import { readFileSync } from 'fs'\n\nexport function seriesCount(releaseDir: string): number {\n  const raw = readFileSync(path.join(releaseDir, 'records.jsonl'), 'utf8')\n  let n = 0\n  for (const line of raw.split('\\n')) {\n    if (line && JSON.parse(line).kind === 'series') n++\n  }\n  return n\n}",
+  "context": "records.jsonl is 109 MB. records.jsonl.gz (5.5 MB) IS in the bundle. Local dev has both files on disk.",
+  "prod_error": "ENOENT: no such file or directory, open '/var/task/release/records.jsonl'"
+}

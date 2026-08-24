@@ -1,0 +1,28 @@
+id: hc17_allowlist_exact_match
+title: hc17 allowlist exact match
+category: typescript_bug
+tags:
+- medium
+- typescript_bug
+input_files:
+- inputs/evidence.json
+evaluation:
+  type: keyword_rubric
+  groups:
+  - - exact match
+    - includes only matches literal
+    - no wildcard support
+    - treats * literally
+  - - startsWith
+    - prefix
+    - endsWith('*')
+    - wildcard
+  - - ===
+    - fall back to exact
+    - equality for non-wildcard patterns
+historical:
+  notes: 'REAL OUTAGE (octopart storefront, night of 2026-08-20): its allowlist matcher
+    was exact-only; the ops team set a wildcard that the code treated as a literal
+    string, and every release rotation 403''d the storefront until morning. The sister
+    storefront already had the wildcard matcher — the fix was porting it. Watch for
+    models that reach for a regex/glob dependency instead of the 5-line fix.'

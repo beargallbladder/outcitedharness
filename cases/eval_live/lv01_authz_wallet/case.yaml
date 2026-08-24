@@ -1,0 +1,39 @@
+id: lv01_authz_wallet
+title: Live auth.ts wallet hole
+category: middle_tier_review
+tags:
+- live_sandbox
+- three_node_slot
+input_files:
+- inputs/HOUSE_RULES.md
+- inputs/auth.ts
+- inputs/callers.ts
+evaluation:
+  type: keyword_rubric
+  groups:
+  - - every aisle
+    - all aisles
+    - everything
+    - unrestricted
+    - return true
+    - bypasses the wallet
+    - wallet_slugs is never
+  - - wallet is ignored
+    - wallet_slugs is decorative
+    - dead data
+    - ops
+    - unpublished
+    - paid for
+    - paying for
+    - never consulted
+    - revenue
+  - - is_internal
+    - internal
+    - explicit all-access
+    - wildcard
+    - all_access
+    - separate flag
+    - wallet_slugs for custom
+    - custom now
+historical:
+  notes: Live slugInWallet still short-circuits custom to true.

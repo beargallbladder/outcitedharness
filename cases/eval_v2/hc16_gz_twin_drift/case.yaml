@@ -1,0 +1,29 @@
+id: hc16_gz_twin_drift
+title: hc16 gz twin drift
+category: release_integrity
+tags:
+- medium-hard
+- release_integrity
+input_files:
+- inputs/evidence.json
+evaluation:
+  type: keyword_rubric
+  groups:
+  - - gz is stale
+    - twin drift
+    - gz was not regenerated
+    - bundle uses the gz
+  - - regenerate the .gz from the pinned raw
+    - rebuild the gz
+    - re-gzip
+  - - build-time check
+    - CI check that gunzip(gz) sha equals the pin
+    - test that the twins match
+    - generate gz at build time from the raw
+historical:
+  notes: 'REAL PRODUCTION 503 (facade /parts, 2026-08-21): the serverless bundle ships
+    only the gz twin; the raw jsonl was re-pinned without regenerating the gz, so
+    the bundle decompressed to bytes that failed the pin. Immediate fix: regenerate
+    gz from pinned raw and redeploy. Structural: never hand-maintain twins — derive
+    gz at build or verify twin equality in CI. Models often blame the manifest; the
+    manif'

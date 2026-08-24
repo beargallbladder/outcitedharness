@@ -1,0 +1,38 @@
+id: hc18_env_race_deploy
+title: hc18 env race deploy
+category: deploy_orchestration
+tags:
+- medium-hard
+- deploy_orchestration
+input_files:
+- inputs/evidence.json
+evaluation:
+  type: keyword_rubric
+  groups:
+  - - snapshot
+    - captured at build start
+    - 'build #41 started before the PUT'
+    - baked in at build time
+  - - trigger a new deploy after the env change
+    - PUT env, then deploy
+    - wait for the running build, then redeploy
+    - explicit deploy call
+    - redeploy
+    - new deploy
+    - new build
+    - trigger deploy
+    - deploy after
+    - after the env
+    - then deploy
+    - kick a deploy
+  - - verify
+    - check the live value
+    - smoke
+    - confirm FOO on the deployed instance
+historical:
+  notes: 'REAL RULE bought with an outage (repo AGENTS doc: ''Env changes need a NEW
+    deploy — a PUT during a build races it''): a Render env change landed mid-build
+    and the ''successful'' deploy served the old value. The correct sequence we now
+    enforce: change env -> trigger deploy -> poll to live -> verify the value on prod.
+    Bonus points if the model notes the same applies to Vercel (''a running deployment
+    keep'

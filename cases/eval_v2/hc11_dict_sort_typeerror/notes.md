@@ -1,0 +1,1 @@
+REAL BUG in our FAE registry (fixed 2026-08): two orderables with the same normalized name made tuple sorting fall through to dict comparison. Passed every test until real data contained a duplicate. The subtle part a weak model misses: it works fine WHEN NAMES ARE UNIQUE, so 'it crashes always' is a wrong diagnosis.

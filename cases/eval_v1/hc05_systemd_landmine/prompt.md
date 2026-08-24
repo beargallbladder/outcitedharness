@@ -1,0 +1,1 @@
+Production semantic search degraded after a routine process restart on a GPU box. Diagnose the root cause from the evidence and give (a) why the wrong model is now serving, (b) why it worked for the previous 4 days, and (c) a fix that requires NO sudo (the operator has no root until Monday). Answer in under 10 sentences.

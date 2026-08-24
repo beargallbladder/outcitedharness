@@ -1,0 +1,1 @@
+You are reviewing a pull request to our vendor-data bake. House rule (constitution rule 3): a summary/interface list PROVES PRESENCE of what it names but NEVER proves absence; explicit zero counts prove absence; no-feature-at-all implies no-sub-feature. Review the diff. Verdict word required: APPROVE or BLOCK, then your reasons in <=6 sentences.

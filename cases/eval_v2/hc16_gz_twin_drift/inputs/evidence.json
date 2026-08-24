@@ -1,0 +1,5 @@
+{
+  "layout": "release/\n  manifest.json            # pins sha256 of records.jsonl (raw bytes)\n  records.jsonl            # 109 MB — excluded from the serverless bundle by size\n  records.jsonl.gz         # 5.5 MB — INCLUDED in the bundle",
+  "loader": "function loadRecords(dir) {\n  const raw = path.join(dir, 'records.jsonl');\n  if (fs.existsSync(raw)) return verifyAndRead(raw);\n  const gz = path.join(dir, 'records.jsonl.gz');\n  const bytes = gunzipSync(fs.readFileSync(gz));\n  if (sha256(bytes) !== manifest.records_sha256) throw new ReleaseUnavailable('sha mismatch');\n  return bytes;\n}",
+  "timeline": "records.jsonl was edited and re-pinned in the manifest; records.jsonl.gz was NOT regenerated."
+}

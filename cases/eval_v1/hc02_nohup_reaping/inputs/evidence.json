@@ -1,0 +1,3 @@
+{
+  "observed": "launched pid=12179 ... 20s later: ps -p 12179 -> no output; wc -l /tmp/corpus.log -> 0"
+}

@@ -1,0 +1,4 @@
+{
+  "llms_txt_excerpt": "# Renesas Electronics\n> A purpose-built index of renesas.com for AI crawlers and answer engines.\n## Products\n- [Microcontrollers & Microprocessors](...): RA, RX, RL78, RH850, RZ, Synergy families\n- [Analog Products](...)\n- [Power Management](...)\n(13 more category hub links)\n## Optional\n- Corporate, ESG, newsroom (deprioritized)",
+  "known_fact": "The vendor's orderable-parts feed independently shows zero 8-bit MCUs in active status; RL78 is marketed as a 16-bit family."
+}

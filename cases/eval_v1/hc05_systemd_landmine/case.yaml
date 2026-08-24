@@ -1,0 +1,33 @@
+id: hc05_systemd_landmine
+title: hc05 systemd landmine
+category: ops_debugging
+tags:
+- medium-hard
+- ops_debugging
+input_files:
+- inputs/evidence.json
+evaluation:
+  type: keyword_rubric
+  groups:
+  - - unit file does not set BGE_MODEL_PATH
+    - no BGE_MODEL_PATH in the unit
+    - falls back to the default
+    - code default
+  - - manual process
+    - squatter
+    - manually-launched
+    - held the port
+    - port was occupied
+    - crash-loop
+  - - symlink
+    - repoint
+    - latest ->
+    - ln -sfn
+    - change what the default path points to
+historical:
+  notes: 'REAL INCIDENT 2026-08-22 ~00:40: killing a 4-day-old manual encoder process
+    handed port 8800 to a systemd unit whose file pins no model path, silently serving
+    a v1 model against a v4 vector index (cosine garbage, zero errors). The no-sudo
+    fix used was repointing the ''latest'' symlink the code-default resolves to, then
+    bouncing the unit''s process (Restart=always respawns it). The dangerous wrong
+    ans'

@@ -1,0 +1,6 @@
+{
+  "pins": 64,
+  "package_family": "LQFP",
+  "flash_kb": 1024,
+  "temp_max_c": 85
+}

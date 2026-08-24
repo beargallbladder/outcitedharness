@@ -1,0 +1,30 @@
+id: hc21_sql_sentinel_filter
+title: hc21 sql sentinel filter
+category: sql_data
+tags:
+- medium
+- sql_data
+input_files:
+- inputs/evidence.json
+evaluation:
+  type: keyword_rubric
+  groups:
+  - - __unknown__
+    - sentinel
+    - '''n'''
+  - - exclude
+    - filter out
+    - category NOT IN
+    - 'category != '
+    - <>
+  - - inflate
+    - overcount
+    - counted as real
+    - coverage rows are not mentions
+historical:
+  notes: 'REAL INCIDENT (repo discipline rule #8): 65,048 sentinel rows across 14
+    weeks were once embedded and nearest-neighbored onto real category slugs, and
+    5 brands were published in a competing set on phantom history alone. Every consumer
+    of category_mentions_v2.category must filter sentinels explicitly. A model that
+    just says ''add a WHERE on kim_category_id IS NOT NULL'' gets partial credit at
+    best — t'

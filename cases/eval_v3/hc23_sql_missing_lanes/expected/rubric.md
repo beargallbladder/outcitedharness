@@ -1,0 +1,1 @@
+The JSON array must be exactly qwen3.7-plus and kimi-thinking (any order). The query must express set difference on DISTINCT model between the two weeks (EXCEPT, NOT IN with subquery, or LEFT JOIN ... IS NULL all acceptable). gemini-flash appearing in the answer is a fail (it is new in W34, not missing).

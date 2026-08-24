@@ -1,0 +1,24 @@
+{
+  "parts": [
+    {
+      "part": "TMS320F280039C",
+      "can_count_column": "2",
+      "communication_interface": "CAN,CAN FD,FSI,I2C,LIN,PMBUS,SCI,SPI,UART"
+    },
+    {
+      "part": "TMS320F2800137",
+      "can_count_column": "1",
+      "communication_interface": "CAN,I2C,SCI,SPI"
+    },
+    {
+      "part": "MSPM0G3507",
+      "can_count_column": "",
+      "communication_interface": "CAN-FD,I2C,LIN,SPI,UART"
+    },
+    {
+      "part": "MSP430FR2355",
+      "can_count_column": "0",
+      "communication_interface": "I2C,SPI,UART"
+    }
+  ]
+}

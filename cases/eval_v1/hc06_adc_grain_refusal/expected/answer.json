@@ -1,0 +1,13 @@
+{
+  "MSP430FR2475": {
+    "per_package": {
+      "TPT (48-pin)": 12,
+      "TRHA (40-pin)": 10,
+      "TRHB (32-pin)": 8
+    }
+  },
+  "TMS320F280230": {
+    "no_single_value": true
+  },
+  "TMS320F280039C": 14
+}

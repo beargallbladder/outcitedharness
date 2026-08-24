@@ -1,0 +1,1 @@
+REAL BUG hit twice in one day (2026-08-22) parsing vendor xlsx exports: TI's dense rows hid it; Infineon's export mixes product types so sparse rows misaligned silently — a SiC module's package landed in the VDS column. The fix used everywhere now: build a {column_letter: value} dict from each cell's r attribute and join headers by letter, never by position.

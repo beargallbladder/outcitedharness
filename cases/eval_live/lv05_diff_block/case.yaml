@@ -1,0 +1,16 @@
+id: lv05_diff_block
+title: Live must-BLOCK silence-to-false
+category: diff_review
+tags:
+- live_sandbox
+- three_node_slot
+input_files:
+- inputs/HOUSE_RULES.md
+- inputs/diff.patch
+evaluation:
+  type: command
+  command:
+  - python3
+  - expected/validate.py
+historical:
+  notes: Silence in a summary must not become has_can_fd=False.

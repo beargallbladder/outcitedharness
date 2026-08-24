@@ -1,0 +1,21 @@
+id: hc06_adc_grain_refusal
+title: hc06 adc grain refusal
+category: data_grain
+tags:
+- hard
+- data_grain
+input_files:
+- inputs/evidence.json
+evaluation:
+  type: command
+  command:
+  - python3
+  - expected/validate.py
+historical:
+  notes: 'REAL CASE from the 2026-08-22 two-source audit: the crawler''s vision wave
+    wrote per-package/null for FR2475 and F280230; TI''s own parametric column later
+    published ''12'' (a package ceiling) and literally ''6,7,8,13'' (a list) — independently
+    confirming that base-part grain has no single true value. Standing rule: ''a ceiling
+    is never a part value.'' 23/27 vision reads matched TI exactly; the interestin'
+reference_answer:
+  file: expected/answer.json

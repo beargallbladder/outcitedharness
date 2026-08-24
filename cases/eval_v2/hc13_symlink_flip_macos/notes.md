@@ -1,0 +1,1 @@
+REAL INCIDENT: a release-pointer flip without -h wrote a stray symlink INSIDE an immutable vault pack (the W29 pack pollution), caught during verification. The repo rule is now 'must use ln -sfh'. Models trained mostly on Linux answer ln -sfn (GNU) — accept it, but the macOS-native flag is -h; saying only 'ln -sf' again is a fail.

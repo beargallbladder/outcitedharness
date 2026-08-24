@@ -1,0 +1,5 @@
+{
+  "code": "def read_rows(sheet_xml, shared):\n    rows = []\n    for r in sheet_xml.findall('.//a:row', NS):\n        vals = []\n        for c in r.findall('a:c', NS):\n            v = c.find('a:v', NS)\n            val = v.text if v is not None else ''\n            if c.get('t') == 's' and val:\n                val = shared[int(val)]\n            vals.append(val)\n        rows.append(vals)  # later: dict(zip(header, vals))\n    return rows",
+  "spec_note": "In SpreadsheetML, each cell <c> carries an r attribute like r=\"D7\" (column letter + row). Cells with no value MAY BE OMITTED from the XML entirely.",
+  "symptom": "Dense rows parse fine; rows with empty cells shift left."
+}

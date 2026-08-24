@@ -1,0 +1,1 @@
+A long-running Python job was launched on macOS from an automation harness shell as follows, and the wrapper shell exited immediately after. Twenty seconds later the process is gone and the log is empty. Explain the root cause in 2-4 sentences and state the correct fix. The command: nohup python3 scripts/run-corpus.py > /tmp/corpus.log 2>&1 & echo "launched pid=$!"

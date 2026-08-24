@@ -1,0 +1,1 @@
+This xlsx sheet parser reads rows positionally. On some files, values appear under the WRONG headers for a minority of rows (e.g. a package name showing in the voltage column). Explain the root cause and fix the parser.

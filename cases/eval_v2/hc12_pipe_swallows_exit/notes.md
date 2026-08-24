@@ -1,0 +1,1 @@
+REAL INCIDENT, now a standing repo rule ('never pytest | tail — a pipe swallowed a red test once'): a red suite shipped because set -e saw tail's exit 0. Both fixes accepted: set -o pipefail, or run pytest bare and read $?/PIPESTATUS[0]. This is the single highest-frequency footgun class in our orchestration scripts.

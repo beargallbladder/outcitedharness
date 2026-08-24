@@ -1,0 +1,4 @@
+{
+  "code": "function releaseAllowed(releaseId, allowedCsv) {\n  const allowed = String(allowedCsv || '').split(',').map(s => s.trim()).filter(Boolean);\n  return allowed.includes(releaseId);\n}",
+  "env": "ALLOWED_RELEASES=catalog-W46-*"
+}

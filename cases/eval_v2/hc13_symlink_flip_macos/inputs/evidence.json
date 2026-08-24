@@ -1,0 +1,4 @@
+{
+  "commands": "$ ls -la\ncurrent -> releases/v1\n$ ln -sf releases/v2 current\n$ ls releases/v2\napp.bin  config.json  current -> releases/v2",
+  "note": "GNU coreutils is NOT installed; BSD ln semantics apply."
+}

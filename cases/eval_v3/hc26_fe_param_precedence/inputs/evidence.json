@@ -1,0 +1,3 @@
+{
+  "code": "const params = new URLSearchParams(location.search);\nconst q = params.get('q');\nconst brief = params.get('brief');\nconst initialBrief = q || brief || '';\nif (initialBrief) {\n  briefInput.value = initialBrief;\n  void runRecommendation(initialBrief);\n}"
+}

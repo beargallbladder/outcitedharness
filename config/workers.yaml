@@ -1,0 +1,55 @@
+# Fleet the harness can route to.
+# Today: one M5 control host + one DGX Spark. Future nodes are declared
+# disabled so the scheduler can say "unavailable" without code changes.
+
+workers:
+  primary_coder:
+    enabled: true
+    model_key: dgx_qwen
+    endpoint: http://192.168.4.38:8900/v1
+    capabilities:
+      - coding
+      - tool_calling
+      - long_context
+    failover_order: 1
+
+  fallback_reasoner:
+    enabled: true
+    model_key: m5_qwen
+    endpoint: http://127.0.0.1:8082/v1
+    capabilities:
+      - reasoning
+      - vision
+      - tool_calling
+    failover_order: 2
+
+  frontier_senior:
+    enabled: true
+    model_key: frontier
+    endpoint: https://api.anthropic.com/v1
+    capabilities:
+      - review
+    failover_order: 3
+    notes: dead-box last hop only; quality escalate is harness rescue
+
+  secondary:
+    enabled: false
+    endpoint: http://future-dgx-pair-b:8000/v1
+    capabilities:
+      - coding
+      - independent_review
+    failover_order: 4
+
+  fast:
+    enabled: false
+    endpoint: http://future-dgx-5:8000/v1
+    capabilities:
+      - coding
+      - low_latency
+
+  monster:
+    enabled: false
+    endpoint: http://future-monster:8000/v1
+    capabilities:
+      - coding
+      - long_context

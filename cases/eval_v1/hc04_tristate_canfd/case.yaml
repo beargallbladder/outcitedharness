@@ -1,0 +1,20 @@
+id: hc04_tristate_canfd
+title: hc04 tristate canfd
+category: truth_discipline
+tags:
+- medium
+- truth_discipline
+input_files:
+- inputs/evidence.json
+evaluation:
+  type: exact_json
+  ignore_order: false
+historical:
+  notes: 'REAL BUG 2026-08-22, caught in self-review the same hour: the first bake
+    marked F2800137 has_can_fd=false from FD''s absence in the summary string — violating
+    the ''summary proves presence, never absence'' rule — and missed MSPM0G3507''s
+    hyphenated ''CAN-FD'' spelling entirely (returned unknown instead of true). These
+    four rows are verbatim from the shipped TI sidecar. Frontier model wrote the bug,
+    fron'
+reference_answer:
+  file: expected/answer.json

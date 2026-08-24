@@ -1,0 +1,3 @@
+{
+  "code": "async function ingestArtifact(kind: string, week: string, filePath: string) {\n  const existing = await db.query(\n    'SELECT id FROM cr_artifacts WHERE kind=$1 AND week=$2', [kind, week]);\n  if (existing.rows.length > 0) {\n    log.info(`artifact ${kind}/${week} already present, skipping`);\n    return existing.rows[0].id;\n  }\n  const bytes = await fs.readFile(filePath);\n  const sha = sha256(bytes);\n  return insertArtifact(kind, week, bytes, sha);\n}"
+}

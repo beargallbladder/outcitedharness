@@ -1,0 +1,4 @@
+{
+  "query": "SELECT COUNT(*) AS n_mentions, COUNT(DISTINCT model) AS n_models\nFROM category_mentions_v2\nWHERE brand_id = (SELECT id FROM brands WHERE domain = 'examplebrand.com');",
+  "schema_note": "columns: brand_id, model, category (raw LLM text), kim_category_id (nullable), time_window, strength, rank"
+}

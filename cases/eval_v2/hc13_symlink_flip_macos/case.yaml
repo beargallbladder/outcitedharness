@@ -1,0 +1,26 @@
+id: hc13_symlink_flip_macos
+title: hc13 symlink flip macos
+category: ops_shell
+tags:
+- medium
+- ops_shell
+input_files:
+- inputs/evidence.json
+evaluation:
+  type: keyword_rubric
+  groups:
+  - - follows the existing symlink
+    - dereferences
+    - resolves current to the directory
+    - creates inside the target
+  - - -h
+    - ln -sfh
+    - no-dereference
+    - rm current && ln -s
+    - ln -sfn
+historical:
+  notes: 'REAL INCIDENT: a release-pointer flip without -h wrote a stray symlink INSIDE
+    an immutable vault pack (the W29 pack pollution), caught during verification.
+    The repo rule is now ''must use ln -sfh''. Models trained mostly on Linux answer
+    ln -sfn (GNU) — accept it, but the macOS-native flag is -h; saying only ''ln -sf''
+    again is a fail.'

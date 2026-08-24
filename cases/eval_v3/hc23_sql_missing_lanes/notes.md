@@ -1,0 +1,1 @@
+This is the literal weekly truth-teller check (scripts/ops/week-status.ts) that exists because hand-rolled versions of this exact query cost a morning and got the direction of the set difference backwards more than once — including counting NEW lanes as MISSING lanes, which is the gemini-flash trap embedded in the sample.

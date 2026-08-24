@@ -1,0 +1,16 @@
+This workspace is the model harness. Cline must use the harness gateway, not raw Spark or M5 ports.
+
+Gateway: http://127.0.0.1:8787/v1
+API key: sk-harness-local  (or harness-local)
+Default model: harness-local
+
+Roles:
+- harness-local  Spark Qwen3-Coder-Next (worker — default)
+- harness-m5     M5 Qwen3.8-27B (orchestrator / screenshots, short packets only)
+- harness-frontier  Claude (senior). Do not paste the Cline thread. Use `harness rescue PACKET.md`.
+- harness-auto   dead-box failover only (connect/5xx/empty). Not a quality ladder.
+
+Do not call :8800–:8803 (embeddings) or :8902 (OCR).
+Do not restart, kill, or reconfigure inference services.
+Keep Cline tasks short. Do not feed 80k-token threads into a local model.
+Log is automatic — every turn is written to results/harness.db table cline_turns.

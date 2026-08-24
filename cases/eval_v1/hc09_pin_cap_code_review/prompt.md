@@ -1,0 +1,1 @@
+This function summarizes a device's pin table for an anchor card. Users report that many large MCUs (100+ pins) show exactly 80 pins and downstream filters using pin counts are wrong for those parts. Find the bug, state the one-line fix, and name ONE test you would add. Be specific.

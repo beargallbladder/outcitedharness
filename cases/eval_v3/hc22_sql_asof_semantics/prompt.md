@@ -1,0 +1,1 @@
+This function implements as-of carryforward for weekly artifacts (priors age, they never zero on week rollover). Given the table rows in evidence, answer EXACTLY what it returns for each call. Return JSON: {"a": ..., "b": ..., "c": ..., "d": ...} using week strings or null.

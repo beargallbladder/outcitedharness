@@ -1,0 +1,3 @@
+id: sr01_wallet
+title: Fix slugInWallet custom short-circuit
+max_turns: 16

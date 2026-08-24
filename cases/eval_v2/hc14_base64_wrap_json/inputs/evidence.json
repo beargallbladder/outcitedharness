@@ -1,0 +1,5 @@
+{
+  "sql": "SELECT encode(payload, 'base64') FROM artifacts WHERE id = 42;",
+  "python": "raw = subprocess.check_output(['psql', DB, '-tA', '-c', SQL]).decode()\nblob = base64.b64decode(raw)\ndoc = json.loads(blob)",
+  "symptom": "json.loads: Expecting value: line 1 column 77 (char 76). len(raw) is ~1.3x the expected payload size."
+}

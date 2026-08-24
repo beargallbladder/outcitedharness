@@ -1,0 +1,4 @@
+{
+  "timeline": "12:00 build #41 starts (auto-deploy from git push)\n12:02 PUT /services/X/env  { FOO: 'new' }  -> 200\n12:06 build #41 goes live\n14:00 service /debug endpoint shows FOO='old'",
+  "platform_semantics": "Env vars are snapshotted into a build at BUILD START. A PUT to env does not restart running builds and does not by itself trigger a new deploy on this platform."
+}

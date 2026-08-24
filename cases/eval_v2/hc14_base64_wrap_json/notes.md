@@ -1,0 +1,1 @@
+REAL BUG (measure-recall-depth-zones script): Postgres encode(...,'base64') line-wraps at 76 chars per MIME convention; python b64decode chokes or truncates on embedded newlines depending on validate flags, and the char-76 error is the tell. Our fix stripped chr(10) in SQL. A model that only says 'the JSON is malformed' without spotting 76-char wrapping fails.

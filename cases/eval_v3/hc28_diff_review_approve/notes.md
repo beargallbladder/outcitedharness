@@ -1,0 +1,1 @@
+REAL FIX (the is_junk_mpn guard shipped 2026-08-22 after the NXP footer incident). Included deliberately as the approval-calibration case: in earlier internal reviews, over-cautious reviewers demanded exhaustive junk taxonomies before approving a strict improvement over 'if not pn'. The correct posture is approve-with-notes.

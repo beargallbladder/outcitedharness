@@ -1,0 +1,16 @@
+id: lv03_asof
+title: Live findArtifactWeekAsOf
+category: sql_data
+tags:
+- live_sandbox
+- three_node_slot
+input_files:
+- inputs/HOUSE_RULES.md
+- inputs/cr-artifacts.ts
+evaluation:
+  type: exact_json
+  ignore_order: false
+historical:
+  notes: 'Verbatim production as-of. Trap is (c): before earliest => null.'
+reference_answer:
+  file: expected/answer.json

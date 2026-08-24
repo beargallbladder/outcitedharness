@@ -1,0 +1,23 @@
+id: hc03_opn_decode_inference
+title: hc03 opn decode inference
+category: opn_grammar
+tags:
+- medium
+- opn_grammar
+input_files:
+- inputs/evidence.json
+evaluation:
+  type: json_fields
+  fields:
+    pins: 64
+    package_family: LQFP
+    flash_kb: 1024
+    temp_max_c: 85
+historical:
+  notes: 'Evidence rows are from a REAL vision-transcribed decoder record (opn-decoder-wave-v0,
+    sonnet-5 read the datasheet figure). Positional-grammar inference is the skill
+    our mpn_mutation curriculum exists for: pre-finetune embedding models scored near-random
+    on one-character sibling distinctions, and small chat models historically guess
+    suffix meanings instead of inducing the position system (V=100pin '
+reference_answer:
+  file: expected/answer.json
