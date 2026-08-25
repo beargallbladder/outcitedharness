@@ -1,16 +1,29 @@
 from __future__ import annotations
 
 import json
+import secrets
 from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
 
 from harness.storage.db import Store, utcnow
 from harness.task.context import ContextManager
 from harness.task.models import AttemptRecord, Decision, Evidence, Task, WorkPacket
 
+CLINE_INTENT = "cline session"
+SESSION_IDLE = timedelta(minutes=30)
+
 
 def _new_id() -> str:
     stamp = utcnow().replace("-", "").replace(":", "")
-    return f"t{stamp}"
+    return f"t{stamp}_{secrets.token_hex(2)}"
+
+
+def _parse_ts(value: str) -> datetime:
+    raw = (value or "").replace("Z", "+00:00")
+    dt = datetime.fromisoformat(raw)
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt
 
 
 @dataclass
@@ -62,6 +75,40 @@ class TaskService:
             ).fetchall()
         return [self.get(r["task_id"]) for r in rows]
 
+    def latest_session(self) -> Task | None:
+        with self.store.connect() as conn:
+            row = conn.execute(
+                """
+                SELECT task_id FROM tasks
+                WHERE intent = ? AND status = 'open'
+                ORDER BY created_at DESC, rowid DESC LIMIT 1
+                """,
+                (CLINE_INTENT,),
+            ).fetchone()
+        if not row:
+            return None
+        return self.get(row["task_id"])
+
+    def session_task(self) -> Task:
+        """Reuse the open Cline session only if it had a turn in the last 30 minutes."""
+        current = self.latest_session()
+        if current:
+            turns = self.attempts(current.task_id)
+            last = turns[-1].finished_at if turns else current.created_at
+            if last and datetime.now(timezone.utc) - _parse_ts(last) <= SESSION_IDLE:
+                return current
+        return self.start(CLINE_INTENT)
+
+    def record_turn(self, rec: AttemptRecord) -> AttemptRecord:
+        """Append a Cline turn. Keep the session open; do not mark the job done."""
+        saved = self.record(rec, close=False)
+        with self.store.connect() as conn:
+            conn.execute(
+                "UPDATE tasks SET status = 'open' WHERE task_id = ?",
+                (saved.task_id,),
+            )
+        return saved
+
     def context_from_task(self, task: Task) -> ContextManager:
         decisions = [d.text for d in self.decisions(task.task_id) if d.accepted]
         latest = self.attempts(task.task_id)
@@ -84,7 +131,7 @@ class TaskService:
         task = self.get(task_id)
         return self.context_from_task(task).packet(task_id, worker)
 
-    def record(self, rec: AttemptRecord) -> AttemptRecord:
+    def record(self, rec: AttemptRecord, close: bool = True) -> AttemptRecord:
         task = self.get(rec.task_id)
         with self.store.connect() as conn:
             next_n = conn.execute(
@@ -120,13 +167,13 @@ class TaskService:
                     rec.output_tokens,
                 ),
             )
-            status = "success" if rec.result == "success" else "failed"
-            conn.execute("UPDATE tasks SET status = ? WHERE task_id = ?", (status, rec.task_id))
+            if close:
+                status = "success" if rec.result == "success" else "failed"
+                conn.execute("UPDATE tasks SET status = ? WHERE task_id = ?", (status, rec.task_id))
+                task.status = status
         self.add_evidence(
             Evidence(task_id=rec.task_id, attempt=rec.attempt, kind="attempt", payload=rec.to_evidence_json())
         )
-        if rec.result == "success":
-            task.status = "success"
         return rec
 
     def add_evidence(self, item: Evidence) -> None:

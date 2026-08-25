@@ -1,6 +1,7 @@
 import json
 from pathlib import Path
 
+from harness.gateway.proxy import _worker_for_alias, log_turn
 from harness.rescue import missing_sections
 from harness.storage.db import Store
 from harness.task.models import AttemptRecord, Decision
@@ -69,3 +70,243 @@ def test_packet_is_rescue_shaped_not_a_transcript(tmp_path: Path):
     assert "services/engine/geocode.py" in text
     assert "nominatim cache" in text
     assert packet.worker == "primary_coder"
+
+
+def test_worker_for_alias_maps_correctly():
+    """Test that alias mapping returns correct worker roles."""
+    assert _worker_for_alias("harness-local") == "primary_coder"
+    assert _worker_for_alias("harness-auto") == "primary_coder"
+    assert _worker_for_alias("harness-m5") == "fallback_reasoner"
+    assert _worker_for_alias("harness-frontier") == "frontier_senior"
+    assert _worker_for_alias("unknown-alias") == "primary_coder"
+
+
+def test_log_turn_records_attempt(tmp_path: Path):
+    """Test that log_turn creates a task and records an attempt."""
+    store = Store(tmp_path / "test.db")
+    
+    # First call should create a task and record attempt 1
+    log_turn(
+        store,
+        alias="harness-local",
+        model_key="dgx_qwen",
+        upstream_model="qwen2.5-72b",
+        stream=False,
+        status=200,
+        latency_ms=150.5,
+        input_tokens=100,
+        output_tokens=50,
+        cost=0.001,
+        error=None,
+        body={"messages": [{"role": "user", "content": "test"}]},
+    )
+    
+    # Verify task was created
+    with store.connect() as conn:
+        task_row = conn.execute("SELECT * FROM tasks").fetchone()
+        assert task_row is not None
+        assert task_row["intent"] == "cline session"
+        assert task_row["status"] == "open"  # Cline turns do not close the session
+        
+        # Verify attempt was recorded
+        attempt_row = conn.execute("SELECT * FROM attempts").fetchone()
+        assert attempt_row is not None
+        assert attempt_row["task_id"] == task_row["task_id"]
+        assert attempt_row["attempt"] == 1
+        assert attempt_row["worker"] == "primary_coder"
+        assert attempt_row["result"] == "success"
+        assert attempt_row["input_tokens"] == 100
+        assert attempt_row["output_tokens"] == 50
+        assert attempt_row["ttft_ms"] == 150.5
+
+
+def test_log_turn_increments_attempt(tmp_path: Path):
+    """Test that subsequent log_turn calls increment the attempt number."""
+    store = Store(tmp_path / "test2.db")
+    
+    log_turn(
+        store,
+        alias="harness-m5",
+        model_key="m5_qwen",
+        upstream_model="qwen2.5-32b",
+        stream=False,
+        status=200,
+        latency_ms=200.0,
+        input_tokens=200,
+        output_tokens=100,
+        cost=0.002,
+        error=None,
+        body={"messages": [{"role": "user", "content": "test1"}]},
+    )
+    
+    log_turn(
+        store,
+        alias="harness-m5",
+        model_key="m5_qwen",
+        upstream_model="qwen2.5-32b",
+        stream=False,
+        status=200,
+        latency_ms=180.0,
+        input_tokens=150,
+        output_tokens=75,
+        cost=0.0015,
+        error=None,
+        body={"messages": [{"role": "user", "content": "test2"}]},
+    )
+    
+    with store.connect() as conn:
+        attempts = conn.execute("SELECT attempt, worker FROM attempts ORDER BY attempt").fetchall()
+        assert len(attempts) == 2
+        assert attempts[0]["attempt"] == 1
+        assert attempts[0]["worker"] == "fallback_reasoner"
+        assert attempts[1]["attempt"] == 2
+        assert attempts[1]["worker"] == "fallback_reasoner"
+
+
+def test_log_turn_does_not_attach_to_unrelated_task(tmp_path: Path):
+    store = Store(tmp_path / "isolate.db")
+    other = TaskService(store).start("fix geocode bug")
+    log_turn(
+        store,
+        alias="harness-local",
+        model_key="dgx_qwen",
+        upstream_model="qwen3-coder-next",
+        stream=False,
+        status=200,
+        latency_ms=10,
+        input_tokens=1,
+        output_tokens=1,
+        cost=None,
+        error=None,
+        body={"messages": []},
+    )
+    with store.connect() as conn:
+        tasks = conn.execute("SELECT task_id, intent FROM tasks ORDER BY created_at").fetchall()
+        assert len(tasks) == 2
+        assert tasks[0]["task_id"] == other.task_id
+        assert tasks[1]["intent"] == "cline session"
+        stolen = conn.execute(
+            "SELECT COUNT(*) FROM attempts WHERE task_id = ?", (other.task_id,)
+        ).fetchone()[0]
+        assert stolen == 0
+
+
+def test_log_turn_opens_new_session_after_idle(tmp_path: Path):
+    store = Store(tmp_path / "idle.db")
+    log_turn(
+        store,
+        alias="harness-local",
+        model_key="dgx_qwen",
+        upstream_model="x",
+        stream=False,
+        status=200,
+        latency_ms=10,
+        input_tokens=1,
+        output_tokens=1,
+        cost=None,
+        error=None,
+        body={"messages": []},
+    )
+    with store.connect() as conn:
+        first = conn.execute("SELECT task_id FROM tasks").fetchone()["task_id"]
+        conn.execute(
+            "UPDATE tasks SET created_at = '2020-01-01T00:00:00+00:00' WHERE task_id = ?",
+            (first,),
+        )
+        conn.execute(
+            "UPDATE attempts SET started_at = '2020-01-01T00:00:00+00:00', "
+            "finished_at = '2020-01-01T00:00:00+00:00' WHERE task_id = ?",
+            (first,),
+        )
+    log_turn(
+        store,
+        alias="harness-local",
+        model_key="dgx_qwen",
+        upstream_model="x",
+        stream=False,
+        status=200,
+        latency_ms=10,
+        input_tokens=1,
+        output_tokens=1,
+        cost=None,
+        error=None,
+        body={"messages": []},
+    )
+    with store.connect() as conn:
+        ids = [r["task_id"] for r in conn.execute("SELECT task_id FROM tasks ORDER BY created_at")]
+        assert len(ids) == 2
+        assert ids[0] == first
+        assert ids[1] != first
+
+
+def test_log_turn_records_failure(tmp_path: Path):
+    """Test that log_turn records failed attempts for error status codes."""
+    store = Store(tmp_path / "test3.db")
+    
+    log_turn(
+        store,
+        alias="harness-frontier",
+        model_key="claude-sonnet",
+        upstream_model="claude-sonnet-4-6",
+        stream=False,
+        status=502,
+        latency_ms=5000.0,
+        input_tokens=100,
+        output_tokens=None,
+        cost=None,
+        error="Connection refused",
+        body={"messages": [{"role": "user", "content": "test"}]},
+    )
+    
+    with store.connect() as conn:
+        attempt_row = conn.execute("SELECT result FROM attempts").fetchone()
+        assert attempt_row is not None
+        assert attempt_row["result"] == "failed"
+
+
+def test_latest_session_returns_none_when_no_open_session(tmp_path: Path):
+    """Test that latest_session returns None when no open cline session exists."""
+    store = Store(tmp_path / "no_session.db")
+    svc = TaskService(store)
+    assert svc.latest_session() is None
+
+
+def test_latest_session_returns_open_session(tmp_path: Path):
+    """Test that latest_session returns the most recent open cline session."""
+    store = Store(tmp_path / "session.db")
+    svc = TaskService(store)
+    
+    # Create a non-cline session
+    svc.start("other task")
+    
+    # Create cline sessions
+    svc.start("cline session")
+    later = svc.start("cline session")
+
+    task = svc.latest_session()
+    assert task is not None
+    assert task.intent == "cline session"
+    assert task.task_id == later.task_id
+
+
+def test_task_current_cli_no_session(tmp_path: Path, monkeypatch):
+    from typer.testing import CliRunner
+
+    from harness.cli import app
+    from harness.config import AppConfig, Settings
+
+    db = tmp_path / "cli.db"
+    Store(db)
+
+    def fake_cfg():
+        return AppConfig(
+            root=tmp_path,
+            settings=Settings(results_dir=tmp_path / "results", db_path=db),
+            models={},
+            pricing={},
+        )
+
+    monkeypatch.setattr("harness.cli._cfg", fake_cfg)
+    result = CliRunner().invoke(app, ["task", "current"])
+    assert result.exit_code == 0
+    assert "no open cline session" in result.stdout

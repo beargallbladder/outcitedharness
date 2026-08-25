@@ -419,6 +419,43 @@ def task_packet(
     console.print(packet.to_markdown())
 
 
+@task_app.command("current")
+def task_current() -> None:
+    """Show the latest open Cline session and its last 5 attempts."""
+    cfg = _cfg()
+    svc = TaskService(Store(cfg.settings.db_path))
+    task = svc.latest_session()
+    if not task:
+        console.print("no open cline session")
+        raise typer.Exit(0)
+
+    console.print(f"Task: {task.task_id}  {task.status}  {task.intent}")
+    attempts = svc.attempts(task.task_id)
+    if not attempts:
+        console.print("No attempts yet")
+        return
+
+    recent = list(reversed(attempts))[:5]
+    table = Table(title="Last 5 attempts")
+    table.add_column("Attempt")
+    table.add_column("Worker")
+    table.add_column("Result")
+    table.add_column("Started")
+    table.add_column("Finished")
+    table.add_column("Tokens")
+    for rec in recent:
+        tokens = f"{rec.input_tokens or 0}→{rec.output_tokens or 0}"
+        table.add_row(
+            str(rec.attempt),
+            rec.worker,
+            rec.result,
+            rec.started_at[:19] if rec.started_at else "-",
+            rec.finished_at[:19] if rec.finished_at else "-",
+            tokens,
+        )
+    console.print(table)
+
+
 @task_app.command("record")
 def task_record(
     task_id: str,

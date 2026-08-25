@@ -264,6 +264,42 @@ def _has_content(data: dict[str, Any]) -> bool:
     return False
 
 
+def _worker_for_alias(alias: str) -> str:
+    if alias in ("harness-local", "harness-auto"):
+        return "primary_coder"
+    if alias == "harness-m5":
+        return "fallback_reasoner"
+    if alias == "harness-frontier":
+        return "frontier_senior"
+    return "primary_coder"
+
+
+def _record_attempt(
+    store: Store,
+    alias: str,
+    status: int,
+    latency_ms: float,
+    input_tokens: int | None,
+    output_tokens: int | None,
+) -> None:
+    from harness.task.models import AttemptRecord
+    from harness.task.service import TaskService
+
+    svc = TaskService(store)
+    task = svc.session_task()
+    svc.record_turn(
+        AttemptRecord(
+            task_id=task.task_id,
+            attempt=0,
+            worker=_worker_for_alias(alias),
+            result="success" if status < 400 else "failed",
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            ttft_ms=latency_ms,
+        )
+    )
+
+
 def log_turn(
     store: Store,
     *,
@@ -303,6 +339,7 @@ def log_turn(
             "prompt_chars": prompt_chars,
         }
     )
+    _record_attempt(store, alias, status, latency_ms, input_tokens, output_tokens)
 
 
 def turn_cost(cfg, model_key: str, inbound: int | None, outbound: int | None) -> float | None:
