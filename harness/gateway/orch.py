@@ -283,7 +283,11 @@ def stitch_report(report: DispatchReport) -> str:
             answers.append(body)
     if report.frontier_verified and report.frontier_text.strip():
         rescued = report.frontier_text.strip()
-        if answers:
+        if report.critic_verdict in {"revise", "reject", "insufficient", "degraded"}:
+            # A verified rescue resolves the failed local set. Mixing it with
+            # partially accepted local prose can surface contradictory fixes.
+            answers = [rescued]
+        elif answers:
             answers.append(f"### Harness completion\n{rescued}")
         else:
             answers.append(rescued)
@@ -671,7 +675,7 @@ async def _emit_apply(
         state.phase = "blocked"
         state.blocked_reason = reason
         return _terminal(svc, task_id, state)
-    texts = shot_texts(report, require_qa=False)
+    texts = shot_texts(report, require_qa=True)
     if not texts or picked is None:
         return None
     _key, foreman = picked

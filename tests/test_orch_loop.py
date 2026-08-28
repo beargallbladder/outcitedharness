@@ -1298,26 +1298,17 @@ async def test_unsafe_command_is_blocked_and_never_returned(tmp_path: Path, monk
 
 
 @pytest.mark.asyncio
-async def test_qa_pass_does_not_establish_or_revoke_verified(tmp_path: Path, monkeypatch):
+async def test_critic_rejected_output_cannot_drive_apply(tmp_path: Path, monkeypatch):
     from harness.gateway.orch import run_orch
 
     cfg = _cfg(tmp_path)
     captured = _patch_loop(monkeypatch, report=_report(qa_pass=False))
     tools = _tools()
 
-    first = await run_orch(cfg, FIX, messages=_ready_messages(), tools=tools)
-    assert first.loop_phase == "apply"
-    assert captured["planned"] is True
-
-    await run_orch(cfg, FIX, messages=_ready_messages(_edit_pair(0)), tools=tools)
-    verified = await run_orch(
-        cfg,
-        FIX,
-        messages=_ready_messages(_edit_pair(0) + _verify_pair(0, "not yet mentioned\nExit code: 0")),
-        tools=tools,
-    )
-    assert verified.loop_phase == "verified"
-    assert "not yet" not in verified.text.split("status:")[0] or "status: verified" in verified.text
+    rejected = await run_orch(cfg, FIX, messages=_ready_messages(), tools=tools)
+    assert rejected.loop_phase != "apply"
+    assert not rejected.tool_calls
+    assert "planned" not in captured
 
     cfg2 = _cfg(tmp_path / "plain")
 

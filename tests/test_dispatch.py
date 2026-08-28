@@ -236,6 +236,39 @@ def test_min_chars_invariant():
     assert score_invariants(pkt, enough, []) is True
 
 
+def test_review_grounding_rejects_unseen_paths_and_allows_honest_limits():
+    from harness.dispatch import AcceptSpec, Packet, score_invariants
+
+    packet = Packet(
+        id="fallback-1",
+        title="review",
+        prompt=(
+            "WORKSPACE EVIDENCE GATHERED BY CLINE:\n"
+            "tool(read_files): FILE src/real.py\n"
+            "1 | def work(): return 1"
+        ),
+        accept=AcceptSpec(invariants=("min_chars 20", "review_grounded")),
+    )
+    invented = ChatResult(
+        provider="x",
+        model="x",
+        text="Critical: src/invented.py contains a proven SQL injection defect.",
+    )
+    grounded = ChatResult(
+        provider="x",
+        model="x",
+        text="High: src/real.py has a concrete maintainability issue in work().",
+    )
+    honest = ChatResult(
+        provider="x",
+        model="x",
+        text="No defect is proven by the supplied evidence.",
+    )
+    assert score_invariants(packet, invented, []) is False
+    assert score_invariants(packet, grounded, []) is True
+    assert score_invariants(packet, honest, []) is True
+
+
 def test_critic_rejects_internally_contradictory_scores():
     from harness.dispatch import (
         AcceptSpec,
@@ -304,7 +337,11 @@ def test_evidence_fallback_fans_out_review_work():
     assert len(packets) == 4
     assert len({packet.id for packet in packets}) == 4
     assert all("WORKSPACE EVIDENCE GATHERED BY CLINE" in packet.prompt for packet in packets)
-    assert all(packet.accept.invariants == ("min_chars 120",) for packet in packets)
+    assert all("tool(read_files): src/app.py" in packet.prompt for packet in packets)
+    assert all(
+        packet.accept.invariants == ("min_chars 120", "review_grounded")
+        for packet in packets
+    )
     assert fallback_packets("review the code", "", 8) == []
     assert _is_review_job("Return exactly QUALITY_CHECK_OK") is False
 
@@ -763,6 +800,187 @@ async def test_critic_semantic_rejection_does_not_trigger_thinking_retry(monkeyp
     assert calls[0]["max_tokens"] == 200
 
 
+def test_parse_critic_accepts_json_with_trailing_model_junk():
+    from harness.dispatch import AcceptSpec, Packet, Shot, _parse_critic
+
+    packet = Packet("p1", "review", "evidence", accept=AcceptSpec(invariants=("min_chars 1",)))
+    shot = Shot(
+        packet,
+        "coder",
+        "model",
+        ChatResult(provider="x", model="x", text="answer"),
+        None,
+        [],
+        True,
+        True,
+        "answer",
+    )
+    verdict, scores = _parse_critic(
+        '{"verdict":"proceed","shots":[{"id":"p1","pass":true,"why":"grounded"}]}'
+        "\nextra generated text {not json}",
+        [shot],
+    )
+    assert verdict == "proceed"
+    assert scores == {"p1": (True, "grounded")}
+
+
+@pytest.mark.asyncio
+async def test_invalid_multi_shot_grade_recovers_with_per_shot_grading(monkeypatch):
+    from harness.dispatch import AcceptSpec, Packet, Shot, _grade_shots
+
+    shots = [
+        Shot(
+            Packet(
+                f"p{index}",
+                "review",
+                "WORKSPACE EVIDENCE GATHERED BY CLINE:\nsrc/app.py",
+                accept=AcceptSpec(invariants=("min_chars 1",)),
+            ),
+            "coder",
+            "model",
+            ChatResult(provider="x", model="x", text="src/app.py is visible"),
+            None,
+            [],
+            True,
+            True,
+            "src/app.py is visible",
+        )
+        for index in (1, 2)
+    ]
+    calls: list[list[str]] = []
+
+    async def grade(_worker, _model, _intent, batch):
+        ids = [shot.packet.id for shot in batch]
+        calls.append(ids)
+        if len(batch) > 1:
+            return "insufficient", "truncated", {}
+        return "proceed", "valid", {ids[0]: (True, "grounded")}
+
+    monkeypatch.setattr("harness.dispatch._run_critic", grade)
+    verdict, _text, critic_key, failures = await _grade_shots(
+        [(None, _model("asus3_nemotron"))],
+        "review the code",
+        shots,
+        allow_degraded=True,
+    )
+    assert calls == [["p1", "p2"], ["p1"], ["p2"]]
+    assert verdict == "proceed"
+    assert critic_key == "asus3_nemotron"
+    assert failures == []
+    assert all(shot.qa_pass for shot in shots)
+
+
+@pytest.mark.asyncio
+async def test_degraded_review_fails_closed_and_is_not_stitched(monkeypatch):
+    from harness.dispatch import AcceptSpec, DispatchReport, Packet, Shot, _grade_shots
+    from harness.gateway.orch import stitch_report
+
+    answer = "Critical: src/invented.py contains a severe SQL injection. " * 3
+    packet = Packet(
+        "fallback-1",
+        "review",
+        "WORKSPACE EVIDENCE GATHERED BY CLINE:\nsrc/real.py",
+        accept=AcceptSpec(invariants=("min_chars 20",)),
+    )
+    shot = Shot(
+        packet,
+        "coder",
+        "model",
+        ChatResult(provider="x", model="x", text=answer),
+        None,
+        [],
+        True,
+        True,
+        answer,
+    )
+
+    async def invalid(*_args, **_kwargs):
+        return "insufficient", "invalid JSON", {}
+
+    monkeypatch.setattr("harness.dispatch._run_critic", invalid)
+    verdict, _text, _key, _failures = await _grade_shots(
+        [(None, _model("asus3_nemotron"))],
+        "review the codebase",
+        [shot],
+        allow_degraded=True,
+    )
+    report = DispatchReport(
+        run_id="degraded-review",
+        intent="review the codebase",
+        packets=[packet],
+        shots=[shot],
+        critic_verdict=verdict,
+    )
+    rendered = stitch_report(report)
+    assert verdict == "degraded"
+    assert shot.qa_pass is False
+    assert "QA FAIL closed" in rendered
+    assert "src/invented.py" not in rendered
+
+
+@pytest.mark.asyncio
+async def test_degraded_review_skips_revision_and_frontier(tmp_path: Path, monkeypatch):
+    from harness.dispatch import Shot
+
+    cfg = _cfg(tmp_path)
+    _enable_test_critic(cfg)
+    cfg.settings.local_revision_attempts = 2
+    cfg.settings.auto_frontier_rescue = True
+    lease_calls = 0
+    rescue_calls = 0
+
+    class Health:
+        def __init__(self, model: ModelConfig):
+            self.model = model
+
+        async def health(self, _timeout_s: float):
+            return True, "ok"
+
+    async def lease(_pairs, packets):
+        nonlocal lease_calls
+        lease_calls += 1
+        answer = "High: src/app.py contains a concrete issue in work(). " * 3
+        return [
+            Shot(
+                packet,
+                "coder",
+                "model",
+                ChatResult(provider="x", model="x", text=answer),
+                None,
+                [],
+                True,
+                True,
+                answer,
+            )
+            for packet in packets
+        ]
+
+    async def invalid(*_args, **_kwargs):
+        return "insufficient", "invalid JSON", {}
+
+    async def rescue(*_args, **_kwargs):
+        nonlocal rescue_calls
+        rescue_calls += 1
+        raise AssertionError("degraded review must not invoke frontier rescue")
+
+    monkeypatch.setattr("harness.dispatch.build_provider", Health)
+    monkeypatch.setattr("harness.dispatch._lease", lease)
+    monkeypatch.setattr("harness.dispatch._run_critic", invalid)
+    monkeypatch.setattr("harness.dispatch.run_rescue_text", rescue)
+
+    report = await run_dispatch(
+        cfg,
+        "review the codebase",
+        thread="tool(read_files): FILE src/app.py\n1 | def work(): return 1",
+    )
+    assert lease_calls == 1
+    assert rescue_calls == 0
+    assert report.local_rounds == 1
+    assert report.critic_verdict == "degraded"
+    assert not any(shot.qa_pass for shot in report.shots)
+    assert report.frontier_run_id == ""
+
+
 @pytest.mark.asyncio
 async def test_run_dispatch_critic_down_serves_machine_pass_as_degraded(tmp_path: Path, monkeypatch):
     dest = tmp_path / "config"
@@ -950,6 +1168,43 @@ def test_stitch_report_fail_closed():
     text = stitch_report(report)
     assert "QA FAIL closed" in text
     assert "nope" not in text
+
+
+def test_verified_frontier_replaces_conflicting_partial_local_review():
+    from harness.dispatch import DispatchReport, Packet, Shot
+    from harness.gateway.orch import stitch_report
+
+    packet = Packet(id="p1", title="review", prompt="review it")
+    report = DispatchReport(
+        run_id="dispatch-x",
+        intent="review the codebase",
+        packets=[packet],
+        shots=[
+            Shot(
+                packet=packet,
+                worker_id="a",
+                model_key="dgx_qwen",
+                result=ChatResult(
+                    provider="x",
+                    model="x",
+                    text="Invented critical defect in src/fake.py.",
+                ),
+                tokens_per_sec=1.0,
+                tool_names=[],
+                tool_hit=True,
+                qa_pass=True,
+                preview="Invented critical defect in src/fake.py.",
+            )
+        ],
+        critic_verdict="revise",
+        frontier_run_id="rescue-1",
+        frontier_verified=True,
+        frontier_text="No defect is proven by the supplied evidence.",
+    )
+    text = stitch_report(report)
+    assert "No defect is proven" in text
+    assert "src/fake.py" not in text
+    assert "Harness completion" not in text
 
 
 def test_stitch_report_answers_not_tool_json():

@@ -318,10 +318,39 @@ def score_invariants(packet: Packet, result: ChatResult, names: list[str]) -> bo
                 return False
             if len(text) < minimum:
                 return False
+        elif lower == "review_grounded":
+            if not _review_grounding_ok(packet, text):
+                return False
         else:
             if inv.lower() not in text.lower() and inv not in names:
                 return False
     return True
+
+
+def _review_grounding_ok(packet: Packet, text: str) -> bool:
+    """Reject review prose that cites source paths absent from its evidence."""
+    marker = "WORKSPACE EVIDENCE GATHERED BY CLINE"
+    if marker not in packet.prompt:
+        return False
+    evidence = packet.prompt.split(marker, 1)[1]
+    evidence_paths = {
+        match.group(0).lstrip("./").lower()
+        for match in _SOURCE_PATH_RE.finditer(evidence)
+    }
+    answer_paths = {
+        match.group(0).lstrip("./").lower()
+        for match in _SOURCE_PATH_RE.finditer(text)
+    }
+    if answer_paths:
+        return answer_paths.issubset(evidence_paths)
+    honest_limit = re.search(
+        r"\b(?:no (?:defect|issue|bug) is proven|"
+        r"insufficient evidence|cannot be (?:proven|determined|assessed)|"
+        r"not enough evidence)\b",
+        text,
+        flags=re.IGNORECASE,
+    )
+    return bool(honest_limit)
 
 
 def _accept_from_row(row: dict[str, Any], expect: str | None) -> AcceptSpec:
@@ -971,10 +1000,17 @@ async def _slice(foreman: ModelConfig, intent: str, limit: int, extra: str = "")
 
 
 def _is_review_job(intent: str) -> bool:
+    scrubbed = _SOURCE_PATH_RE.sub("", intent or "")
+    scrubbed = re.sub(
+        r"\b[A-Za-z0-9_.-]+\.(?:md|txt|json|ya?ml|toml)\b",
+        "",
+        scrubbed,
+        flags=re.IGNORECASE,
+    )
     return bool(
         re.search(
             r"\b(?:review|audit|code\s*base|codebase|bugs?|architecture|quality)\b",
-            intent,
+            scrubbed,
             flags=re.IGNORECASE,
         )
     )
@@ -1040,11 +1076,9 @@ def fallback_packets(intent: str, thread: str, limit: int) -> list[Packet]:
     if len(blocks) >= count:
         chunks = ["\n".join(blocks[index::count]) for index in range(count)]
     else:
-        chunk_size = max(1, (len(evidence) + count - 1) // count)
-        chunks = [
-            evidence[index * chunk_size : (index + 1) * chunk_size]
-            for index in range(count)
-        ]
+        # Never divide one tool result at arbitrary character offsets. A
+        # mid-expression chunk previously became a fabricated syntax finding.
+        chunks = [evidence for _index in range(count)]
     packets: list[Packet] = []
     for index in range(count):
         chunk = chunks[index]
@@ -1069,7 +1103,7 @@ def fallback_packets(intent: str, thread: str, limit: int) -> list[Packet]:
                 id=f"fallback-{index + 1}",
                 title=f"Evidence-backed {focus}",
                 prompt=prompt[:16000],
-                accept=AcceptSpec(invariants=("min_chars 120",)),
+                accept=AcceptSpec(invariants=("min_chars 120", "review_grounded")),
             )
         )
     return packets
@@ -1198,12 +1232,12 @@ async def _lease(pairs: list[tuple[Worker, ModelConfig]], packets: list[Packet])
 
 def _parse_critic(text: str, shots: list[Shot]) -> tuple[str, dict[str, tuple[bool, str]]]:
     blob = text or ""
-    match = re.search(r"\{.*\}", blob, flags=re.S)
     data = None
-    if match:
+    start = blob.find("{")
+    if start >= 0:
         try:
-            data = json.loads(match.group(0))
-        except json.JSONDecodeError:
+            data, _end = json.JSONDecoder().raw_decode(blob[start:])
+        except (json.JSONDecodeError, ValueError):
             data = None
     if isinstance(data, dict):
         verdict = str(data.get("verdict") or "insufficient").strip().lower()
@@ -1275,6 +1309,8 @@ async def _run_critic(
     intent: str,
     shots: list[Shot],
 ) -> tuple[str, str, dict[str, tuple[bool, str]]]:
+    prompt_limit = 14000 if len(shots) == 1 else 6000
+    answer_limit = 8000 if len(shots) == 1 else 6000
     compact = {
         "intent": intent[:1500],
         "shots": [
@@ -1292,8 +1328,8 @@ async def _run_critic(
                 # Semantic QA needs the same evidence the blind coder saw.
                 # Without packet_prompt, a fluent invented review is
                 # indistinguishable from a grounded one.
-                "packet_prompt": s.packet.prompt[:6000],
-                "answer": (s.result.text or "")[:6000],
+                "packet_prompt": s.packet.prompt[:prompt_limit],
+                "answer": (s.result.text or "")[:answer_limit],
             }
             for s in shots
         ],
@@ -1306,8 +1342,13 @@ async def _run_critic(
         model,
         messages,
         _critic_extra(model, thinking=False),
-        # One row per shot plus verdict; 220 flat truncated multi-shot grades.
-        max_tokens=min(1200, 120 + 80 * len(shots)),
+        # Multi-shot JSON needs a floor large enough to close every row. A
+        # structurally invalid batch is retried per-shot by _grade_shots.
+        max_tokens=(
+            200
+            if len(shots) == 1
+            else min(1600, max(800, 160 + 160 * len(shots)))
+        ),
     )
     if result.error:
         return "insufficient", f"ERROR {result.error}", {}
@@ -1334,6 +1375,29 @@ async def _grade_shots(
     python_ok = {shot.packet.id: shot.qa_pass for shot in shots}
     for c_worker, c_model in critic_candidates:
         verdict, text, by_id = await _run_critic(c_worker, c_model, intent, shots)
+        if not by_id and len(shots) > 1:
+            individual = await asyncio.gather(
+                *(
+                    _run_critic(c_worker, c_model, intent, [shot])
+                    for shot in shots
+                )
+            )
+            recovered: dict[str, tuple[bool, str]] = {}
+            raw_parts: list[str] = []
+            for shot, (_one_verdict, one_text, one_scores) in zip(
+                shots, individual, strict=True
+            ):
+                raw_parts.append(one_text)
+                if set(one_scores) != {shot.packet.id}:
+                    recovered = {}
+                    break
+                recovered.update(one_scores)
+            if recovered and _critic_scores_consistent(
+                _aggregate_critic_verdict(recovered), recovered, shots
+            ):
+                by_id = recovered
+                verdict = _aggregate_critic_verdict(recovered)
+                text = "\n".join(raw_parts)
         if not by_id:
             failures.append(f"{c_model.key}: invalid grading")
             continue
@@ -1345,6 +1409,18 @@ async def _grade_shots(
 
     detail = "; ".join(failures) or "all critic backends unavailable"
     if allow_degraded:
+        if _is_review_job(intent):
+            for shot in shots:
+                shot.qa_pass = False
+                shot.qa_why = (
+                    "review withheld: no critic produced a structurally valid grade"
+                )
+            return (
+                "degraded",
+                f"{detail}; review failed closed",
+                "",
+                failures,
+            )
         for shot in shots:
             if shot.qa_pass:
                 shot.qa_why = "python-only; all critics unavailable or invalid"
@@ -1358,6 +1434,17 @@ async def _grade_shots(
         shot.qa_pass = False
         shot.qa_why = "frontier answer could not be independently verified"
     return "insufficient", detail, "", failures
+
+
+def _aggregate_critic_verdict(
+    scores: dict[str, tuple[bool, str]],
+) -> str:
+    passed = sum(1 for ok, _why in scores.values() if ok)
+    if passed == len(scores) and scores:
+        return "proceed"
+    if passed:
+        return "revise"
+    return "reject"
 
 
 def _revision_packets(shots: list[Shot], round_number: int) -> list[Packet]:
@@ -1534,7 +1621,10 @@ async def run_dispatch(
         )
     )
 
+    review_gate_unavailable = verdict == "degraded" and _is_review_job(intent)
     for revision in range(1, cfg.settings.local_revision_attempts + 1):
+        if review_gate_unavailable:
+            break
         failed = [shot for shot in current.values() if not shot.qa_pass]
         if not failed:
             break
@@ -1580,6 +1670,7 @@ async def run_dispatch(
 
     if (
         failed_final
+        and not review_gate_unavailable
         and cfg.settings.auto_frontier_rescue
         and svc.claim_frontier(task.task_id, cfg.settings.max_frontier_calls_per_task)
     ):
