@@ -14,9 +14,12 @@ from harness.orch_loop import (
     WorkingFile,
     command_allowed,
     commands_named_in_intent,
+    complete_working_set_refresh,
     load_loop_state,
     parse_argv,
     parse_command_outcome,
+    prepare_failure_expansion,
+    remember_write,
     select_verify_command,
     working_set_diff_hash,
 )
@@ -55,6 +58,16 @@ def _tools() -> list[dict]:
             "function": {
                 "name": "read_files",
                 "parameters": {"type": "object", "properties": {"paths": {}}},
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "search_files",
+                "parameters": {
+                    "type": "object",
+                    "properties": {"path": {}, "regex": {}, "file_pattern": {}},
+                },
             },
         },
         {
@@ -207,6 +220,54 @@ def _refresh_pair(index: int, content: str | None = None) -> list[dict]:
     ]
 
 
+def _expansion_read_pair(index: int, path: str, content: str) -> list[dict]:
+    return [
+        {
+            "role": "assistant",
+            "tool_calls": [
+                {
+                    "id": f"expand_read_{index}",
+                    "type": "function",
+                    "function": {
+                        "name": "read_files",
+                        "arguments": json.dumps({"paths": [path]}),
+                    },
+                }
+            ],
+        },
+        {
+            "role": "tool",
+            "tool_call_id": f"expand_read_{index}",
+            "content": f"FILE {path}\n{content}",
+        },
+    ]
+
+
+def _search_pair(index: int, symbol: str, result: str) -> list[dict]:
+    return [
+        {
+            "role": "assistant",
+            "tool_calls": [
+                {
+                    "id": f"expand_search_{index}",
+                    "type": "function",
+                    "function": {
+                        "name": "search_files",
+                        "arguments": json.dumps(
+                            {"path": ".", "regex": rf"\b{symbol}\b"}
+                        ),
+                    },
+                }
+            ],
+        },
+        {
+            "role": "tool",
+            "tool_call_id": f"expand_search_{index}",
+            "content": result,
+        },
+    ]
+
+
 def _report(command: str = "pytest tests/test_x.py", text: str = "replace the return", qa_pass: bool = True) -> DispatchReport:
     packet = Packet(
         id="p1",
@@ -259,6 +320,7 @@ def _patch_loop(monkeypatch, report: DispatchReport | None = None, captured: dic
 
     async def dispatch(_cfg, intent, **kwargs):
         captured.setdefault("dispatches", []).append(kwargs.get("packets"))
+        captured.setdefault("dispatch_kwargs", []).append(dict(kwargs))
         return payload
 
     async def actions(*_a, **_k):
@@ -355,12 +417,80 @@ def test_diff_hash_preserves_exact_file_state():
     assert working_set_diff_hash(state) != first
 
 
+def test_deleted_task_file_changes_hash_and_completes_missing_refresh():
+    state = LoopState(last_cmd="pytest tests/test_x.py")
+    state.working_set.files_changed = ["src/app.py"]
+    state.working_set.files_read["src/app.py"] = WorkingFile(
+        content="VALUE = 1\n",
+        content_hash="original",
+    )
+    original = working_set_diff_hash(state)
+
+    remember_write(
+        state,
+        {"path": "src/app.py", "patch": "*** Delete File: src/app.py"},
+        "Successfully deleted src/app.py",
+    )
+    assert "src/app.py" not in state.working_set.files_read
+    assert working_set_diff_hash(state) != original
+
+    state.working_set.refresh_pending = ["src/app.py"]
+    messages = [
+        *_verify_pair(0, "FAILED\nExit code: 1"),
+        {
+            "role": "assistant",
+            "tool_calls": [
+                {
+                    "id": "deleted_read",
+                    "type": "function",
+                    "function": {
+                        "name": "read_files",
+                        "arguments": '{"paths":["src/app.py"]}',
+                    },
+                }
+            ],
+        },
+        {
+            "role": "tool",
+            "tool_call_id": "deleted_read",
+            "content": "ERROR: file not found: src/app.py",
+        },
+    ]
+    assert complete_working_set_refresh(state, messages)
+    assert state.working_set.refresh_pending == []
+
+
+def test_failure_expansion_extracts_only_unseen_workspace_evidence():
+    state = LoopState()
+    state.working_set.repo_root = "/tmp/workspace"
+    state.working_set.files_read["tests/test_service.py"] = WorkingFile(
+        "def test_service(): ...\n",
+        "known",
+    )
+    state.stdout_tail = (
+        '  File "/tmp/workspace/services/cache/redis.py", line 184, in fetch\n'
+        "FAILED tests/test_service.py::test_sparse\n"
+        "/tmp/outside/secrets.py:4: should not be read\n"
+        "/tmp/workspace/src/absolute.ts:9:2 - error TS2552\n"
+        "src/view.tsx:27:11 - error TS2304: Cannot find name 'WidgetFactory'.\n"
+        "NameError: name 'WidgetFactory' is not defined\n"
+    )
+
+    assert prepare_failure_expansion(state)
+    assert state.expansion_paths == [
+        "services/cache/redis.py",
+        "src/absolute.ts",
+        "src/view.tsx",
+    ]
+    assert state.expansion_symbols == ["WidgetFactory"]
+
+
 @pytest.mark.asyncio
 async def test_happy_path_persists_across_run_orch_calls(tmp_path: Path, monkeypatch):
     from harness.gateway.orch import run_orch
 
     cfg = _cfg(tmp_path)
-    _patch_loop(monkeypatch)
+    captured = _patch_loop(monkeypatch)
     tools = _tools()
 
     first = await run_orch(cfg, FIX, messages=_ready_messages(), tools=tools)
@@ -368,6 +498,12 @@ async def test_happy_path_persists_across_run_orch_calls(tmp_path: Path, monkeyp
     assert first.tool_calls[0]["function"]["name"] == "editor"
     assert first.loop_phase == "apply"
     assert first.loop_iteration == 1
+    initial_context = captured["dispatch_kwargs"][0]["compiled_context"]
+    assert "<OBJECTIVE>" in initial_context
+    assert "<ACCEPTANCE>" in initial_context
+    assert "pytest tests/test_x.py" in initial_context
+    assert 'path="src/app.py"' in initial_context
+    assert captured["dispatch_kwargs"][0]["thread"] == initial_context
 
     svc = TaskService(Store(cfg.settings.db_path))
     mid = load_loop_state(svc, svc.session_task().task_id)
@@ -553,14 +689,14 @@ async def test_repair_path_feeds_failure_and_reverifies(tmp_path: Path, monkeypa
     repair_packets = captured["dispatches"][-1]
     assert repair_packets
     prompt = repair_packets[0].prompt
-    assert "exit: 1" in prompt
+    assert 'exit_code="1"' in prompt
     assert "FAILED tests/test_x.py::test_add" in prompt
-    assert "FILE: src/app.py" in prompt
+    assert '<CURRENT_FILE path="src/app.py"' in prompt
     assert "return 1" in prompt
-    assert "CURRENT DIFF" in prompt
+    assert "<CURRENT_DIFF" in prompt
     assert "diff --git a/src/app.py" in prompt
-    assert "ORIGINAL OBJECTIVE" in prompt
-    assert "INSTRUCTION" in prompt
+    assert "<OBJECTIVE>" in prompt
+    assert "<INSTRUCTION>" in prompt
     assert "Do not restart investigation" in prompt
 
     svc = TaskService(Store(cfg.settings.db_path))
@@ -600,6 +736,179 @@ async def test_repair_path_feeds_failure_and_reverifies(tmp_path: Path, monkeypa
     )
     assert done.loop_phase == "verified"
     assert "status: verified" in done.text
+
+
+@pytest.mark.asyncio
+async def test_failure_expands_working_set_without_spending_iteration(
+    tmp_path: Path, monkeypatch
+):
+    from harness.gateway.orch import run_orch
+
+    cfg = _cfg(tmp_path)
+    captured = _patch_loop(monkeypatch)
+    tools = _tools()
+    edit = _edit_pair(0)
+    failure = (
+        'Traceback:\n  File "/tmp/test-repo/services/cache/redis.py", '
+        "line 184, in fetch\n"
+        "    return WidgetFactory.build()\n"
+        "NameError: name 'WidgetFactory' is not defined\n"
+        "Exit code: 1"
+    )
+    failed_verify = _verify_pair(0, failure)
+
+    await run_orch(cfg, FIX, messages=_ready_messages(), tools=tools)
+    await run_orch(cfg, FIX, messages=_ready_messages(edit), tools=tools)
+    failed = await run_orch(
+        cfg,
+        FIX,
+        messages=_ready_messages(edit + failed_verify),
+        tools=tools,
+    )
+    assert failed.loop_phase == "expand"
+    assert failed.loop_iteration == 1
+    assert {
+        call["function"]["name"] for call in failed.tool_calls
+    } == {"read_files", "execute_command"}
+
+    history = edit + failed_verify + _refresh_pair(0)
+    exact_read = await run_orch(
+        cfg,
+        FIX,
+        messages=_ready_messages(history),
+        tools=tools,
+    )
+    assert exact_read.loop_phase == "expand"
+    assert exact_read.loop_iteration == 1
+    assert len(exact_read.tool_calls) == 1
+    read_args = json.loads(exact_read.tool_calls[0]["function"]["arguments"])
+    assert read_args["paths"] == ["services/cache/redis.py"]
+
+    history += _expansion_read_pair(
+        0,
+        "services/cache/redis.py",
+        "def fetch():\n    return WidgetFactory.build()\n",
+    )
+    exact_search = await run_orch(
+        cfg,
+        FIX,
+        messages=_ready_messages(history),
+        tools=tools,
+    )
+    assert exact_search.loop_phase == "expand"
+    assert exact_search.loop_iteration == 1
+    assert len(exact_search.tool_calls) == 1
+    search_fn = exact_search.tool_calls[0]["function"]
+    assert search_fn["name"] == "search_files"
+    assert "WidgetFactory" in json.loads(search_fn["arguments"])["regex"]
+
+    history += _search_pair(
+        0,
+        "WidgetFactory",
+        "services/factories.py:10:class WidgetFactory:\n",
+    )
+    discovered_read = await run_orch(
+        cfg,
+        FIX,
+        messages=_ready_messages(history),
+        tools=tools,
+    )
+    assert discovered_read.loop_phase == "expand"
+    assert discovered_read.loop_iteration == 1
+    assert len(discovered_read.tool_calls) == 1
+    discovered_args = json.loads(
+        discovered_read.tool_calls[0]["function"]["arguments"]
+    )
+    assert discovered_args["paths"] == ["services/factories.py"]
+
+    history += _expansion_read_pair(
+        1,
+        "services/factories.py",
+        "class WidgetFactory:\n    @classmethod\n    def build(cls): return cls()\n",
+    )
+    repair = await run_orch(
+        cfg,
+        FIX,
+        messages=_ready_messages(history),
+        tools=tools,
+    )
+    assert repair.loop_phase == "apply"
+    assert repair.loop_iteration == 2
+    prompt = captured["dispatches"][-1][0].prompt
+    assert '<EXPANDED_EVIDENCE path="services/cache/redis.py"' in prompt
+    assert '<EXPANDED_EVIDENCE path="services/factories.py"' in prompt
+    assert "README.md" not in prompt
+
+
+@pytest.mark.asyncio
+async def test_expansion_uses_workspace_semantic_fallback_after_exact_miss(
+    tmp_path: Path, monkeypatch
+):
+    from harness.gateway.orch import run_orch
+
+    cfg = _cfg(tmp_path)
+    captured = _patch_loop(monkeypatch)
+    semantic_queries: list[tuple[str, list[str]]] = []
+
+    def semantic(_cfg, state):
+        semantic_queries.append(
+            (state.working_set.repo_root, list(state.expansion_symbols))
+        )
+        return ["services/semantic_factory.py"]
+
+    monkeypatch.setattr("harness.gateway.orch._semantic_expansion_paths", semantic)
+    tools = _tools()
+    edit = _edit_pair(0)
+    failed_verify = _verify_pair(
+        0,
+        "NameError: name 'WidgetFactory' is not defined\nExit code: 1",
+    )
+
+    await run_orch(cfg, FIX, messages=_ready_messages(), tools=tools)
+    await run_orch(cfg, FIX, messages=_ready_messages(edit), tools=tools)
+    await run_orch(
+        cfg,
+        FIX,
+        messages=_ready_messages(edit + failed_verify),
+        tools=tools,
+    )
+    history = edit + failed_verify + _refresh_pair(0)
+    exact_search = await run_orch(
+        cfg,
+        FIX,
+        messages=_ready_messages(history),
+        tools=tools,
+    )
+    assert exact_search.tool_calls[0]["function"]["name"] == "search_files"
+
+    history += _search_pair(0, "WidgetFactory", "No results found")
+    semantic_read = await run_orch(
+        cfg,
+        FIX,
+        messages=_ready_messages(history),
+        tools=tools,
+    )
+    assert semantic_read.loop_phase == "expand"
+    assert semantic_read.loop_iteration == 1
+    assert semantic_queries == [("/tmp/test-repo", ["WidgetFactory"])]
+    args = json.loads(semantic_read.tool_calls[0]["function"]["arguments"])
+    assert args["paths"] == ["services/semantic_factory.py"]
+
+    history += _expansion_read_pair(
+        1,
+        "services/semantic_factory.py",
+        "class WidgetFactory:\n    pass\n",
+    )
+    repair = await run_orch(
+        cfg,
+        FIX,
+        messages=_ready_messages(history),
+        tools=tools,
+    )
+    assert repair.loop_phase == "apply"
+    assert repair.loop_iteration == 2
+    prompt = captured["dispatches"][-1][0].prompt
+    assert 'path="services/semantic_factory.py"' in prompt
 
 
 @pytest.mark.asyncio

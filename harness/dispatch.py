@@ -815,7 +815,7 @@ async def plan_actions(
     user = (
         f"INTENT:\n{intent[:3000]}\n\n"
         f"ACCEPTED LOCAL SOLUTION:\n{_clip_context(accepted_solution, 9000)}\n\n"
-        f"WORKING SET:\n{_clip_context(working_set, 12000)}\n\n"
+        f"COMPILED TASK CONTEXT:\n{working_set}\n\n"
         f"WORKSPACE EVIDENCE:\n{_clip_context(thread, 8000)}\n\n"
         f"AVAILABLE TOOL PROPERTIES:\n{json.dumps(available)}\n\n"
         f"AVAILABLE TOOL SCHEMAS:\n{schemas}"
@@ -1431,6 +1431,7 @@ async def run_dispatch(
     use_senior: bool = False,
     thread: str = "",
     packets: list[Packet] | None = None,
+    compiled_context: str = "",
 ) -> DispatchReport:
     intent = intent.strip()
     if not intent:
@@ -1497,6 +1498,9 @@ async def run_dispatch(
     if report.packets and thread.strip():
         report.packets = hydrate_packets(report.packets, thread)
         report.packets = sanitize_packets(report.packets, thread)
+    if report.packets and compiled_context and is_change_job(intent):
+        for packet in report.packets:
+            packet.prompt = compiled_context
     if report.packets and is_change_job(intent):
         report.packets = strip_prose_invariants(report.packets)
     if not report.packets:

@@ -19,11 +19,14 @@ class ContextManager:
 
     @classmethod
     def from_loop(cls, intent: str, state) -> "ContextManager":
-        files = list(getattr(state, "files", None) or [])
+        working_set = getattr(state, "working_set", None)
+        changed = list(getattr(working_set, "files_changed", None) or [])
+        read = list((getattr(working_set, "files_read", None) or {}).keys())
+        files = list(dict.fromkeys([*changed, *read]))
         return cls(
             intent=intent,
             files=files,
-            diff=str(getattr(state, "diff", "") or ""),
+            diff=str(getattr(working_set, "current_diff", "") or ""),
             failed_tests=str(getattr(state, "failed_tests", "") or ""),
         )
 

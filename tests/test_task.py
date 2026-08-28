@@ -2,8 +2,10 @@ import json
 from pathlib import Path
 
 from harness.gateway.proxy import _worker_for_alias, log_turn
+from harness.orch_loop import LoopState, WorkingFile, save_loop_state
 from harness.rescue import missing_sections
 from harness.storage.db import Store
+from harness.task.context import ContextManager
 from harness.task.models import AttemptRecord, Decision
 from harness.task.service import TaskService
 
@@ -81,6 +83,27 @@ def test_packet_is_rescue_shaped_not_a_transcript(tmp_path: Path):
     assert "services/engine/geocode.py" in text
     assert "nominatim cache" in text
     assert packet.worker == "primary_coder"
+
+
+def test_context_adapters_project_nested_working_set(tmp_path: Path):
+    svc = _svc(tmp_path)
+    task = svc.start("fix nested loop context")
+    state = LoopState(intent=task.intent, failed_tests="pytest failed")
+    state.working_set.files_changed = ["src/current.py"]
+    state.working_set.files_read = {
+        "src/current.py": WorkingFile("VALUE = 2\n", "hash-current"),
+        "tests/test_current.py": WorkingFile("def test_value(): ...\n", "hash-test"),
+    }
+    state.working_set.current_diff = "diff --git a/src/current.py b/src/current.py"
+    save_loop_state(svc, task.task_id, state)
+
+    direct = ContextManager.from_loop(task.intent, state)
+    restored = svc.context_from_task(task)
+
+    for context in (direct, restored):
+        assert context.files == ["src/current.py", "tests/test_current.py"]
+        assert context.diff == state.working_set.current_diff
+        assert context.failed_tests == "pytest failed"
 
 
 def test_worker_for_alias_maps_correctly():

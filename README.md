@@ -84,6 +84,25 @@ Only verifier executables and named package scripts on the harness allowlist
 are accepted. Every required command must exit zero against the same current
 file-state hash; any mutation clears earlier verification results.
 
+When verification fails, the loop expands its existing working set from
+concrete diagnostics before repairing. It reads unseen workspace files named
+by tracebacks, pytest, TypeScript, and linter output; searches exact unresolved
+symbols; and uses the workspace-scoped code index only after exact evidence is
+insufficient. Expansion never restarts broad gather and does not consume a
+coding iteration.
+
+Before each coding or repair lease, a deterministic Context Compiler turns the
+persistent working set into a model-specific bounded packet. It preserves the
+current objective, verifier contract, latest machine failure, changed source,
+diff, directly relevant tests, and causal expansion evidence in that order.
+Peripheral evidence is ranked and sliced only after current state; prior
+failures are retained as compact structured attempt summaries rather than
+replayed transcripts. Configure the conservative fleet default with
+`coder_context_tokens` and override it per model when needed. Captured packets
+use provenance tags such as `<CURRENT_FILE path="…" hash="…">`,
+`<CURRENT_DIFF hash="…">`, and `<EXPANDED_EVIDENCE path="…">`, and report
+their configured budget and compiled size.
+
 ## Case format
 
 ```text

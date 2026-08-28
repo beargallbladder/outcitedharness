@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import re
 import time
 import uuid
@@ -11,11 +12,13 @@ from pathlib import Path
 from typing import Any
 
 from harness.task.code_index import normalize_repo_root
+from harness.context_compiler import compile_context
 from harness.repo_contract import build_repo_contract
 
 from harness.dispatch import (
     DispatchReport,
     bind_gather_calls,
+    coder_models,
     default_gather_calls,
     evidence_covers_intent,
     is_change_job,
@@ -33,8 +36,13 @@ from harness.orch_loop import (
     TERMINAL,
     LoopState,
     VerificationRecord,
+    add_semantic_expansion_paths,
     commands_named_in_intent,
     complete_working_set_refresh,
+    consume_expansion_results,
+    expansion_complete,
+    expansion_needs_semantic,
+    expansion_tool_calls,
     failure_hash,
     last_run_for_command_since_write,
     last_tool_exchanges,
@@ -42,6 +50,7 @@ from harness.orch_loop import (
     load_loop_state,
     parse_command_outcome,
     parse_mutation,
+    prepare_failure_expansion,
     remember_failure,
     remember_reads,
     remember_write,
@@ -53,8 +62,9 @@ from harness.orch_loop import (
     terminal_text,
     verify_tool_calls,
     working_set_diff_hash,
-    working_set_text,
 )
+
+log = logging.getLogger("harness.orch")
 
 
 _ENV_BLOCK = re.compile(r"<env>(.*?)</env>", re.IGNORECASE | re.DOTALL)
@@ -381,6 +391,48 @@ def _waiting(state: LoopState, what: str) -> OrchResult:
     )
 
 
+def _coder_context_tokens(cfg) -> int:
+    default = int(getattr(getattr(cfg, "settings", None), "coder_context_tokens", 6_000))
+    try:
+        budgets = [
+            int(model.coder_context_tokens or default)
+            for _worker, model in coder_models(cfg)
+        ]
+    except Exception:
+        budgets = []
+    return min(budgets) if budgets else default
+
+
+def _prepare_verification_contract(
+    state: LoopState,
+    intent: str,
+    workspace: Path | None,
+) -> None:
+    if state.iteration != 0:
+        return
+    explicit = commands_named_in_intent(intent)
+    contract = build_repo_contract(workspace)
+    if explicit:
+        state.commands = explicit
+        state.command_timeouts = {command: 60 for command in explicit}
+    elif contract and contract.commands:
+        state.commands = [spec.command for spec in contract.commands]
+        state.command_timeouts = {
+            spec.command: spec.timeout_s for spec in contract.commands
+        }
+    else:
+        state.commands = []
+        state.command_timeouts = {}
+    if contract:
+        state.working_set.repo_root = contract.repo_root
+        state.working_set.contract_fingerprint = contract.fingerprint
+        state.working_set.contract_configs = list(contract.configs)
+    elif workspace:
+        state.working_set.repo_root = str(workspace)
+    state.working_set.objective = state.working_set.objective or intent
+    state.working_set.acceptance_commands = list(state.commands)
+
+
 def _terminal(svc: TaskService | None, task_id: str | None, state: LoopState) -> OrchResult:
     if svc and task_id:
         save_loop_state(svc, task_id, state)
@@ -404,24 +456,7 @@ async def _emit_apply(
     if state.iteration >= MAX_CYCLES:
         state.phase = "exhausted"
         return _terminal(svc, task_id, state)
-    if state.iteration == 0:
-        explicit = commands_named_in_intent(intent)
-        contract = build_repo_contract(workspace)
-        if explicit:
-            state.commands = explicit
-            state.command_timeouts = {command: 60 for command in explicit}
-        elif contract and contract.commands:
-            state.commands = [spec.command for spec in contract.commands]
-            state.command_timeouts = {
-                spec.command: spec.timeout_s for spec in contract.commands
-            }
-        else:
-            state.commands = []
-            state.command_timeouts = {}
-        if contract:
-            state.working_set.repo_root = contract.repo_root
-            state.working_set.contract_fingerprint = contract.fingerprint
-            state.working_set.contract_configs = list(contract.configs)
+    _prepare_verification_contract(state, intent, workspace)
     state.working_set.objective = state.working_set.objective or intent
     state.working_set.acceptance_commands = list(state.commands)
     commands, reason = select_verify_commands(state.commands)
@@ -433,14 +468,18 @@ async def _emit_apply(
     if not texts or picked is None:
         return None
     _key, foreman = picked
+    compiled = compile_context(
+        state,
+        budget_tokens=_coder_context_tokens(cfg),
+    )
     calls = await plan_actions(
         foreman,
         intent,
-        thread,
+        "",
         "\n\n".join(texts),
         catalog,
         list(tools or []),
-        working_set=working_set_text(state),
+        working_set=compiled.text,
     )
     if not calls:
         return None
@@ -599,11 +638,92 @@ async def _advance_after_verify(
     if same_fail or (same_fail and same_diff) or state.iteration >= MAX_CYCLES:
         state.phase = "exhausted"
         return _terminal(svc, task_id, state)
-    state.phase = "repair"
+    needs_expansion = prepare_failure_expansion(state)
+    state.phase = "expand" if needs_expansion else "repair"
     refresh_calls = refresh_working_set_calls(state, catalog)
     save_loop_state(svc, task_id, state)
     if refresh_calls:
         return _with_loop(OrchResult(tool_calls=refresh_calls), state)
+    if needs_expansion:
+        return await _advance_expansion(
+            cfg,
+            intent,
+            thread,
+            catalog,
+            tools,
+            messages,
+            svc,
+            task_id,
+            state,
+            picked,
+        )
+    return await _run_repair_apply(
+        cfg, intent, thread, catalog, tools, svc, task_id, state, picked
+    )
+
+
+def _semantic_expansion_paths(cfg, state: LoopState) -> list[str]:
+    root = state.working_set.repo_root
+    if not root:
+        return []
+    query = " ".join(
+        [
+            *state.expansion_symbols,
+            (state.stderr_tail or state.stdout_tail)[-1200:],
+        ]
+    ).strip()
+    if not query:
+        return []
+    try:
+        from harness.task.code_index import (
+            default_index_path,
+            gather_paths_for_intent,
+        )
+
+        settings = getattr(cfg, "settings", None)
+        db_path = getattr(settings, "code_index_path", None)
+        return gather_paths_for_intent(
+            query,
+            db_path=db_path or default_index_path(getattr(cfg, "root", None)),
+            workspace=Path(root),
+            limit=4,
+        )
+    except Exception:
+        log.exception("workspace-scoped semantic expansion failed")
+        return []
+
+
+async def _advance_expansion(
+    cfg,
+    intent: str,
+    thread: str,
+    catalog: dict[str, tuple[str, ...]],
+    tools: list[Any],
+    messages: list[Any],
+    svc: TaskService,
+    task_id: str,
+    state: LoopState,
+    picked,
+) -> OrchResult:
+    if not complete_working_set_refresh(state, messages):
+        return _waiting(state, "changed-file refresh results")
+    if not consume_expansion_results(state, messages):
+        return _waiting(state, "causal expansion results")
+    calls = expansion_tool_calls(state, catalog)
+    if calls:
+        save_loop_state(svc, task_id, state)
+        return _with_loop(OrchResult(tool_calls=calls), state)
+    if expansion_needs_semantic(state):
+        add_semantic_expansion_paths(state, _semantic_expansion_paths(cfg, state))
+        calls = expansion_tool_calls(state, catalog)
+        if calls:
+            save_loop_state(svc, task_id, state)
+            return _with_loop(OrchResult(tool_calls=calls), state)
+    if not expansion_complete(state):
+        save_loop_state(svc, task_id, state)
+        return _waiting(state, "causal expansion results")
+    state.phase = "repair"
+    save_loop_state(svc, task_id, state)
     return await _run_repair_apply(
         cfg, intent, thread, catalog, tools, svc, task_id, state, picked
     )
@@ -631,8 +751,21 @@ async def _run_repair_apply(
         state.phase = "blocked"
         state.blocked_reason = "no foreman for repair"
         return _terminal(svc, task_id, state)
-    packets = repair_packets(intent, thread, state)
-    report = await run_dispatch(cfg, intent, thread=thread, packets=packets)
+    compiled = compile_context(
+        state,
+        budget_tokens=_coder_context_tokens(cfg),
+        instruction=(
+            "Repair the observed current failure from this state. Preserve correct "
+            "existing behavior. Do not restart investigation or broad gather."
+        ),
+    )
+    packets = repair_packets(
+        intent,
+        thread,
+        state,
+        compiled_context=compiled.text,
+    )
+    report = await run_dispatch(cfg, intent, thread="", packets=packets)
     applied = await _emit_apply(
         cfg, intent, thread, catalog, tools, report, svc, task_id, state, picked=picked
     )
@@ -691,7 +824,7 @@ async def run_orch(
             save_loop_state(svc, task_id, state)
         state.working_set.objective = state.working_set.objective or intent
         remember_reads(state, messages or [])
-        if state.phase == "repair":
+        if state.phase in {"expand", "repair"}:
             complete_working_set_refresh(state, messages or [])
         if state.phase in TERMINAL:
             return _with_loop(OrchResult(text=terminal_text(state)), state)
@@ -700,6 +833,20 @@ async def run_orch(
         if state.phase == "verify":
             picked = await pick_foreman(cfg)
             return await _advance_after_verify(
+                cfg,
+                intent,
+                thread,
+                catalog,
+                list(tools or []),
+                messages or [],
+                svc,
+                task_id,
+                state,
+                picked,
+            )
+        if state.phase == "expand":
+            picked = await pick_foreman(cfg)
+            return await _advance_expansion(
                 cfg,
                 intent,
                 thread,
@@ -777,7 +924,27 @@ async def run_orch(
                 if calls:
                     return _with_loop(OrchResult(tool_calls=calls), state)
             packets = planned
-    report = await run_dispatch(cfg, intent, thread=thread, packets=packets)
+    dispatch_thread = thread
+    compiled_context = ""
+    if svc and state is not None:
+        _prepare_verification_contract(state, intent, workspace)
+        compiled_context = compile_context(
+            state,
+            budget_tokens=_coder_context_tokens(cfg),
+            instruction=(
+                "Produce an exact implementation for the current objective from this "
+                "state. Return concrete code changes, not a prose-only answer."
+            ),
+        ).text
+        dispatch_thread = compiled_context
+        save_loop_state(svc, task_id, state)
+    report = await run_dispatch(
+        cfg,
+        intent,
+        thread=dispatch_thread,
+        packets=packets,
+        compiled_context=compiled_context,
+    )
     if report.slice_error and not force_dispatch:
         calls = default_gather_calls(catalog, intent, workspace=workspace)
         if calls:

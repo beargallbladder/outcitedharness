@@ -136,10 +136,25 @@ class TaskService:
                 failed = f"tests failed={latest[-1].tests_failed} passed={latest[-1].tests_passed}"
         for item in reversed(self.evidence(task.task_id, kind="orch_loop")):
             payload = item.payload if isinstance(item.payload, dict) else {}
-            loop_files = [str(p) for p in (payload.get("files") or []) if str(p).strip()]
+            working = (
+                payload.get("working_set")
+                if isinstance(payload.get("working_set"), dict)
+                else {}
+            )
+            changed = working.get("files_changed") or []
+            read = (
+                list(working.get("files_read") or {})
+                if isinstance(working.get("files_read"), dict)
+                else []
+            )
+            loop_files = [
+                str(path)
+                for path in [*changed, *read]
+                if str(path).strip()
+            ]
             if loop_files:
                 files = list(dict.fromkeys(loop_files + files))
-            diff = str(payload.get("diff") or diff)
+            diff = str(working.get("current_diff") or diff)
             failed = str(payload.get("failed_tests") or failed)
             break
         return ContextManager(

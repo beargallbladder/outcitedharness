@@ -33,6 +33,7 @@ Phase = Literal[
     "gather",
     "apply",
     "verify",
+    "expand",
     "repair",
     "verified",
     "blocked",
@@ -66,6 +67,56 @@ _RUN_TOOLS = frozenset(
     }
 )
 _READ_TOOLS = frozenset({"read_file", "read_files", "readfile", "read"})
+_SEARCH_TOOLS = frozenset(
+    {"search_files", "search_codebase", "codebase_search", "grep", "glob"}
+)
+_SOURCE_SUFFIXES = (
+    "py",
+    "pyi",
+    "ts",
+    "tsx",
+    "js",
+    "jsx",
+    "mjs",
+    "cjs",
+    "go",
+    "rs",
+    "java",
+    "kt",
+    "kts",
+    "rb",
+    "php",
+    "cs",
+    "c",
+    "cc",
+    "cpp",
+    "h",
+    "hpp",
+)
+_SOURCE_PATH_RE = re.compile(
+    rf"(?<![A-Za-z0-9_./-])((?:[A-Za-z0-9_.-]+/)*"
+    rf"[A-Za-z0-9_.-]+\.(?:{'|'.join(_SOURCE_SUFFIXES)}))"
+    rf"(?=:\d|::|\s|$)"
+)
+_ABS_SOURCE_PATH_RE = re.compile(
+    rf"(?<![A-Za-z0-9_.-])((?:/[A-Za-z0-9_.-]+)+"
+    rf"\.(?:{'|'.join(_SOURCE_SUFFIXES)}))(?=:\d|::|\s|$)"
+)
+_TRACEBACK_PATH_RE = re.compile(r"""(?i)\bFile\s+["']([^"']+)["']\s*,\s*line\s+\d+""")
+_MISSING_FILE_RE = re.compile(
+    r"(?i)\b(?:no such file|not found|does not exist|cannot find the file)\b"
+)
+_SYMBOL_RES = (
+    re.compile(
+        r"""(?i)\bNameError:\s*(?:name\s+)?["']?([A-Za-z_][A-Za-z0-9_]*)["']?"""
+    ),
+    re.compile(
+        r"""(?i)\bcannot\s+find\s+(?:name|symbol)\s+["']?([A-Za-z_][A-Za-z0-9_]*)["']?"""
+    ),
+    re.compile(
+        r"""(?i)\bcannot\s+import\s+name\s+["']?([A-Za-z_][A-Za-z0-9_]*)["']?"""
+    ),
+)
 
 
 @dataclass
@@ -166,6 +217,15 @@ class LoopState:
     prev_failure_hash: str | None = None
     blocked_reason: str = ""
     failed_tests: str = ""
+    attempt_summaries: list[dict[str, Any]] = field(default_factory=list)
+    expansion_paths: list[str] = field(default_factory=list)
+    expansion_symbols: list[str] = field(default_factory=list)
+    expansion_attempted_paths: list[str] = field(default_factory=list)
+    expansion_attempted_symbols: list[str] = field(default_factory=list)
+    expansion_pending_paths: list[str] = field(default_factory=list)
+    expansion_pending_symbols: list[str] = field(default_factory=list)
+    semantic_expansion_paths: list[str] = field(default_factory=list)
+    expansion_semantic_attempted: bool = False
     working_set: WorkingSet = field(default_factory=WorkingSet)
 
     def to_dict(self) -> dict[str, Any]:
@@ -182,6 +242,7 @@ class LoopState:
             "gather",
             "apply",
             "verify",
+            "expand",
             "repair",
             "verified",
             "blocked",
@@ -220,6 +281,64 @@ class LoopState:
             prev_failure_hash=data.get("prev_failure_hash") or None,
             blocked_reason=str(data.get("blocked_reason") or ""),
             failed_tests=str(data.get("failed_tests") or ""),
+            attempt_summaries=[
+                {
+                    "iteration": int(row.get("iteration") or 0),
+                    "command": str(row.get("command") or ""),
+                    "exit_code": (
+                        int(row["exit_code"])
+                        if row.get("exit_code") is not None
+                        else None
+                    ),
+                    "failure": str(row.get("failure") or ""),
+                    "changed_files": [
+                        str(path)
+                        for path in (row.get("changed_files") or [])
+                        if str(path).strip()
+                    ],
+                    "diff_hash": str(row.get("diff_hash") or ""),
+                }
+                for row in (data.get("attempt_summaries") or [])
+                if isinstance(row, dict)
+            ][-5:],
+            expansion_paths=[
+                str(path)
+                for path in (data.get("expansion_paths") or [])
+                if str(path).strip()
+            ],
+            expansion_symbols=[
+                str(symbol)
+                for symbol in (data.get("expansion_symbols") or [])
+                if str(symbol).strip()
+            ],
+            expansion_attempted_paths=[
+                str(path)
+                for path in (data.get("expansion_attempted_paths") or [])
+                if str(path).strip()
+            ],
+            expansion_attempted_symbols=[
+                str(symbol)
+                for symbol in (data.get("expansion_attempted_symbols") or [])
+                if str(symbol).strip()
+            ],
+            expansion_pending_paths=[
+                str(path)
+                for path in (data.get("expansion_pending_paths") or [])
+                if str(path).strip()
+            ],
+            expansion_pending_symbols=[
+                str(symbol)
+                for symbol in (data.get("expansion_pending_symbols") or [])
+                if str(symbol).strip()
+            ],
+            semantic_expansion_paths=[
+                str(path)
+                for path in (data.get("semantic_expansion_paths") or [])
+                if str(path).strip()
+            ],
+            expansion_semantic_attempted=bool(
+                data.get("expansion_semantic_attempted")
+            ),
             working_set=WorkingSet.from_dict(data.get("working_set")),
         )
 
@@ -721,7 +840,8 @@ def complete_working_set_refresh(state: LoopState, messages: list[Any]) -> bool:
     for name, args, text in _after_latest_verification(messages, state.last_cmd):
         lower = name.lower().replace("-", "_")
         if lower in _READ_TOOLS:
-            results = _read_result_files(_read_paths(args), text)
+            requested = _read_paths(args)
+            results = _read_result_files(requested, text)
             for path, content in results.items():
                 if path not in pending:
                     continue
@@ -737,6 +857,17 @@ def complete_working_set_refresh(state: LoopState, messages: list[Any]) -> bool:
                     stale for stale in state.working_set.stale_files if stale != path
                 ]
                 seen.add(path)
+            if not results and _MISSING_FILE_RE.search(text or ""):
+                for path in requested:
+                    if path not in pending:
+                        continue
+                    state.working_set.files_read.pop(path, None)
+                    state.working_set.stale_files = [
+                        stale
+                        for stale in state.working_set.stale_files
+                        if stale != path
+                    ]
+                    seen.add(path)
         if lower in _RUN_TOOLS and any(
             command.startswith("git diff --") for command in _command_args(args)
         ):
@@ -834,18 +965,272 @@ def remember_write(state: LoopState, args: dict[str, Any], text: str) -> None:
         state.working_set.stale_files = [
             stale for stale in state.working_set.stale_files if stale != path
         ]
-    elif path and path not in state.working_set.stale_files:
-        state.working_set.stale_files.append(path)
+    elif path:
+        state.working_set.files_read.pop(path, None)
+        if path not in state.working_set.stale_files:
+            state.working_set.stale_files.append(path)
     # Until git diff returns, retain the edit result as explicit provisional state.
     state.working_set.current_diff = tail_text(text, 4000)
 
 
 def remember_failure(state: LoopState) -> None:
+    failure = state.stderr_tail or state.stdout_tail
     state.failed_tests = tail_text(
         f"cmd={state.last_cmd} exit={state.last_exit} timeout={state.timed_out}\n"
-        f"{state.stderr_tail or state.stdout_tail}",
+        f"{failure}",
         4000,
     )
+    compact = " | ".join(
+        line.strip()
+        for line in failure.splitlines()
+        if line.strip() and not _EXIT_RES[1].search(line)
+    )
+    if len(compact) > 360:
+        compact = compact[:357] + "..."
+    state.attempt_summaries.append(
+        {
+            "iteration": state.iteration,
+            "command": state.last_cmd or "",
+            "exit_code": state.last_exit,
+            "failure": compact or "(empty failure output)",
+            "changed_files": sorted(state.working_set.files_changed),
+            "diff_hash": state.active_diff_hash or "",
+        }
+    )
+    state.attempt_summaries = state.attempt_summaries[-5:]
+
+
+def _workspace_evidence_path(raw: str, repo_root: str) -> str:
+    value = (raw or "").strip().replace("\\", "/")
+    if not value or "\x00" in value:
+        return ""
+    candidate = Path(value)
+    if candidate.is_absolute():
+        if not repo_root:
+            return ""
+        try:
+            value = candidate.resolve().relative_to(Path(repo_root).resolve()).as_posix()
+        except (OSError, ValueError):
+            return ""
+    path = _normalized_workspace_path(value)
+    if not path or Path(path).suffix.lower().lstrip(".") not in _SOURCE_SUFFIXES:
+        return ""
+    return path
+
+
+def _paths_in_text(text: str, repo_root: str) -> list[str]:
+    out: list[str] = []
+    raw_paths = [match.group(1) for match in _TRACEBACK_PATH_RE.finditer(text or "")]
+    raw_paths.extend(match.group(1) for match in _ABS_SOURCE_PATH_RE.finditer(text or ""))
+    raw_paths.extend(match.group(1) for match in _SOURCE_PATH_RE.finditer(text or ""))
+    for raw in raw_paths:
+        path = _workspace_evidence_path(raw, repo_root)
+        if path and path not in out:
+            out.append(path)
+    return out
+
+
+def prepare_failure_expansion(state: LoopState) -> bool:
+    """Extract concrete unseen paths/symbols without broad rediscovery."""
+    failure = state.stderr_tail or state.stdout_tail or ""
+    known = set(state.working_set.files_read)
+    state.expansion_paths = [
+        path
+        for path in _paths_in_text(failure, state.working_set.repo_root)
+        if path not in known
+    ][:5]
+    symbols: list[str] = []
+    for pattern in _SYMBOL_RES:
+        for match in pattern.finditer(failure):
+            symbol = match.group(1)
+            if symbol and symbol not in symbols:
+                symbols.append(symbol)
+    state.expansion_symbols = symbols[:3]
+    state.expansion_attempted_paths = []
+    state.expansion_attempted_symbols = []
+    state.expansion_pending_paths = []
+    state.expansion_pending_symbols = []
+    state.semantic_expansion_paths = []
+    state.expansion_semantic_attempted = False
+    return bool(state.expansion_paths or state.expansion_symbols)
+
+
+def _symbol_present(state: LoopState, symbol: str) -> bool:
+    escaped = re.escape(symbol)
+    declaration = re.compile(
+        rf"(?m)^\s*(?:(?:export|default|public|private|protected|abstract)\s+)*"
+        rf"(?:class|def|function|interface|type|enum|const|let|var)\s+{escaped}\b"
+    )
+    imported = re.compile(
+        rf"(?m)^\s*(?:from\s+\S+\s+import|import)\s+[^\n]*\b{escaped}\b"
+    )
+    return any(
+        declaration.search(snapshot.content) or imported.search(snapshot.content)
+        for snapshot in state.working_set.files_read.values()
+    )
+
+
+def consume_expansion_results(state: LoopState, messages: list[Any]) -> bool:
+    """Consume only deterministic expansion reads/searches after verification."""
+    if not state.expansion_pending_paths and not state.expansion_pending_symbols:
+        return True
+    seen_paths: set[str] = set()
+    seen_symbols: set[str] = set()
+    for name, args, text in _after_latest_verification(messages, state.last_cmd):
+        lower = name.lower().replace("-", "_")
+        if lower in _READ_TOOLS:
+            requested = _read_paths(args)
+            seen_paths.update(
+                path for path in requested if path in state.expansion_pending_paths
+            )
+        if lower in _SEARCH_TOOLS:
+            query = str(args.get("regex") or args.get("query") or "")
+            matched = [
+                symbol
+                for symbol in state.expansion_pending_symbols
+                if symbol in query
+            ]
+            if not matched:
+                continue
+            seen_symbols.update(matched)
+            for path in _paths_in_text(text, state.working_set.repo_root):
+                if (
+                    path not in state.working_set.files_read
+                    and path not in state.expansion_paths
+                ):
+                    state.expansion_paths.append(path)
+    state.expansion_pending_paths = [
+        path for path in state.expansion_pending_paths if path not in seen_paths
+    ]
+    state.expansion_pending_symbols = [
+        symbol
+        for symbol in state.expansion_pending_symbols
+        if symbol not in seen_symbols
+    ]
+    return not state.expansion_pending_paths and not state.expansion_pending_symbols
+
+
+def expansion_tool_calls(
+    state: LoopState,
+    catalog: dict[str, tuple[str, ...]],
+) -> list[dict[str, Any]]:
+    """Read causal paths first, then search only unresolved exact symbols."""
+    if state.expansion_pending_paths or state.expansion_pending_symbols:
+        return []
+    unread = [
+        path
+        for path in state.expansion_paths
+        if path not in state.working_set.files_read
+        and path not in state.expansion_attempted_paths
+    ][:5]
+    if unread:
+        calls = bind_gather_calls(
+            [{"name": "read_file", "arguments": {"path": path}} for path in unread],
+            catalog,
+            limit=5,
+        )
+        requested: list[str] = []
+        for call in calls:
+            fn = call.get("function") if isinstance(call, dict) else {}
+            requested.extend(_read_paths(_args_dict((fn or {}).get("arguments"))))
+        state.expansion_attempted_paths.extend(
+            path for path in unread if path not in state.expansion_attempted_paths
+        )
+        state.expansion_pending_paths = list(dict.fromkeys(requested))
+        if calls:
+            return calls
+    unresolved = [
+        symbol
+        for symbol in state.expansion_symbols
+        if not _symbol_present(state, symbol)
+        and symbol not in state.expansion_attempted_symbols
+    ][:3]
+    if unresolved:
+        calls = bind_gather_calls(
+            [
+                {
+                    "name": "search_files",
+                    "arguments": {
+                        "path": ".",
+                        "regex": rf"\b{re.escape(symbol)}\b",
+                        "query": symbol,
+                    },
+                }
+                for symbol in unresolved
+            ],
+            catalog,
+            limit=3,
+        )
+        searched: list[str] = []
+        for call in calls:
+            fn = call.get("function") if isinstance(call, dict) else {}
+            args = _args_dict((fn or {}).get("arguments"))
+            query = str(args.get("regex") or args.get("query") or "")
+            searched.extend(symbol for symbol in unresolved if symbol in query)
+        state.expansion_attempted_symbols.extend(
+            symbol
+            for symbol in unresolved
+            if symbol not in state.expansion_attempted_symbols
+        )
+        state.expansion_pending_symbols = list(dict.fromkeys(searched))
+        if calls:
+            return calls
+    return []
+
+
+def expansion_needs_semantic(state: LoopState) -> bool:
+    if (
+        state.expansion_pending_paths
+        or state.expansion_pending_symbols
+        or state.expansion_semantic_attempted
+    ):
+        return False
+    unresolved = [
+        symbol
+        for symbol in state.expansion_symbols
+        if not _symbol_present(state, symbol)
+    ]
+    unread = [
+        path
+        for path in state.expansion_paths
+        if path not in state.working_set.files_read
+        and path not in state.expansion_attempted_paths
+    ]
+    return bool(unresolved and not unread) and all(
+        symbol in state.expansion_attempted_symbols for symbol in unresolved
+    )
+
+
+def add_semantic_expansion_paths(state: LoopState, paths: list[str]) -> None:
+    state.expansion_semantic_attempted = True
+    for raw in paths:
+        path = _normalized_workspace_path(raw)
+        if (
+            path
+            and Path(path).suffix.lower().lstrip(".") in _SOURCE_SUFFIXES
+            and path not in state.working_set.files_read
+            and path not in state.expansion_paths
+        ):
+            state.expansion_paths.append(path)
+            state.semantic_expansion_paths.append(path)
+
+
+def expansion_complete(state: LoopState) -> bool:
+    if state.expansion_pending_paths or state.expansion_pending_symbols:
+        return False
+    unread = [
+        path
+        for path in state.expansion_paths
+        if path not in state.working_set.files_read
+        and path not in state.expansion_attempted_paths
+    ]
+    unsearched = [
+        symbol
+        for symbol in state.expansion_symbols
+        if not _symbol_present(state, symbol)
+        and symbol not in state.expansion_attempted_symbols
+    ]
+    return not unread and not unsearched and not expansion_needs_semantic(state)
 
 
 def working_files_text(state: LoopState) -> str:
@@ -868,7 +1253,13 @@ def working_set_text(state: LoopState) -> str:
     )
 
 
-def repair_packets(intent: str, thread: str, state: LoopState) -> list[Packet]:
+def repair_packets(
+    intent: str,
+    thread: str,
+    state: LoopState,
+    *,
+    compiled_context: str = "",
+) -> list[Packet]:
     remaining = max(0, MAX_CYCLES - state.iteration)
     objective = _clip_context(state.working_set.objective or intent, 1200)
     files = _clip_context(working_files_text(state), 6500)
@@ -877,7 +1268,7 @@ def repair_packets(intent: str, thread: str, state: LoopState) -> list[Packet]:
         state.stderr_tail or state.stdout_tail or "(empty)",
         3000,
     )
-    prompt = (
+    prompt = compiled_context or (
         f"ORIGINAL OBJECTIVE\n{objective}\n\n"
         f"WORKING FILES\n{files}\n\n"
         f"CURRENT DIFF\n{diff}\n\n"
@@ -895,7 +1286,7 @@ def repair_packets(intent: str, thread: str, state: LoopState) -> list[Packet]:
         Packet(
             id="repair-1",
             title="Repair verification failure",
-            prompt=prompt[:16000],
+            prompt=prompt if compiled_context else prompt[:16000],
             accept=AcceptSpec(
                 commands=tuple(state.commands),
                 invariants=("min_chars 40",),
