@@ -10,6 +10,10 @@ max_frontier_calls_per_task: 1
 frontier_model_key: frontier
 frontier_max_input_chars: 20000
 frontier_max_output_tokens: 2048
+code_index_path: results/code_index.sqlite
+code_index_repos:
+  - /Users/samkim/Harnessv1
+  - /Users/samkim/locationlocationlocation
 system_prompt: |
   You are completing a benchmark task.
   Follow the instructions exactly.

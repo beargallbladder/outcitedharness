@@ -72,6 +72,37 @@ def search_code(query: str, repo: Path, mode: Mode = "auto", limit: int = 40) ->
     return _ripgrep(query, repo, mode, backend, limit)
 
 
+def embed_texts(
+    texts: list[str],
+    base_url: str | None = None,
+    model: str = "bge-m3-cr-tapes-v1",
+) -> list[list[float]]:
+    """Encode text on Spark :8800. Does not write to the CR category index."""
+    if not texts:
+        return []
+    root = (base_url or embedder_base_url()).rstrip("/")
+    payload = json.dumps({"model": model, "input": texts}).encode("utf-8")
+    request = urllib.request.Request(
+        f"{root}/v1/embeddings",
+        data=payload,
+        headers={"content-type": "application/json"},
+        method="POST",
+    )
+    with urllib.request.urlopen(request, timeout=30) as response:
+        data = json.loads(response.read().decode("utf-8") or "{}")
+    rows = data.get("data") if isinstance(data, dict) else None
+    if not isinstance(rows, list) or len(rows) != len(texts):
+        raise RuntimeError("embedder returned unexpected embeddings payload")
+    ordered = sorted(rows, key=lambda row: int(row.get("index") or 0))
+    out: list[list[float]] = []
+    for row in ordered:
+        vec = row.get("embedding") if isinstance(row, dict) else None
+        if not isinstance(vec, list):
+            raise RuntimeError("embedder row missing embedding")
+        out.append([float(x) for x in vec])
+    return out
+
+
 def embedder_base_url() -> str:
     return (
         os.environ.get("HARNESS_EMBED_URL")

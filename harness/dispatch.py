@@ -608,6 +608,17 @@ def default_gather_calls(catalog: dict[str, tuple[str, ...]], intent: str) -> li
         },
     ]
     raw = frontend + generic if is_frontend_job(intent) else generic
+    try:
+        from harness.task.code_index import gather_paths_for_intent
+
+        extra = [
+            {"name": "read_file", "arguments": {"path": path}}
+            for path in gather_paths_for_intent(intent, limit=6)
+        ]
+        if extra:
+            raw = extra + raw
+    except Exception:
+        pass
     return bind_gather_calls(raw, catalog)
 
 

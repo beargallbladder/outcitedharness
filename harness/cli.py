@@ -596,6 +596,46 @@ def task_decide(
     )
 
 
+@app.command("index")
+def index_cmd(
+    repo: Optional[list[str]] = typer.Option(None, "--repo", help="Extra repo to index"),
+) -> None:
+    """Incrementally embed active trees on the M5. Uses :8800 /v1/embeddings only."""
+    from harness.task.code_index import DEFAULT_REPOS, default_index_path, index_repos
+
+    cfg = _cfg()
+    repos = [Path(p) for p in (cfg.settings.code_index_repos or list(DEFAULT_REPOS))]
+    for extra in repo or []:
+        repos.append(_path(extra))
+    db = cfg.settings.code_index_path or default_index_path(cfg.root)
+    stats = index_repos(repos, db)
+    console.print(
+        f"code index {db} files={stats['files']} unchanged={stats['unchanged']} "
+        f"chunks={stats['chunks']} embedded={stats['embedded']}"
+    )
+
+
+@app.command("retrieve")
+def retrieve_cmd(
+    query: str,
+    limit: int = typer.Option(8, help="Top chunks"),
+) -> None:
+    """Query the M5 code index. Does not hit the CR category search endpoint."""
+    from harness.task.code_index import default_index_path, query_index
+
+    cfg = _cfg()
+    db = cfg.settings.code_index_path or default_index_path(cfg.root)
+    hits = query_index(query, db, limit=limit)
+    if not hits:
+        console.print(f"no hits in {db}")
+        raise typer.Exit(code=1)
+    for hit in hits:
+        console.print(
+            f"{hit.score:.3f}  {hit.repo}/{hit.path}:{hit.start_line}-{hit.end_line}"
+        )
+        console.print(hit.text.splitlines()[0][:160] if hit.text else "")
+
+
 @app.command("search")
 def search_cmd(
     query: str,
