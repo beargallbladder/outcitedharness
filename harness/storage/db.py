@@ -39,6 +39,26 @@ class Store:
     def _init(self) -> None:
         with self.connect() as conn:
             conn.executescript(SCHEMA_SQL)
+            self._ensure_column(conn, "cline_turns", "task_id", "TEXT")
+            self._ensure_column(conn, "tasks", "stage", "TEXT NOT NULL DEFAULT 'new'")
+            self._ensure_column(conn, "tasks", "frontier_calls", "INTEGER NOT NULL DEFAULT 0")
+            self._ensure_column(conn, "tasks", "updated_at", "TEXT")
+            self._ensure_column(conn, "tasks", "final_outcome", "TEXT")
+            self._ensure_column(conn, "attempts", "estimated_cost", "REAL")
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_cline_turns_task ON cline_turns(task_id)"
+            )
+
+    @staticmethod
+    def _ensure_column(
+        conn: sqlite3.Connection,
+        table: str,
+        column: str,
+        declaration: str,
+    ) -> None:
+        names = {row[1] for row in conn.execute(f"PRAGMA table_info({table})")}
+        if column not in names:
+            conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {declaration}")
 
     def create_run(self, run_id: str, mode: str, notes: str | None = None) -> None:
         with self.connect() as conn:
@@ -85,6 +105,7 @@ class Store:
 
     def insert_cline_turn(self, payload: dict[str, Any]) -> None:
         columns = [
+            "task_id",
             "started_at",
             "alias",
             "model_key",

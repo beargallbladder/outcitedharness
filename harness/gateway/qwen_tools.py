@@ -128,6 +128,10 @@ def _from_json_block(raw: str) -> dict[str, Any] | None:
     return _call(str(name), args)
 
 
+def openai_tool_call(name: str, args: Any) -> dict[str, Any]:
+    return _call(name, args)
+
+
 def _call(name: str, args: Any) -> dict[str, Any]:
     if not isinstance(args, str):
         args = json.dumps(args, ensure_ascii=False)

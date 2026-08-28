@@ -1,0 +1,3 @@
+id: op02_cmd
+title: Run one bounded command
+expect_tool: execute_command

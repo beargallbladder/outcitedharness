@@ -30,6 +30,7 @@ class ChatResult:
     output_tokens: int | None = None
     latency_ms: float = 0
     error: str | None = None
+    tool_calls: list[dict[str, Any]] = field(default_factory=list)
 
 
 class ModelProvider(Protocol):

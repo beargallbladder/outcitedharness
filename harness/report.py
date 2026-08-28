@@ -206,3 +206,135 @@ def print_runs(store: Store, console: Console, limit: int = 20) -> None:
             row["finished_at"] or "",
         )
     console.print(table)
+
+
+def print_optimize_report(report, console: Console) -> None:
+    from harness.optimize import OptimizeReport, WorkerShot
+
+    if not isinstance(report, OptimizeReport):
+        raise TypeError("expected OptimizeReport")
+
+    health = Table(title=f"Optimize {report.run_id} — health")
+    health.add_column("Box")
+    health.add_column("Status")
+    for key, detail in report.health.items():
+        style = "green" if detail == "ok" else "red"
+        health.add_row(key, f"[{style}]{detail}[/{style}]")
+    console.print(health)
+
+    table = Table(title="Worker shots")
+    table.add_column("Case")
+    table.add_column("Box")
+    table.add_column("ms")
+    table.add_column("in/out")
+    table.add_column("tok/s")
+    table.add_column("tools")
+    table.add_column("hit")
+    table.add_column("err")
+    for outcome in report.outcomes:
+        for shot in outcome.shots:
+            tokens = f"{shot.result.input_tokens or 0}/{shot.result.output_tokens or 0}"
+            rate = f"{shot.tokens_per_sec:.1f}" if shot.tokens_per_sec else "-"
+            table.add_row(
+                outcome.case.id,
+                shot.model_key,
+                f"{shot.result.latency_ms:.0f}",
+                tokens,
+                rate,
+                ",".join(shot.tool_names) or "-",
+                "yes" if shot.tool_hit else "no",
+                (shot.result.error or "")[:40],
+            )
+    console.print(table)
+
+    totals = Table(title="Box totals")
+    totals.add_column("Box")
+    totals.add_column("hits")
+    totals.add_column("mean ms")
+    totals.add_column("mean tok/s")
+    totals.add_column("out tok")
+    by_key: dict[str, list[WorkerShot]] = {}
+    for outcome in report.outcomes:
+        for shot in outcome.shots:
+            by_key.setdefault(shot.model_key, []).append(shot)
+    for key, shots in by_key.items():
+        hits = sum(1 for s in shots if s.tool_hit)
+        mean_ms = sum(s.result.latency_ms for s in shots) / len(shots)
+        rates = [s.tokens_per_sec for s in shots if s.tokens_per_sec]
+        mean_rate = (sum(rates) / len(rates)) if rates else None
+        out = sum(s.result.output_tokens or 0 for s in shots)
+        totals.add_row(
+            key,
+            f"{hits}/{len(shots)}",
+            f"{mean_ms:.0f}",
+            f"{mean_rate:.1f}" if mean_rate else "-",
+            str(out),
+        )
+    console.print(totals)
+
+    for outcome in report.outcomes:
+        winner = outcome.winner or "-"
+        console.print(
+            f"{outcome.case.id}: winner=[bold]{winner}[/bold]  "
+            f"ranks={outcome.ranks or '-'}  {outcome.reason[:120]}"
+        )
+    if report.senior_text:
+        console.print("\n[bold]Senior[/bold]")
+        console.print(report.senior_text)
+    if report.json_path:
+        console.print(f"\nStored [bold]{report.json_path}[/bold]")
+
+
+def print_dispatch_report(report, console: Console) -> None:
+    from harness.dispatch import DispatchReport
+
+    if not isinstance(report, DispatchReport):
+        raise TypeError("expected DispatchReport")
+
+    health = Table(title=f"Dispatch {report.run_id} — health")
+    health.add_column("Box")
+    health.add_column("Status")
+    for key, detail in report.health.items():
+        style = "green" if detail == "ok" else "red"
+        health.add_row(key, f"[{style}]{detail}[/{style}]")
+    console.print(health)
+    console.print(f"intent: {report.intent}")
+    if report.slice_error:
+        console.print(f"[red]QA FAIL closed:[/red] {report.slice_error}")
+    console.print(f"packets: {len(report.packets)}  shots: {len(report.shots)}")
+
+    table = Table(title="Pool shots")
+    table.add_column("Packet")
+    table.add_column("Worker")
+    table.add_column("ms")
+    table.add_column("in/out")
+    table.add_column("tok/s")
+    table.add_column("tools")
+    table.add_column("hit")
+    table.add_column("qa")
+    table.add_column("err")
+    for shot in report.shots:
+        tokens = f"{shot.result.input_tokens or 0}/{shot.result.output_tokens or 0}"
+        rate = f"{shot.tokens_per_sec:.1f}" if shot.tokens_per_sec else "-"
+        table.add_row(
+            shot.packet.id,
+            shot.worker_id,
+            f"{shot.result.latency_ms:.0f}",
+            tokens,
+            rate,
+            ",".join(shot.tool_names) or "-",
+            "yes" if shot.tool_hit else "no",
+            "yes" if shot.qa_pass else "no",
+            (shot.result.error or "")[:40],
+        )
+    console.print(table)
+    qa = sum(1 for s in report.shots if s.qa_pass)
+    console.print(f"qa: {qa}/{len(report.shots)} pass  verdict: {report.critic_verdict or 'python'}")
+    if report.critic_text:
+        console.print("\n[bold]Critic[/bold]")
+        console.print(report.critic_text[:800])
+    if report.senior_text:
+        console.print("\n[bold]Senior[/bold]")
+        console.print(report.senior_text)
+    if report.json_path:
+        console.print(f"\nStored [bold]{report.json_path}[/bold]")

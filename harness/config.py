@@ -77,6 +77,12 @@ class Settings(BaseModel):
     tournament_parallel: bool = True
     max_answer_preview_chars: int = 800
     system_prompt: str = ""
+    local_revision_attempts: int = Field(default=0, ge=0, le=3)
+    auto_frontier_rescue: bool = False
+    max_frontier_calls_per_task: int = Field(default=1, ge=0, le=2)
+    frontier_model_key: str = "frontier"
+    frontier_max_input_chars: int = Field(default=20_000, ge=4_000, le=60_000)
+    frontier_max_output_tokens: int = Field(default=2_048, ge=256, le=8_192)
 
 
 class AppConfig(BaseModel):
@@ -136,6 +142,12 @@ def load_config(root: Path | None = None) -> AppConfig:
         tournament_parallel=bool(raw_settings.get("tournament_parallel", True)),
         max_answer_preview_chars=int(raw_settings.get("max_answer_preview_chars", 800)),
         system_prompt=str(raw_settings.get("system_prompt") or "").strip(),
+        local_revision_attempts=int(raw_settings.get("local_revision_attempts", 1)),
+        auto_frontier_rescue=bool(raw_settings.get("auto_frontier_rescue", True)),
+        max_frontier_calls_per_task=int(raw_settings.get("max_frontier_calls_per_task", 1)),
+        frontier_model_key=str(raw_settings.get("frontier_model_key") or "frontier"),
+        frontier_max_input_chars=int(raw_settings.get("frontier_max_input_chars", 20_000)),
+        frontier_max_output_tokens=int(raw_settings.get("frontier_max_output_tokens", 2_048)),
     )
 
     raw_models = _read_yaml(root / "config" / "models.yaml").get("models") or {}

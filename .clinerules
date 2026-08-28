@@ -5,10 +5,16 @@ API key: sk-harness-local  (or harness-local)
 Default model: harness-local
 
 Roles:
-- harness-local  Spark Qwen3-Coder-Next (worker — default)
+- harness-local  Spark e10b Qwen3-Coder-Next (worker — default)
+- harness-dgx2   Spark 49af Qwen3-Coder-Next (new DGX, :8900 on .45)
+- harness-asus   ASUS gx10-fc2e Qwen3-Coder-Next (:8900 on .46)
+- harness-dgx3   Spark 69c8 Qwen3-Coder-Next (new DGX, :8900 on .49)
 - harness-m5     M5 Qwen3.8-27B (orchestrator / screenshots, short packets only)
 - harness-frontier  Claude (senior). Do not paste the Cline thread. Use `harness rescue PACKET.md`.
+- harness-orch   Cline types here; gateway runs dispatch (M5 slice + coder pool + tester stitch). One reply. Not a Cline fan-out.
 - harness-auto   dead-box failover only (connect/5xx/empty). Not a quality ladder.
+
+Work happens via Cline Model ID `harness-orch` (gateway runs dispatch) or `harness dispatch "intent"`. `harness optimize` A/Bs the same packet on every box. Do not pick four Cline Model IDs and hope.
 
 Do not call :8800–:8803 (embeddings) or :8902 (OCR).
 Do not restart, kill, or reconfigure inference services.

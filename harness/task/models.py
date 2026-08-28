@@ -14,6 +14,10 @@ class Task:
     hypothesis: str = ""
     intervened: bool = False
     frontier_required: bool = False
+    stage: str = "new"
+    frontier_calls: int = 0
+    updated_at: str = ""
+    final_outcome: str = ""
 
 
 @dataclass
@@ -60,6 +64,7 @@ class AttemptRecord:
     tool_calls: int | None = None
     input_tokens: int | None = None
     output_tokens: int | None = None
+    estimated_cost: float | None = None
     started_at: str = ""
     finished_at: str = ""
 

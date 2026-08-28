@@ -8,6 +8,14 @@ import yaml
 
 from harness.config import find_project_root
 
+ROLE_FROM_CAPS = {
+    "coding": "coder",
+    "reasoning": "foreman",
+    "review": "senior",
+    "research": "researcher",
+    "test": "tester",
+}
+
 
 @dataclass(frozen=True)
 class Worker:
@@ -17,6 +25,8 @@ class Worker:
     endpoint: str | None
     capabilities: tuple[str, ...]
     failover_order: int | None
+    role: str = "coder"
+    priority: int = 100
     notes: str = ""
 
     def status(self) -> str:
@@ -33,6 +43,16 @@ class WorkerRegistry:
 
     def get(self, worker_id: str) -> Worker | None:
         return self.workers.get(worker_id)
+
+    def pool(self, role: str = "coder") -> list[Worker]:
+        """Enabled workers for a job role. Flip enabled to add/remove a box."""
+        rows = [
+            w
+            for w in self.workers.values()
+            if w.enabled and w.model_key and w.role == role
+        ]
+        rows.sort(key=lambda w: (w.priority, w.id))
+        return rows
 
     def failover_keys(self) -> list[str]:
         """Enabled workers with a live model_key, in failover_order.
@@ -58,10 +78,12 @@ class WorkerRegistry:
                 "id": w.id,
                 "enabled": w.enabled,
                 "status": w.status(),
+                "role": w.role,
                 "model_key": w.model_key,
                 "endpoint": w.endpoint,
                 "capabilities": list(w.capabilities),
                 "failover_order": w.failover_order,
+                "priority": w.priority,
                 "notes": w.notes,
                 "detail": None if w.enabled else f"{w.id} unavailable",
             }
@@ -82,6 +104,15 @@ def load_registry(root: Path | None = None) -> WorkerRegistry:
     return _parse(path)
 
 
+def _infer_role(spec: dict[str, Any]) -> str:
+    if spec.get("role"):
+        return str(spec["role"])
+    for cap in spec.get("capabilities") or []:
+        if cap in ROLE_FROM_CAPS:
+            return ROLE_FROM_CAPS[str(cap)]
+    return "coder"
+
+
 def _parse(path: Path) -> WorkerRegistry:
     raw = yaml.safe_load(path.read_text()) or {}
     workers: dict[str, Worker] = {}
@@ -95,6 +126,8 @@ def _parse(path: Path) -> WorkerRegistry:
             endpoint=spec.get("endpoint"),
             capabilities=tuple(str(c) for c in caps),
             failover_order=spec.get("failover_order"),
+            role=_infer_role(spec),
+            priority=int(spec.get("priority", 100)),
             notes=str(spec.get("notes") or ""),
         )
     return WorkerRegistry(workers)

@@ -46,6 +46,17 @@ def test_record_matches_evidence_shape(tmp_path: Path):
     assert shown.status == "success"
 
 
+def test_frontier_claim_is_atomic_and_capped(tmp_path: Path):
+    svc = _svc(tmp_path)
+    task = svc.start("repair a failed local answer")
+    assert svc.claim_frontier(task.task_id, 1) is True
+    assert svc.claim_frontier(task.task_id, 1) is False
+    saved = svc.get(task.task_id)
+    assert saved.frontier_required is True
+    assert saved.frontier_calls == 1
+    assert saved.stage == "frontier_rescue"
+
+
 def test_packet_is_rescue_shaped_not_a_transcript(tmp_path: Path):
     svc = _svc(tmp_path)
     task = svc.start("fix geocode bug", plan="engine geocodes ingest rows")
@@ -78,6 +89,11 @@ def test_worker_for_alias_maps_correctly():
     assert _worker_for_alias("harness-auto") == "primary_coder"
     assert _worker_for_alias("harness-m5") == "fallback_reasoner"
     assert _worker_for_alias("harness-frontier") == "frontier_senior"
+    assert _worker_for_alias("harness-dgx2") == "dgx2_coder"
+    assert _worker_for_alias("harness-asus") == "asus_coder"
+    assert _worker_for_alias("harness-dgx3") == "dgx3_coder"
+    assert _worker_for_alias("harness-orch") == "fallback_reasoner"
+    assert _worker_for_alias("harness-researcher") == "researcher"
     assert _worker_for_alias("unknown-alias") == "primary_coder"
 
 
@@ -118,6 +134,8 @@ def test_log_turn_records_attempt(tmp_path: Path):
         assert attempt_row["input_tokens"] == 100
         assert attempt_row["output_tokens"] == 50
         assert attempt_row["ttft_ms"] == 150.5
+        turn_row = conn.execute("SELECT * FROM cline_turns").fetchone()
+        assert turn_row["task_id"] == task_row["task_id"]
 
 
 def test_log_turn_increments_attempt(tmp_path: Path):

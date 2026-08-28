@@ -2,24 +2,32 @@
 # Secrets stay in .env. The dummy key is only so Cline's form is not empty.
 # Loopback accepts any key Cline sends. Prefer sk-harness-local in the UI.
 
-listen_host: 127.0.0.1
+# 0.0.0.0 = LAN clients (e.g. the M4) can use the harness. Non-loopback
+# callers must send the api_key; loopback stays keyless.
+listen_host: 0.0.0.0
 listen_port: 8787
 api_key: harness-local
 
 # What Cline types into Model ID → harness model key (or "auto")
-# Daily default is harness-local (Spark worker). harness-auto is dead-box only.
+# Daily default is harness-orch (pool + Cline hands). harness-local is one coder.
+# harness-auto is dead-box only.
 aliases:
   harness-auto: auto
-  harness-local: dgx_qwen
+  harness-local: asus4_qwen
+  harness-dgx2: dgx2_qwen
+  harness-asus: asus_qwen
+  harness-dgx3: dgx3_qwen
+  harness-orch: orch
   harness-m5: m5_qwen
   harness-frontier: frontier
+  harness-researcher: asus3_nemotron
 
 # harness-auto tries these in order. Next tier only on connect/5xx/empty.
 # Source of truth for names/roles is config/workers.yaml. Keep this list
 # identical to enabled failover_order (tested).
 # Bad answers do not escalate. Use `harness rescue PACKET.md` for quality.
 auto_ladder:
-  - dgx_qwen
+  - asus4_qwen
   - m5_qwen
   - frontier
 

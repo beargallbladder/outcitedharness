@@ -2,14 +2,19 @@ Cline → Settings → API Provider: OpenAI Compatible
 
 Base URL:  http://127.0.0.1:8787/v1
 API Key:   sk-harness-local
-Model ID:  harness-local
+Model ID:  harness-orch
 
 Context window: 131072
 Max output: 8192
 Computer Use / tools: on
 
 Other Model IDs:
-  harness-local     DGX Qwen3-Coder-Next
+  harness-local     DGX e10b Qwen3-Coder-Next (.38)
+  harness-dgx2      DGX 49af Qwen3-Coder-Next (.45)
+  harness-asus      ASUS gx10-fc2e Qwen3-Coder-Next (.46)
+  harness-dgx3      DGX 69c8 Qwen3-Coder-Next (.49)
+  harness-orch      you type; Cline is hands; pool writes the answer
   harness-m5        M5 Qwen3.8-27B 8-bit
   harness-frontier  Claude Sonnet
+  harness-researcher ASUS gx10-0309 Nemotron 3.5 Lightning (critic; not auto)
   harness-auto      dead-box failover only (Spark → M5 → Claude)

@@ -1,20 +1,59 @@
-# Fleet the harness can route to.
-# Today: one M5 control host + one DGX Spark. Future nodes are declared
-# disabled so the scheduler can say "unavailable" without code changes.
+# Fleet the harness can dispatch to.
+# Add a box: copy a coder block, set model_key + endpoint, enabled: true.
+# Remove a box: enabled: false. Change the model: swap model_key (and models.yaml).
+# role is the job. failover_order is Cline dead-box only — not the pool.
+# Endpoints are stable Tailscale IPs so a DHCP change cannot silently drop a worker.
 
 workers:
   primary_coder:
     enabled: true
-    model_key: dgx_qwen
-    endpoint: http://192.168.4.38:8900/v1
+    role: coder
+    model_key: asus4_qwen
+    endpoint: http://100.100.116.82:8900/v1
     capabilities:
       - coding
       - tool_calling
       - long_context
     failover_order: 1
+    notes: gx10-33af asus4; Cline Model ID harness-local; interim coder until the DeepSeek two-Spark pair forms, then this box is reclaimed. spark-e10b (.38) is embedding/search/training only, never a coder.
+
+  dgx2_coder:
+    enabled: true
+    role: coder
+    model_key: dgx2_qwen
+    endpoint: http://100.116.221.82:8900/v1
+    capabilities:
+      - coding
+      - tool_calling
+      - long_context
+    notes: spark-49af; Cline Model ID harness-dgx2; not on harness-auto
+
+  asus_coder:
+    enabled: true
+    role: coder
+    model_key: asus_qwen
+    endpoint: http://100.124.181.13:8900/v1
+    capabilities:
+      - coding
+      - tool_calling
+      - long_context
+    notes: gx10-fc2e; Cline Model ID harness-asus; not on harness-auto
+
+  dgx3_coder:
+    enabled: true
+    role: coder
+    model_key: dgx3_qwen
+    endpoint: http://100.73.119.63:8900/v1
+    capabilities:
+      - coding
+      - tool_calling
+      - long_context
+    notes: spark-69c8; Cline Model ID harness-dgx3; not on harness-auto
 
   fallback_reasoner:
     enabled: true
+    role: foreman
+    priority: 1
     model_key: m5_qwen
     endpoint: http://127.0.0.1:8082/v1
     capabilities:
@@ -22,18 +61,78 @@ workers:
       - vision
       - tool_calling
     failover_order: 2
+    notes: M5 carves packets; not in the coder pool. Foreman chain is m5_qwen then asus2_qwen (health-checked, auto). QA uses local Nemotron first and GLM 5.2 as the independent hosted fallback; Nemotron is never foreman.
 
   frontier_senior:
     enabled: true
+    role: senior
     model_key: frontier
     endpoint: https://api.anthropic.com/v1
     capabilities:
       - review
     failover_order: 3
-    notes: dead-box last hop only; quality escalate is harness rescue
+    notes: single-call quality rescue after bounded local repair is exhausted; also available through manual harness rescue
+
+  researcher:
+    enabled: true
+    role: critic
+    priority: 1
+    model_key: asus3_nemotron
+    endpoint: http://100.89.118.36:8900/v1
+    capabilities:
+      - research
+      - review
+      - tool_calling
+      - long_context
+    notes: gx10-0309 samkimasus3; Nemotron 3.5 Lightning 30B-A3B NVFP4; primary local critic and researcher/tester ONLY — never foreman. With obsolete thinking retries removed it scored 7/7 in 3.78s alone and 7/7 at four-way concurrency in 5.47s or less; not a coder; not on harness-auto.
+
+  glm_critic:
+    enabled: true
+    role: critic
+    priority: 2
+    model_key: glm52
+    endpoint: https://openrouter.ai/api/v1
+    capabilities:
+      - review
+      - long_context
+    notes: independent hosted critic fallback; used only when the local critic is unavailable or invalid
+
+  nemotron_super_critic:
+    enabled: true
+    role: critic
+    priority: 3
+    model_key: nemotron_super
+    endpoint: https://openrouter.ai/api/v1
+    capabilities:
+      - review
+      - long_context
+    notes: final hosted critic fallback; provider availability has been inconsistent
+
+  spark_embedder:
+    enabled: true
+    role: embedder
+    model_key: spark_embed
+    endpoint: http://100.81.201.24:8800/v1
+    capabilities:
+      - embedding
+      - semantic_search
+    notes: spark-e10b :8800; bge-m3-cr-tapes-v1 (1024-dim, cuda); CR team weekly embeddings; routes /v1/embeddings /embed /encode /semantic-search; DO NOT restart or repurpose. This box is dedicated to embedding/search/training; its coder was retired 2026-08-27.
+
+  asus2_foreman:
+    enabled: true
+    role: foreman
+    priority: 2
+    model_key: asus2_qwen
+    endpoint: http://100.68.133.1:8900/v1
+    capabilities:
+      - reasoning
+      - long_context
+      - tool_calling
+    notes: gx10-26b6; Qwen3-Coder-Next NVFP4; peer foreman when M5 is off-network or its LLM is down (auto, health-checked). Distinct from Nemotron critic so QA stays adversarial. MiniMax stays parked (OOM on one box). Not a coder; not on harness-auto.
 
   secondary:
     enabled: false
+    role: coder
     endpoint: http://future-dgx-pair-b:8000/v1
     capabilities:
       - coding
@@ -42,6 +141,7 @@ workers:
 
   fast:
     enabled: false
+    role: coder
     endpoint: http://future-dgx-5:8000/v1
     capabilities:
       - coding
@@ -49,6 +149,7 @@ workers:
 
   monster:
     enabled: false
+    role: coder
     endpoint: http://future-monster:8000/v1
     capabilities:
       - coding

@@ -59,6 +59,7 @@ async def complete_openai(
     model: ModelConfig,
     body: dict[str, Any],
     timeout_s: float,
+    requested_model: str | None = None,
 ) -> ProxyResult:
     result = ProxyResult()
     result.model_key = model.key
@@ -79,6 +80,8 @@ async def complete_openai(
             result.error = response.text[:400]
             return result
         data = rewrite_openai_completion(response.json())
+        if requested_model:
+            data["model"] = requested_model
         result.body = json.dumps(data).encode()
         usage = data.get("usage") or {}
         result.input_tokens = usage.get("prompt_tokens")
@@ -98,6 +101,7 @@ async def stream_openai(
     model: ModelConfig,
     body: dict[str, Any],
     timeout_s: float,
+    requested_model: str | None = None,
 ) -> AsyncIterator[bytes]:
     payload = _rewrite_openai_body(body, model)
     payload["stream"] = True
@@ -111,9 +115,18 @@ async def stream_openai(
             if response.status_code >= 400:
                 text = (await response.aread()).decode("utf-8", errors="replace")
                 raise RuntimeError(f"HTTP {response.status_code}: {text[:300]}")
-            async for chunk in response.aiter_bytes():
-                if chunk:
-                    yield chunk
+            async for line in response.aiter_lines():
+                if line.startswith("data:") and requested_model:
+                    raw = line[5:].strip()
+                    if raw and raw != "[DONE]":
+                        try:
+                            event = json.loads(raw)
+                            event["model"] = requested_model
+                            line = f"data: {json.dumps(event)}"
+                        except json.JSONDecodeError:
+                            pass
+                if line:
+                    yield f"{line}\n\n".encode()
 
 
 async def complete_anthropic(
@@ -267,10 +280,20 @@ def _has_content(data: dict[str, Any]) -> bool:
 def _worker_for_alias(alias: str) -> str:
     if alias in ("harness-local", "harness-auto"):
         return "primary_coder"
+    if alias == "harness-dgx2":
+        return "dgx2_coder"
+    if alias == "harness-asus":
+        return "asus_coder"
+    if alias == "harness-dgx3":
+        return "dgx3_coder"
+    if alias == "harness-orch":
+        return "fallback_reasoner"
     if alias == "harness-m5":
         return "fallback_reasoner"
     if alias == "harness-frontier":
         return "frontier_senior"
+    if alias == "harness-researcher":
+        return "researcher"
     return "primary_coder"
 
 
@@ -281,7 +304,7 @@ def _record_attempt(
     latency_ms: float,
     input_tokens: int | None,
     output_tokens: int | None,
-) -> None:
+) -> str:
     from harness.task.models import AttemptRecord
     from harness.task.service import TaskService
 
@@ -298,6 +321,7 @@ def _record_attempt(
             ttft_ms=latency_ms,
         )
     )
+    return task.task_id
 
 
 def log_turn(
@@ -321,8 +345,17 @@ def log_turn(
         if isinstance(msg, dict):
             content = msg.get("content")
             prompt_chars += len(content) if isinstance(content, str) else len(json.dumps(content or ""))
+    task_id = _record_attempt(
+        store,
+        alias,
+        status,
+        latency_ms,
+        input_tokens,
+        output_tokens,
+    )
     store.insert_cline_turn(
         {
+            "task_id": task_id,
             "started_at": utcnow(),
             "alias": alias,
             "model_key": model_key,
@@ -339,7 +372,6 @@ def log_turn(
             "prompt_chars": prompt_chars,
         }
     )
-    _record_attempt(store, alias, status, latency_ms, input_tokens, output_tokens)
 
 
 def turn_cost(cfg, model_key: str, inbound: int | None, outbound: int | None) -> float | None:

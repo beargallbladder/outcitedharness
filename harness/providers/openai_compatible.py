@@ -106,6 +106,7 @@ class OpenAICompatibleProvider:
                 input_tokens=input_tokens,
                 output_tokens=output_tokens,
                 latency_ms=latency_ms,
+                tool_calls=_extract_tool_calls(body),
             )
         except Exception as exc:
             latency_ms = (time.perf_counter() - started) * 1000
@@ -123,8 +124,14 @@ class OpenAICompatibleProvider:
                     f"{self.model.base_url}/models",
                     headers=self._headers(),
                 )
-            if response.status_code >= 400:
-                return False, f"HTTP {response.status_code}"
+                if response.status_code >= 400:
+                    # Non-chat services (e.g. the BGE-M3 embedder) have no /v1/models
+                    # but expose /healthz at the server root.
+                    root = self.model.base_url.rsplit("/v1", 1)[0]
+                    probe = await client.get(f"{root}/healthz", headers=self._headers())
+                    if probe.status_code < 400:
+                        return True, "healthz ok"
+                    return False, f"HTTP {response.status_code}"
             try:
                 body = response.json()
             except Exception:
@@ -137,6 +144,15 @@ class OpenAICompatibleProvider:
             return True, "reachable"
         except Exception as exc:
             return False, f"{type(exc).__name__}: {exc}"
+
+
+def _extract_tool_calls(payload: dict[str, Any]) -> list[dict[str, Any]]:
+    choices = payload.get("choices") or []
+    if not choices:
+        return []
+    message = (choices[0] or {}).get("message") or {}
+    calls = message.get("tool_calls") or []
+    return [c for c in calls if isinstance(c, dict)]
 
 
 def _model_names(body: Any) -> list[str]:

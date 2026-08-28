@@ -43,6 +43,10 @@ def resolve_alias(spec: ClineSpec, requested: str) -> str:
     return requested
 
 
+def is_orch_alias(spec: ClineSpec, requested: str) -> bool:
+    return resolve_alias(spec, requested) == "orch"
+
+
 def ladder_for(
     spec: ClineSpec,
     cfg: AppConfig,
@@ -74,14 +78,17 @@ def ladder_for(
 def listed_models(spec: ClineSpec) -> list[dict[str, Any]]:
     rows = []
     for alias, target in spec.aliases.items():
-        rows.append(
-            {
-                "id": alias,
-                "object": "model",
-                "owned_by": "harness",
-                "permission": [],
-                "root": target,
-                "context_length": spec.context_window,
-            }
-        )
+        row = {
+            "id": alias,
+            "object": "model",
+            "owned_by": "harness",
+            "permission": [],
+            "root": target,
+            "context_length": spec.context_window,
+        }
+        if target == "orch":
+            # Orch answers plain chat in text, but when the client offers
+            # tools it may reply with gather tool_calls (Cline protocol).
+            row["tool_protocol"] = "harness-v0"
+        rows.append(row)
     return rows

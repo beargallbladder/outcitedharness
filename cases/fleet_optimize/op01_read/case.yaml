@@ -1,0 +1,3 @@
+id: op01_read
+title: Read one known file
+expect_tool: read_file

@@ -115,6 +115,7 @@ def test_auto_uses_primary_when_healthy(routed):
     assert resp.status_code == 200
     assert calls == ["dgx_qwen"]
     assert b"pong from dgx_qwen" in resp.content
+    assert resp.json()["model"] == "harness-auto"
 
 
 def test_auto_fails_over_to_m5_when_dgx_is_dead(routed):

@@ -1,17 +1,130 @@
 # Model ladder for v0.1.
 # Secrets live in .env, never here.
+# Local fleet URLs use stable Tailscale addresses; DHCP LAN leases are not identities.
 
 models:
+  # Retired as coder: spark-e10b (.38) is embedding/search/training only.
   dgx_qwen:
-    enabled: true
+    enabled: false
     tier: 0
-    display_name: "DGX Qwen3-Coder-Next"
+    display_name: "DGX Qwen3-Coder-Next (retired coder)"
     short_name: "DGX_CODER"
     provider: openai_compatible
-    base_url: http://192.168.4.38:8900/v1
+    base_url: http://100.81.201.24:8900/v1
     model: qwen3-coder-next
     temperature: 0
     timeout_s: 180
+    capabilities:
+      vision: false
+
+  asus4_qwen:
+    enabled: true
+    tier: 0
+    display_name: "ASUS4 Qwen3-Coder-Next"
+    short_name: "ASUS4_CODER"
+    provider: openai_compatible
+    base_url: http://100.100.116.82:8900/v1
+    model: qwen3-coder-next
+    temperature: 0
+    timeout_s: 180
+    capabilities:
+      vision: false
+
+  dgx2_qwen:
+    enabled: true
+    tier: 0
+    display_name: "DGX2 Qwen3-Coder-Next"
+    short_name: "DGX2_CODER"
+    provider: openai_compatible
+    base_url: http://100.116.221.82:8900/v1
+    model: qwen3-coder-next
+    temperature: 0
+    timeout_s: 180
+    capabilities:
+      vision: false
+
+  asus_qwen:
+    enabled: true
+    tier: 0
+    display_name: "ASUS GX10 Qwen3-Coder-Next"
+    short_name: "ASUS_CODER"
+    provider: openai_compatible
+    base_url: http://100.124.181.13:8900/v1
+    model: qwen3-coder-next
+    temperature: 0
+    timeout_s: 180
+    capabilities:
+      vision: false
+
+  dgx3_qwen:
+    enabled: true
+    tier: 0
+    display_name: "DGX3 Qwen3-Coder-Next"
+    short_name: "DGX3_CODER"
+    provider: openai_compatible
+    base_url: http://100.73.119.63:8900/v1
+    model: qwen3-coder-next
+    temperature: 0
+    timeout_s: 180
+    capabilities:
+      vision: false
+
+  asus2_qwen:
+    enabled: true
+    tier: 0
+    display_name: "ASUS2 Qwen3-Coder-Next (peer foreman)"
+    short_name: "ASUS2_FOREMAN"
+    provider: openai_compatible
+    base_url: http://100.68.133.1:8900/v1
+    model: qwen3-coder-next
+    temperature: 0
+    timeout_s: 180
+    capabilities:
+      vision: false
+
+  # Parked: 139B NVFP4 needs ~150GB during the Marlin repack this container
+  # build requires on GB10 — OOM crash-loops on one 121GB box. Revisit when
+  # NGC ships native-FP4 vLLM for GB10 or when it gets a two-Spark pair.
+  asus2_minimax:
+    enabled: false
+    tier: 0
+    display_name: "ASUS2 MiniMax-M2.5 REAP 139B"
+    short_name: "ASUS2_MINIMAX"
+    provider: openai_compatible
+    base_url: http://100.68.133.1:8900/v1
+    model: minimax-m2.5-reap
+    temperature: 0
+    timeout_s: 180
+    capabilities:
+      vision: false
+
+  spark_embed:
+    enabled: true
+    tier: 0
+    display_name: "Spark BGE-M3 CR Embedder"
+    short_name: "SPARK_EMBED"
+    provider: openai_compatible
+    base_url: http://100.81.201.24:8800/v1
+    model: bge-m3-cr-tapes-v1
+    temperature: 0
+    timeout_s: 60
+    capabilities:
+      vision: false
+
+  asus3_nemotron:
+    enabled: true
+    tier: 0
+    display_name: "ASUS3 Nemotron 3.5 Lightning 30B-A3B"
+    short_name: "ASUS3_RESEARCH"
+    provider: openai_compatible
+    base_url: http://100.89.118.36:8900/v1
+    model: nemotron-lightning
+    temperature: 0
+    timeout_s: 180
+    extra_body:
+      enable_thinking: false
+      chat_template_kwargs:
+        enable_thinking: false
     capabilities:
       vision: false
 
@@ -21,7 +134,7 @@ models:
     display_name: "DGX Qwen 27B SC5"
     short_name: "DGX_27B_SC5"
     provider: openai_compatible
-    base_url: http://192.168.4.38:8900/v1
+    base_url: http://100.81.201.24:8900/v1
     model: qwen3.6-27b
     temperature: 0.7
     timeout_s: 180

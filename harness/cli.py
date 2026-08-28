@@ -13,18 +13,24 @@ from harness.cases.loader import discover_cases
 from harness.config import load_config
 from harness.economics import compare_economics
 from harness.escalation import run_escalation
+from harness.fleet import validate_fleet
 from harness.health import check_all
+from harness.dispatch import run_dispatch
+from harness.optimize import run_optimize
+from harness.promote import promote_task
 from harness.report import (
     fmt_money,
     fmt_seconds,
     print_attempts,
+    print_dispatch_report,
     print_escalation_summary,
     print_health,
+    print_optimize_report,
     print_runs,
     print_tournament_summary,
 )
-from harness.storage.db import Store
 from harness.rescue import PACKET_TEMPLATE, PacketError, run_rescue
+from harness.storage.db import Store
 from harness.serial import discover_tickets, run_serial
 from harness.task.models import AttemptRecord, Decision
 from harness.task.search import search_code
@@ -34,6 +40,8 @@ from harness.workers.registry import load_registry
 
 
 app = typer.Typer(help="Local/cloud model tournament harness", no_args_is_help=True)
+fleet_app = typer.Typer(help="Validate the manually configured model fleet")
+app.add_typer(fleet_app, name="fleet")
 console = Console()
 
 
@@ -71,6 +79,7 @@ def workers() -> None:
     registry = load_registry(cfg.root)
     table = Table(title="Worker registry")
     table.add_column("Worker")
+    table.add_column("Role")
     table.add_column("Status")
     table.add_column("Model")
     table.add_column("Endpoint")
@@ -80,6 +89,7 @@ def workers() -> None:
         style = {"healthy": "green", "unavailable": "dim", "unconfigured": "yellow"}.get(status, "")
         table.add_row(
             row["id"],
+            row.get("role") or "-",
             f"[{style}]{status}[/{style}]" if style else status,
             row["model_key"] or "-",
             row["endpoint"] or "-",
@@ -89,6 +99,71 @@ def workers() -> None:
     chain = registry.failover_keys()
     if chain:
         console.print("auto failover: " + " → ".join(chain))
+    pool = [w.id for w in registry.pool("coder")]
+    if pool:
+        console.print("coder pool: " + ", ".join(pool))
+
+
+@fleet_app.command("validate")
+def fleet_validate() -> None:
+    """Probe enabled workers and validate config before restarting the gateway."""
+    rows = asyncio.run(validate_fleet(_cfg()))
+    table = Table(title="Fleet validation")
+    table.add_column("Worker")
+    table.add_column("Role")
+    table.add_column("Model")
+    table.add_column("Result")
+    table.add_column("Detail")
+    for row in rows:
+        table.add_row(
+            row.worker_id,
+            row.role,
+            row.model_key or "-",
+            "[green]PASS[/green]" if row.ok else "[red]FAIL[/red]",
+            row.detail,
+        )
+    console.print(table)
+    if not rows or any(not row.ok for row in rows):
+        raise typer.Exit(code=1)
+
+
+@app.command()
+def optimize(
+    workers: Optional[str] = typer.Option(
+        None,
+        help="Comma-separated model keys (default: four GB10 coder boxes)",
+    ),
+    only: Optional[str] = typer.Option(None, help="Comma-separated case ids"),
+    direct: bool = typer.Option(False, "--direct", help="Skip M5 packet/rank; same prompt to every box"),
+    senior: bool = typer.Option(False, "--senior", help="Ask Claude for a short tune note (costs money)"),
+) -> None:
+    """M5 foreman → three GB10 workers in parallel. Measures latency, tokens, tool calls."""
+    cfg = _cfg()
+    worker_keys = [k.strip() for k in workers.split(",") if k.strip()] if workers else None
+    only_ids = [k.strip() for k in only.split(",") if k.strip()] if only else None
+    report = asyncio.run(
+        run_optimize(
+            cfg,
+            worker_keys=worker_keys,
+            use_foreman=not direct,
+            use_senior=senior,
+            only=only_ids,
+        )
+    )
+    print_optimize_report(report, console)
+
+
+@app.command()
+def dispatch(
+    intent: str = typer.Argument(..., help="What you want done. M5 slices this into packets."),
+    workers: Optional[str] = typer.Option(None, help="Comma-separated model keys (default: enabled coder pool)"),
+    senior: bool = typer.Option(False, "--senior", help="Ask Claude after the pool (costs money)"),
+) -> None:
+    """M5 carves packets; idle GB10 coders take them. Tester scores tools/latency/tokens."""
+    cfg = _cfg()
+    worker_keys = [k.strip() for k in workers.split(",") if k.strip()] if workers else None
+    report = asyncio.run(run_dispatch(cfg, intent, worker_keys=worker_keys, use_senior=senior))
+    print_dispatch_report(report, console)
 
 
 @app.command()
@@ -190,6 +265,25 @@ def rescue(
         f"{outcome.model_key}  {outcome.latency_ms/1000:.1f}s  "
         f"{outcome.answer_path}"
     )
+
+
+@app.command()
+def promote(
+    task_id: str = typer.Argument(..., help="Verified frontier-rescue task id"),
+    pack: str = typer.Option("cases/learned", help="Destination case pack"),
+) -> None:
+    """Turn a verified local-fail/frontier-pass task into a regression case."""
+    cfg = _cfg()
+    try:
+        case_dir = promote_task(
+            Store(cfg.settings.db_path),
+            task_id,
+            _path(pack),
+        )
+    except (KeyError, ValueError, FileExistsError) as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(code=1)
+    console.print(f"Promoted [bold]{task_id}[/bold] to {case_dir}")
 
 
 @app.command()

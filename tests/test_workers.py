@@ -1,8 +1,10 @@
 from pathlib import Path
 
+import pytest
 import yaml
 
-from harness.config import find_project_root
+from harness.config import AppConfig, ModelConfig, Settings, find_project_root
+from harness.fleet import validate_fleet
 from harness.workers.registry import load_registry
 from harness.workers.router import should_failover
 
@@ -12,18 +14,51 @@ def test_repo_registry_preserves_auto_ladder():
     registry = load_registry(root)
     cline = yaml.safe_load((root / "config" / "cline.yaml").read_text())
     assert registry.failover_keys() == list(cline["auto_ladder"])
-    assert registry.failover_keys() == ["dgx_qwen", "m5_qwen", "frontier"]
+    assert registry.failover_keys() == ["asus4_qwen", "m5_qwen", "frontier"]
 
 
 def test_primary_and_fallback_are_the_live_boxes():
     registry = load_registry(find_project_root())
     primary = registry.get("primary_coder")
     fallback = registry.get("fallback_reasoner")
-    assert primary is not None and primary.enabled and primary.model_key == "dgx_qwen"
+    assert primary is not None and primary.enabled and primary.model_key == "asus4_qwen"
     assert fallback is not None and fallback.enabled and fallback.model_key == "m5_qwen"
     assert "coding" in primary.capabilities
     assert "tool_calling" in primary.capabilities
     assert "long_context" in primary.capabilities
+    dgx2 = registry.get("dgx2_coder")
+    assert dgx2 is not None and dgx2.enabled and dgx2.model_key == "dgx2_qwen"
+    assert "dgx2_qwen" not in registry.failover_keys()
+    asus = registry.get("asus_coder")
+    assert asus is not None and asus.enabled and asus.model_key == "asus_qwen"
+    assert "asus_qwen" not in registry.failover_keys()
+    dgx3 = registry.get("dgx3_coder")
+    assert dgx3 is not None and dgx3.enabled and dgx3.model_key == "dgx3_qwen"
+    assert "dgx3_qwen" not in registry.failover_keys()
+    pool = {w.id for w in registry.pool("coder")}
+    assert pool == {"primary_coder", "dgx2_coder", "asus_coder", "dgx3_coder"}
+    assert registry.get("fallback_reasoner") not in registry.pool("coder")
+    assert {w.id for w in registry.pool("foreman")} == {"fallback_reasoner", "asus2_foreman"}
+    assert [w.id for w in registry.pool("senior")] == ["frontier_senior"]
+    assert [w.id for w in registry.pool("critic")] == [
+        "researcher",
+        "glm_critic",
+        "nemotron_super_critic",
+    ]
+    researcher = registry.get("researcher")
+    assert researcher is not None and researcher.enabled is True
+    assert researcher.role == "critic" and researcher.model_key == "asus3_nemotron"
+    assert "asus3_nemotron" not in registry.failover_keys()
+    peer = registry.get("asus2_foreman")
+    assert peer is not None and peer.enabled is True and peer.role == "foreman"
+    assert peer.model_key == "asus2_qwen"
+    assert "asus2_qwen" not in registry.failover_keys()
+    embedder = registry.get("spark_embedder")
+    assert embedder is not None and embedder.enabled and embedder.role == "embedder"
+    assert embedder.model_key == "spark_embed"
+    assert [w.id for w in registry.pool("embedder")] == ["spark_embedder"]
+    assert "spark_embed" not in registry.failover_keys()
+    assert embedder not in registry.pool("coder")
 
 
 def test_future_workers_are_unavailable_not_missing():
@@ -34,6 +69,42 @@ def test_future_workers_are_unavailable_not_missing():
         assert by_id[name]["enabled"] is False
         assert by_id[name]["status"] == "unavailable"
         assert by_id[name]["detail"] == f"{name} unavailable"
+
+
+@pytest.mark.asyncio
+async def test_fleet_validate_rejects_endpoint_drift(tmp_path: Path):
+    config = tmp_path / "config"
+    config.mkdir()
+    config.joinpath("workers.yaml").write_text(
+        """
+workers:
+  coder:
+    enabled: true
+    role: coder
+    model_key: local
+    endpoint: http://wrong/v1
+"""
+    )
+    cfg = AppConfig(
+        root=tmp_path,
+        settings=Settings(results_dir=tmp_path / "results", db_path=tmp_path / "h.db"),
+        models={
+            "local": ModelConfig(
+                key="local",
+                tier=0,
+                display_name="local",
+                short_name="local",
+                provider="openai_compatible",
+                base_url="http://right/v1",
+                model="local",
+            )
+        },
+        pricing={},
+    )
+    rows = await validate_fleet(cfg)
+    assert len(rows) == 1
+    assert rows[0].ok is False
+    assert "does not match" in rows[0].detail
 
 
 def test_empty_root_does_not_walk_into_the_repo(tmp_path: Path):
@@ -92,7 +163,7 @@ def test_healthz_exposes_registry(tmp_path: Path):
         max_output_tokens=8192,
     )
     body = TestClient(create_app(cfg, spec)).get("/healthz").json()
-    assert body["auto_ladder"] == ["dgx_qwen", "m5_qwen", "frontier"]
+    assert body["auto_ladder"] == ["asus4_qwen", "m5_qwen", "frontier"]
     by_id = {w["id"]: w for w in body["workers"]}
     assert by_id["primary_coder"]["status"] == "healthy"
     assert by_id["secondary"]["detail"] == "secondary unavailable"

@@ -54,6 +54,7 @@ CREATE INDEX IF NOT EXISTS idx_case_runs_case ON case_runs(case_id);
 
 CREATE TABLE IF NOT EXISTS cline_turns (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
+    task_id TEXT,
     started_at TEXT NOT NULL,
     alias TEXT,
     model_key TEXT,
@@ -67,7 +68,8 @@ CREATE TABLE IF NOT EXISTS cline_turns (
     error TEXT,
     message_count INTEGER,
     has_tools INTEGER,
-    prompt_chars INTEGER
+    prompt_chars INTEGER,
+    FOREIGN KEY (task_id) REFERENCES tasks(task_id)
 );
 CREATE INDEX IF NOT EXISTS idx_cline_turns_started ON cline_turns(started_at);
 
@@ -79,7 +81,11 @@ CREATE TABLE IF NOT EXISTS tasks (
     plan TEXT,
     hypothesis TEXT,
     intervened INTEGER NOT NULL DEFAULT 0,
-    frontier_required INTEGER NOT NULL DEFAULT 0
+    frontier_required INTEGER NOT NULL DEFAULT 0,
+    stage TEXT NOT NULL DEFAULT 'new',
+    frontier_calls INTEGER NOT NULL DEFAULT 0,
+    updated_at TEXT,
+    final_outcome TEXT
 );
 
 CREATE TABLE IF NOT EXISTS attempts (
@@ -99,6 +105,7 @@ CREATE TABLE IF NOT EXISTS attempts (
     tool_calls INTEGER,
     input_tokens INTEGER,
     output_tokens INTEGER,
+    estimated_cost REAL,
     UNIQUE(task_id, attempt),
     FOREIGN KEY (task_id) REFERENCES tasks(task_id)
 );
