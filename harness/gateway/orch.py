@@ -11,6 +11,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from harness.checkpoints import CheckpointError, CheckpointStore
 from harness.task.code_index import normalize_repo_root
 from harness.context_compiler import compile_context
 from harness.repo_contract import build_repo_contract
@@ -70,6 +71,9 @@ log = logging.getLogger("harness.orch")
 _ENV_BLOCK = re.compile(r"<env>(.*?)</env>", re.IGNORECASE | re.DOTALL)
 _ENV_WORKDIR = re.compile(r"Working Directory:\s*([^\n<]+)", re.IGNORECASE)
 _BODY_WORKSPACE_KEYS = ("workspace_root", "workspace_path", "workspace", "cwd")
+_PATCH_PATH_RE = re.compile(
+    r"(?m)^(?:\*\*\* (?:Add|Update) File: |(?:\+\+\+|---) [ab]/)([^\n]+)$"
+)
 
 
 def _add_workspace_candidate(found: list[str], raw: str) -> None:
@@ -403,6 +407,209 @@ def _coder_context_tokens(cfg) -> int:
     return min(budgets) if budgets else default
 
 
+def _checkpoint_store(cfg) -> CheckpointStore:
+    settings = getattr(cfg, "settings", None)
+    results_dir = Path(getattr(settings, "results_dir"))
+    max_bytes = int(getattr(settings, "checkpoint_max_file_bytes", 1_000_000))
+    return CheckpointStore(results_dir / "checkpoints", max_file_bytes=max_bytes)
+
+
+def _normalized_mutation_path(raw: Any, workspace: Path | None = None) -> str:
+    value = str(raw or "").strip().replace("\\", "/")
+    if not value or "\x00" in value:
+        return ""
+    path = Path(value)
+    if path.is_absolute():
+        if workspace is None:
+            return ""
+        try:
+            value = path.resolve(strict=False).relative_to(
+                workspace.resolve()
+            ).as_posix()
+        except (OSError, ValueError):
+            return ""
+    parts = [part for part in value.split("/") if part not in {"", "."}]
+    if not parts or any(part == ".." for part in parts):
+        return ""
+    return "/".join(parts)
+
+
+def _function_call(call: dict[str, Any]) -> tuple[str, dict[str, Any]]:
+    fn = call.get("function") if isinstance(call.get("function"), dict) else call
+    name = str((fn or {}).get("name") or "").lower().replace("-", "_")
+    raw = (fn or {}).get("arguments")
+    if isinstance(raw, dict):
+        return name, raw
+    if isinstance(raw, str):
+        try:
+            parsed = json.loads(raw)
+        except json.JSONDecodeError:
+            parsed = {}
+        return name, parsed if isinstance(parsed, dict) else {}
+    return name, {}
+
+
+def _paths_from_write(
+    name: str,
+    args: dict[str, Any],
+    workspace: Path | None = None,
+) -> list[str]:
+    out: list[str] = []
+
+    def add(raw: Any) -> None:
+        path = _normalized_mutation_path(raw, workspace)
+        if path and path not in out:
+            out.append(path)
+
+    add(args.get("path") or args.get("file_path") or args.get("rel_path"))
+    if isinstance(args.get("paths"), list):
+        for raw in args["paths"]:
+            add(raw)
+    for key in ("edits", "changes", "files"):
+        rows = args.get(key)
+        if not isinstance(rows, list):
+            continue
+        for row in rows:
+            if isinstance(row, dict):
+                add(row.get("path") or row.get("file_path") or row.get("rel_path"))
+    if not out and name == "apply_diff":
+        patch = str(args.get("patch") or args.get("diff") or "")
+        for match in _PATCH_PATH_RE.finditer(patch):
+            add(match.group(1).strip())
+    return out
+
+
+def _mutation_paths_from_calls(
+    calls: list[dict[str, Any]],
+    workspace: Path | None = None,
+) -> tuple[list[str], str]:
+    from harness.dispatch import WRITE_TOOLS
+
+    paths: list[str] = []
+    saw_write = False
+    for call in calls:
+        if not isinstance(call, dict):
+            continue
+        name, args = _function_call(call)
+        if name not in WRITE_TOOLS or name == "attempt_completion":
+            continue
+        saw_write = True
+        current = _paths_from_write(name, args, workspace)
+        if not current:
+            return [], f"write call {name} has no safe attributable path"
+        for path in current:
+            if path not in paths:
+                paths.append(path)
+    if not saw_write:
+        return [], "planned action contains no mutation"
+    return paths, ""
+
+
+def _latest_write_exchanges(
+    messages: list[Any],
+) -> list[tuple[str, dict[str, Any], str]]:
+    from harness.dispatch import WRITE_TOOLS
+
+    start = -1
+    for index, item in enumerate(messages or []):
+        if not isinstance(item, dict) or item.get("role") != "assistant":
+            continue
+        calls = item.get("tool_calls") if isinstance(item.get("tool_calls"), list) else []
+        if any(_function_call(call)[0] in WRITE_TOOLS for call in calls if isinstance(call, dict)):
+            start = index
+    if start < 0:
+        return []
+    return [
+        exchange
+        for exchange in last_tool_exchanges(messages[start:])
+        if exchange[0].lower().replace("-", "_") in WRITE_TOOLS
+        and exchange[0].lower().replace("-", "_") != "attempt_completion"
+    ]
+
+
+def _capture_apply_baseline(
+    cfg,
+    task_id: str,
+    state: LoopState,
+    calls: list[dict[str, Any]],
+    workspace: Path | None,
+    next_iteration: int,
+) -> bool:
+    root = workspace
+    if root is None and state.working_set.repo_root:
+        root = Path(state.working_set.repo_root)
+    if root is None:
+        state.checkpoint_error = "active workspace root is unavailable"
+        state.blocked_reason = "checkpoint refused mutation: active workspace root is unavailable"
+        return False
+    paths, reason = _mutation_paths_from_calls(calls, root)
+    if not paths:
+        state.checkpoint_error = reason
+        state.blocked_reason = f"checkpoint refused mutation: {reason}"
+        return False
+    if not state.checkpoint_run_id:
+        state.checkpoint_run_id = uuid.uuid4().hex
+    try:
+        _checkpoint_store(cfg).capture_baseline(
+            task_id=task_id,
+            run_id=state.checkpoint_run_id,
+            repo_root=root,
+            intent=state.working_set.objective or state.intent,
+            paths=paths,
+            before_iteration=next_iteration,
+        )
+    except CheckpointError as exc:
+        state.checkpoint_error = str(exc)
+        state.blocked_reason = f"checkpoint refused mutation: {exc}"
+        return False
+    state.checkpoint_task_id = task_id
+    state.checkpoint_pending_paths = paths
+    state.checkpoint_pending_number = next_iteration
+    state.checkpoint_error = ""
+    return True
+
+
+def _finalize_pending_checkpoint(cfg, state: LoopState) -> None:
+    number = state.checkpoint_pending_number
+    if not number or number <= state.checkpoint_count:
+        return
+    store = _checkpoint_store(cfg)
+    manifest = store.record_checkpoint(
+        task_id=state.checkpoint_task_id,
+        run_id=state.checkpoint_run_id,
+        number=number,
+    )
+    state.checkpoint_available = True
+    state.checkpoint_count = number
+    state.checkpoint_last_manifest = str(
+        store.manifest_path(
+            state.checkpoint_task_id, state.checkpoint_run_id, number
+        )
+    )
+    state.active_diff_hash = manifest.active_diff_hash
+    mismatched: list[str] = []
+    for path in state.checkpoint_pending_paths:
+        actual = manifest.files.get(path)
+        current = state.working_set.files_read.get(path)
+        if actual is None:
+            mismatched.append(path)
+        elif actual.exists and (
+            current is None or current.content_hash != actual.content_hash
+        ):
+            mismatched.append(path)
+        elif not actual.exists and current is not None:
+            mismatched.append(path)
+    if mismatched:
+        state.checkpoint_error = (
+            "checkpoint filesystem state does not match refreshed working set: "
+            + ", ".join(sorted(mismatched))
+        )
+        raise CheckpointError(state.checkpoint_error)
+    state.checkpoint_pending_paths = []
+    state.checkpoint_pending_number = 0
+    state.checkpoint_error = ""
+
+
 def _prepare_verification_contract(
     state: LoopState,
     intent: str,
@@ -483,8 +690,19 @@ async def _emit_apply(
     )
     if not calls:
         return None
+    next_iteration = state.iteration + 1
+    if not _capture_apply_baseline(
+        cfg,
+        task_id,
+        state,
+        calls,
+        workspace,
+        next_iteration,
+    ):
+        state.phase = "blocked"
+        return _terminal(svc, task_id, state)
     state.last_cmd = commands[0]
-    state.iteration += 1
+    state.iteration = next_iteration
     if state.iteration > MAX_CYCLES:
         state.phase = "exhausted"
         state.iteration = MAX_CYCLES
@@ -495,21 +713,52 @@ async def _emit_apply(
 
 
 async def _advance_after_apply(
+    cfg,
     messages: list[Any],
     catalog: dict[str, tuple[str, ...]],
     svc: TaskService,
     task_id: str,
     state: LoopState,
 ) -> OrchResult:
-    write = last_write_result(messages)
-    if write is None:
+    writes = _latest_write_exchanges(messages)
+    if not writes:
         return _waiting(state, "Cline mutation result")
-    from harness.dispatch import WRITE_TOOLS
 
-    for name, args, text in last_tool_exchanges(messages):
-        if name.lower() in WRITE_TOOLS:
-            remember_write(state, args, text)
-    changed, diff_hash = parse_mutation(write[2])
+    observed: list[str] = []
+    workspace = (
+        Path(state.working_set.repo_root)
+        if state.working_set.repo_root
+        else None
+    )
+    for name, args, _text in writes:
+        current = _paths_from_write(
+            name.lower().replace("-", "_"),
+            args,
+            workspace,
+        )
+        if not current:
+            state.phase = "blocked"
+            state.blocked_reason = f"completed write {name} has no attributable path"
+            return _terminal(svc, task_id, state)
+        for path in current:
+            if path not in observed:
+                observed.append(path)
+    expected = set(state.checkpoint_pending_paths)
+    unexpected = sorted(set(observed) - expected)
+    missing = sorted(expected - set(observed))
+    if unexpected:
+        state.phase = "blocked"
+        state.blocked_reason = (
+            "completed write paths differ from checkpoint attribution: "
+            + ", ".join(unexpected)
+        )
+        return _terminal(svc, task_id, state)
+    if missing:
+        return _waiting(state, "remaining Cline mutation results")
+
+    for _name, args, text in writes:
+        remember_write(state, args, text)
+    changed, diff_hash = parse_mutation("\n".join(text for _name, _args, text in writes))
     state.prev_diff_hash = state.last_diff_hash
     state.last_diff_hash = diff_hash
     if not changed and state.last_failure_hash:
@@ -533,6 +782,12 @@ async def _advance_after_apply(
     )
     if not calls:
         state.active_diff_hash = working_set_diff_hash(state)
+        try:
+            _finalize_pending_checkpoint(cfg, state)
+        except CheckpointError as exc:
+            state.phase = "blocked"
+            state.blocked_reason = f"checkpoint finalization failed: {exc}"
+            return _terminal(svc, task_id, state)
         calls = verify_tool_calls(
             state.last_cmd,
             catalog,
@@ -567,6 +822,13 @@ async def _advance_after_verify(
         return _terminal(svc, task_id, state)
     if state.active_diff_hash is None:
         state.active_diff_hash = working_set_diff_hash(state)
+    if state.checkpoint_pending_number:
+        try:
+            _finalize_pending_checkpoint(cfg, state)
+        except CheckpointError as exc:
+            state.phase = "blocked"
+            state.blocked_reason = f"checkpoint finalization failed: {exc}"
+            return _terminal(svc, task_id, state)
     if state.verify_index >= len(commands):
         state.phase = "blocked"
         state.blocked_reason = "invalid verification cursor"
@@ -829,7 +1091,14 @@ async def run_orch(
         if state.phase in TERMINAL:
             return _with_loop(OrchResult(text=terminal_text(state)), state)
         if state.phase == "apply":
-            return await _advance_after_apply(messages or [], catalog, svc, task_id, state)
+            return await _advance_after_apply(
+                cfg,
+                messages or [],
+                catalog,
+                svc,
+                task_id,
+                state,
+            )
         if state.phase == "verify":
             picked = await pick_foreman(cfg)
             return await _advance_after_verify(

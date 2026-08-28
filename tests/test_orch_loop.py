@@ -325,6 +325,9 @@ def _patch_loop(monkeypatch, report: DispatchReport | None = None, captured: dic
 
     async def actions(*_a, **_k):
         captured["planned"] = True
+        queued = captured.get("planned_calls")
+        if isinstance(queued, list) and queued:
+            return queued.pop(0)
         return _edit_call()
 
     packet_commands = [
@@ -349,6 +352,36 @@ def _patch_loop(monkeypatch, report: DispatchReport | None = None, captured: dic
     monkeypatch.setattr(
         "harness.gateway.orch.build_repo_contract",
         lambda *_a, **_k: contract if packet_commands else None,
+    )
+
+    def capture_checkpoint(_cfg, task_id, state, calls, _workspace, number):
+        paths: list[str] = []
+        for call in calls:
+            fn = call.get("function") or {}
+            args = json.loads(fn.get("arguments") or "{}")
+            path = args.get("path")
+            if path and path not in paths:
+                paths.append(path)
+        state.checkpoint_task_id = task_id
+        state.checkpoint_run_id = state.checkpoint_run_id or "test-run"
+        state.checkpoint_pending_paths = paths
+        state.checkpoint_pending_number = number
+        return True
+
+    def finalize_checkpoint(_cfg, state):
+        state.checkpoint_count = state.checkpoint_pending_number
+        state.checkpoint_available = True
+        state.checkpoint_last_manifest = "/tmp/test-checkpoint.json"
+        state.checkpoint_pending_paths = []
+        state.checkpoint_pending_number = 0
+
+    monkeypatch.setattr(
+        "harness.gateway.orch._capture_apply_baseline",
+        capture_checkpoint,
+    )
+    monkeypatch.setattr(
+        "harness.gateway.orch._finalize_pending_checkpoint",
+        finalize_checkpoint,
     )
     return captured
 
@@ -537,6 +570,155 @@ async def test_happy_path_persists_across_run_orch_calls(tmp_path: Path, monkeyp
 
 
 @pytest.mark.asyncio
+async def test_checkpoint_baseline_precedes_apply_and_repair_extends_it(
+    tmp_path: Path,
+    monkeypatch,
+):
+    from harness.checkpoints import CheckpointStore
+    from harness.gateway.orch import run_orch
+
+    workspace = tmp_path / "workspace"
+    (workspace / "src").mkdir(parents=True)
+    (workspace / "src/app.py").write_text("def work():\n    return 0\n")
+    cfg = _cfg(tmp_path)
+    payload = _report()
+    actions = [
+        _edit_call(),
+        [
+            {
+                "id": "call_generated",
+                "type": "function",
+                "function": {
+                    "name": "editor",
+                    "arguments": json.dumps(
+                        {
+                            "path": "src/generated_helper.py",
+                            "content": "VALUE = 2\n",
+                        }
+                    ),
+                },
+            }
+        ],
+    ]
+
+    async def pick(*_a, **_k):
+        return "m5_qwen", _model()
+
+    async def dispatch(*_a, **_k):
+        return payload
+
+    async def plan(*_a, **_k):
+        return actions.pop(0)
+
+    contract = SimpleNamespace(
+        repo_root=str(workspace),
+        fingerprint="checkpoint-contract",
+        configs=[],
+        commands=[SimpleNamespace(command="pytest tests/test_x.py", timeout_s=60)],
+    )
+    monkeypatch.setattr("harness.gateway.orch.pick_foreman", pick)
+    monkeypatch.setattr("harness.gateway.orch.run_dispatch", dispatch)
+    monkeypatch.setattr("harness.gateway.orch.plan_actions", plan)
+    monkeypatch.setattr("harness.gateway.orch.build_repo_contract", lambda *_a, **_k: contract)
+    extra = {"workspace_root": str(workspace)}
+
+    first = await run_orch(
+        cfg,
+        FIX,
+        messages=_ready_messages(),
+        tools=_tools(),
+        extra=extra,
+    )
+    assert first.loop_phase == "apply"
+    svc = TaskService(Store(cfg.settings.db_path))
+    task_id = svc.session_task().task_id
+    state = load_loop_state(svc, task_id)
+    assert state is not None
+    store = CheckpointStore(cfg.settings.results_dir / "checkpoints")
+    baseline = store.load_manifest(task_id, state.checkpoint_run_id, 0)
+    assert baseline is not None
+    assert set(baseline.files) == {"src/app.py"}
+    original_blob = (
+        cfg.settings.results_dir
+        / "checkpoints"
+        / task_id
+        / state.checkpoint_run_id
+        / "blobs"
+        / baseline.files["src/app.py"].content_hash
+    )
+    assert original_blob.read_text() == "def work():\n    return 0\n"
+    assert state.checkpoint_count == 0
+    assert state.checkpoint_pending_number == 1
+
+    (workspace / "src/app.py").write_text("fixed")
+    edit = _edit_pair(0)
+    verify = await run_orch(
+        cfg,
+        FIX,
+        messages=_ready_messages(edit),
+        tools=_tools(),
+        extra=extra,
+    )
+    assert verify.loop_phase == "verify"
+    state = load_loop_state(svc, task_id)
+    assert state is not None
+    assert state.checkpoint_count == 1
+    checkpoint_1 = store.load_manifest(task_id, state.checkpoint_run_id, 1)
+    assert checkpoint_1 is not None
+    assert checkpoint_1.active_diff_hash == state.active_diff_hash
+
+    failed_pair = _verify_pair(0, "AssertionError: still broken\nExit code: 1")
+    failed = await run_orch(
+        cfg,
+        FIX,
+        messages=_ready_messages(edit + failed_pair),
+        tools=_tools(),
+        extra=extra,
+    )
+    assert failed.loop_phase == "repair"
+    history = edit + failed_pair + _refresh_pair(0, content="fixed")
+    repair = await run_orch(
+        cfg,
+        FIX,
+        messages=_ready_messages(history),
+        tools=_tools(),
+        extra=extra,
+    )
+    assert repair.loop_phase == "apply"
+    state = load_loop_state(svc, task_id)
+    assert state is not None
+    baseline = store.load_manifest(task_id, state.checkpoint_run_id, 0)
+    assert baseline is not None
+    assert set(baseline.files) == {"src/app.py", "src/generated_helper.py"}
+    assert baseline.files["src/generated_helper.py"].exists is False
+    assert state.checkpoint_count == 1
+    assert state.checkpoint_pending_number == 2
+
+    (workspace / "src/generated_helper.py").write_text("VALUE = 2\n")
+    generated = _edit_path_pair(
+        1,
+        "src/generated_helper.py",
+        "VALUE = 2\n",
+        "Successfully created src/generated_helper.py",
+    )
+    verify_again = await run_orch(
+        cfg,
+        FIX,
+        messages=_ready_messages(history + generated),
+        tools=_tools(),
+        extra=extra,
+    )
+    assert verify_again.loop_phase == "verify"
+    state = load_loop_state(svc, task_id)
+    assert state is not None
+    assert state.checkpoint_count == 2
+    checkpoint_2 = store.load_manifest(task_id, state.checkpoint_run_id, 2)
+    assert checkpoint_2 is not None
+    assert checkpoint_2.active_diff_hash == state.active_diff_hash
+    assert checkpoint_2.active_diff_hash != checkpoint_1.active_diff_hash
+
+
+@pytest.mark.asyncio
 async def test_all_commands_verify_the_same_diff(tmp_path: Path, monkeypatch):
     from harness.gateway.orch import run_orch
 
@@ -594,7 +776,26 @@ async def test_mutation_invalidates_prior_command_success(tmp_path: Path, monkey
 
     cfg = _cfg(tmp_path)
     commands = ["pytest tests/test_x.py", "ruff check src"]
-    _patch_loop(monkeypatch, report=_report_commands(commands))
+    captured: dict = {}
+    _patch_loop(monkeypatch, report=_report_commands(commands), captured=captured)
+    captured["planned_calls"] = [
+        _edit_call(),
+        [
+            {
+                "id": "call_generated",
+                "type": "function",
+                "function": {
+                    "name": "editor",
+                    "arguments": json.dumps(
+                        {
+                            "path": "src/generated_helper.py",
+                            "content": "VALUE = 'new untracked task file'\n",
+                        }
+                    ),
+                },
+            }
+        ],
+    ]
     tools = _tools()
     edit = _edit_pair(0)
     pytest_pass = _command_pair(0, commands[0], "1 passed\nExit code: 0")
@@ -770,6 +971,10 @@ async def test_failure_expands_working_set_without_spending_iteration(
     assert {
         call["function"]["name"] for call in failed.tool_calls
     } == {"read_files", "execute_command"}
+    svc = TaskService(Store(cfg.settings.db_path))
+    expanded_state = load_loop_state(svc, svc.session_task().task_id)
+    assert expanded_state is not None
+    assert expanded_state.checkpoint_count == 1
 
     history = edit + failed_verify + _refresh_pair(0)
     exact_read = await run_orch(
@@ -781,6 +986,9 @@ async def test_failure_expands_working_set_without_spending_iteration(
     assert exact_read.loop_phase == "expand"
     assert exact_read.loop_iteration == 1
     assert len(exact_read.tool_calls) == 1
+    expanded_state = load_loop_state(svc, svc.session_task().task_id)
+    assert expanded_state is not None
+    assert expanded_state.checkpoint_count == 1
     read_args = json.loads(exact_read.tool_calls[0]["function"]["arguments"])
     assert read_args["paths"] == ["services/cache/redis.py"]
 

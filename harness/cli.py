@@ -10,6 +10,7 @@ from rich.table import Table
 
 from harness.baseline import run_baseline
 from harness.cases.loader import discover_cases
+from harness.checkpoints import CheckpointError, CheckpointStore, RollbackConflict
 from harness.config import load_config
 from harness.economics import compare_economics
 from harness.escalation import run_escalation
@@ -32,7 +33,7 @@ from harness.report import (
 from harness.rescue import PACKET_TEMPLATE, PacketError, run_rescue
 from harness.storage.db import Store
 from harness.serial import discover_tickets, run_serial
-from harness.task.models import AttemptRecord, Decision
+from harness.task.models import AttemptRecord, Decision, Evidence
 from harness.task.search import search_code
 from harness.task.service import TaskService
 from harness.tournament import run_tournament
@@ -51,6 +52,121 @@ def _cfg():
 
 def _path(value: str) -> Path:
     return Path(value).expanduser()
+
+
+@app.command("rollback-task")
+def rollback_task(
+    task_id: str = typer.Argument(..., help="Task whose latest checkpoint should be restored"),
+    yes: bool = typer.Option(False, "--yes", "-y", help="Skip interactive confirmation"),
+) -> None:
+    """Restore only task-attributed files to their pre-task state."""
+    cfg = _cfg()
+    svc = TaskService(Store(cfg.settings.db_path))
+    try:
+        svc.get(task_id)
+    except KeyError:
+        raise typer.BadParameter(f"Unknown task {task_id}") from None
+    states = svc.evidence(task_id, kind="orch_loop")
+    payload = states[-1].payload if states else None
+    if (
+        not isinstance(payload, dict)
+        or not payload.get("checkpoint_run_id")
+        or not payload.get("checkpoint_available")
+    ):
+        console.print(f"[red]No rollback checkpoint is available for {task_id}.[/red]")
+        raise typer.Exit(code=1)
+    run_id = str(payload["checkpoint_run_id"])
+    store = CheckpointStore(
+        cfg.settings.results_dir / "checkpoints",
+        max_file_bytes=cfg.settings.checkpoint_max_file_bytes,
+    )
+    try:
+        preview = store.rollback_preview(task_id, run_id)
+    except CheckpointError as exc:
+        svc.add_evidence(
+            Evidence(
+                task_id=task_id,
+                kind="task_rollback",
+                payload={"status": "refused", "run_id": run_id, "reason": str(exc)},
+            )
+        )
+        console.print(f"[red]Rollback refused: {exc}[/red]")
+        raise typer.Exit(code=1) from None
+    if preview.conflicts:
+        reason = "post-checkpoint changes: " + ", ".join(preview.conflicts)
+        store.record_rollback_refusal(
+            task_id,
+            run_id,
+            reason=reason,
+            conflicts=list(preview.conflicts),
+        )
+        svc.add_evidence(
+            Evidence(
+                task_id=task_id,
+                kind="task_rollback",
+                payload={
+                    "status": "refused",
+                    "run_id": run_id,
+                    "reason": reason,
+                    "conflicts": list(preview.conflicts),
+                },
+            )
+        )
+        console.print(f"[red]Rollback refused: {reason}[/red]")
+        raise typer.Exit(code=1)
+
+    console.print(f"Task: [bold]{task_id}[/bold]  checkpoint run: {run_id}")
+    console.print("Restore: " + (", ".join(preview.restore) or "(none)"))
+    console.print("Remove: " + (", ".join(preview.remove) or "(none)"))
+    if not yes and not typer.confirm("Rollback these task-attributed paths?"):
+        console.print("Rollback cancelled.")
+        raise typer.Exit(code=1)
+    try:
+        result = store.rollback(task_id, run_id)
+    except RollbackConflict as exc:
+        reason = "post-checkpoint changes: " + ", ".join(exc.paths)
+        svc.add_evidence(
+            Evidence(
+                task_id=task_id,
+                kind="task_rollback",
+                payload={
+                    "status": "refused",
+                    "run_id": run_id,
+                    "reason": reason,
+                    "conflicts": exc.paths,
+                },
+            )
+        )
+        console.print(f"[red]Rollback refused: {reason}[/red]")
+        raise typer.Exit(code=1) from None
+    except CheckpointError as exc:
+        svc.add_evidence(
+            Evidence(
+                task_id=task_id,
+                kind="task_rollback",
+                payload={"status": "refused", "run_id": run_id, "reason": str(exc)},
+            )
+        )
+        console.print(f"[red]Rollback failed: {exc}[/red]")
+        raise typer.Exit(code=1) from None
+    svc.add_evidence(
+        Evidence(
+            task_id=task_id,
+            kind="task_rollback",
+            payload={
+                "status": "success",
+                "run_id": run_id,
+                "restored": list(result.restored),
+                "removed": list(result.removed),
+                "removed_dirs": list(result.removed_dirs),
+                "audit_path": result.audit_path,
+            },
+        )
+    )
+    console.print(
+        f"[green]Rollback complete.[/green] restored={len(result.restored)} "
+        f"removed={len(result.removed)}"
+    )
 
 
 @app.command()

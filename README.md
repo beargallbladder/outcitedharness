@@ -103,6 +103,20 @@ use provenance tags such as `<CURRENT_FILE path="…" hash="…">`,
 `<CURRENT_DIFF hash="…">`, and `<EXPANDED_EVIDENCE path="…">`, and report
 their configured budget and compiled size.
 
+Before each returned edit, the orchestrator captures a content-addressed task
+baseline for every attributable path. Logical checkpoints are finalized from
+the exact post-edit filesystem state used for verification, including created
+and deleted untracked files. Exhausted changes are preserved. To explicitly
+restore only that task's files, run:
+
+```shell
+harness rollback-task TASK_ID
+```
+
+Rollback requires confirmation (or `--yes`), refuses the entire operation if
+any task path changed after the latest checkpoint, and preserves unrelated
+dirty and untracked work. It never uses `git reset`, `checkout`, or `clean`.
+
 ## Case format
 
 ```text

@@ -226,6 +226,14 @@ class LoopState:
     expansion_pending_symbols: list[str] = field(default_factory=list)
     semantic_expansion_paths: list[str] = field(default_factory=list)
     expansion_semantic_attempted: bool = False
+    checkpoint_task_id: str = ""
+    checkpoint_run_id: str = ""
+    checkpoint_pending_paths: list[str] = field(default_factory=list)
+    checkpoint_pending_number: int = 0
+    checkpoint_count: int = 0
+    checkpoint_available: bool = False
+    checkpoint_last_manifest: str = ""
+    checkpoint_error: str = ""
     working_set: WorkingSet = field(default_factory=WorkingSet)
 
     def to_dict(self) -> dict[str, Any]:
@@ -339,6 +347,18 @@ class LoopState:
             expansion_semantic_attempted=bool(
                 data.get("expansion_semantic_attempted")
             ),
+            checkpoint_task_id=str(data.get("checkpoint_task_id") or ""),
+            checkpoint_run_id=str(data.get("checkpoint_run_id") or ""),
+            checkpoint_pending_paths=[
+                str(path)
+                for path in (data.get("checkpoint_pending_paths") or [])
+                if str(path).strip()
+            ],
+            checkpoint_pending_number=int(data.get("checkpoint_pending_number") or 0),
+            checkpoint_count=int(data.get("checkpoint_count") or 0),
+            checkpoint_available=bool(data.get("checkpoint_available")),
+            checkpoint_last_manifest=str(data.get("checkpoint_last_manifest") or ""),
+            checkpoint_error=str(data.get("checkpoint_error") or ""),
             working_set=WorkingSet.from_dict(data.get("working_set")),
         )
 
@@ -1310,6 +1330,14 @@ def terminal_text(state: LoopState) -> str:
     if state.phase == "exhausted" and (state.stdout_tail or state.stderr_tail):
         lines.append("last_output:")
         lines.append(tail_text(state.stderr_tail or state.stdout_tail, 1200))
+    if state.checkpoint_available and state.checkpoint_task_id:
+        lines.append(
+            f"checkpoint: {state.checkpoint_count} run={state.checkpoint_run_id} "
+            "preserved=true"
+        )
+        lines.append(f"rollback: harness rollback-task {state.checkpoint_task_id}")
+    if state.checkpoint_error:
+        lines.append(f"checkpoint_error: {state.checkpoint_error}")
     return "\n".join(lines) + "\n"
 
 

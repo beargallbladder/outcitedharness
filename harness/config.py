@@ -85,6 +85,11 @@ class Settings(BaseModel):
     frontier_max_input_chars: int = Field(default=20_000, ge=4_000, le=60_000)
     frontier_max_output_tokens: int = Field(default=2_048, ge=256, le=8_192)
     coder_context_tokens: int = Field(default=6_000, ge=1024, le=200_000)
+    checkpoint_max_file_bytes: int = Field(
+        default=1_000_000,
+        ge=1_024,
+        le=100_000_000,
+    )
     code_index_path: Path | None = None
     code_index_repos: list[str] = Field(default_factory=list)
 
@@ -162,6 +167,9 @@ def load_config(root: Path | None = None) -> AppConfig:
         frontier_max_input_chars=int(raw_settings.get("frontier_max_input_chars", 20_000)),
         frontier_max_output_tokens=int(raw_settings.get("frontier_max_output_tokens", 2_048)),
         coder_context_tokens=int(raw_settings.get("coder_context_tokens", 6_000)),
+        checkpoint_max_file_bytes=int(
+            raw_settings.get("checkpoint_max_file_bytes", 1_000_000)
+        ),
         code_index_path=_optional_path(root, raw_settings.get("code_index_path")),
         code_index_repos=[str(p) for p in (raw_settings.get("code_index_repos") or []) if str(p).strip()],
     )
