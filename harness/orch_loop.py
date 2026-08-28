@@ -74,6 +74,9 @@ class LoopState:
     prev_diff_hash: str | None = None
     prev_failure_hash: str | None = None
     blocked_reason: str = ""
+    files: list[str] = field(default_factory=list)
+    diff: str = ""
+    failed_tests: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -110,6 +113,9 @@ class LoopState:
             prev_diff_hash=data.get("prev_diff_hash") or None,
             prev_failure_hash=data.get("prev_failure_hash") or None,
             blocked_reason=str(data.get("blocked_reason") or ""),
+            files=[str(p) for p in (data.get("files") or []) if str(p).strip()],
+            diff=str(data.get("diff") or ""),
+            failed_tests=str(data.get("failed_tests") or ""),
         )
 
 
@@ -378,6 +384,30 @@ def verify_tool_calls(command: str, catalog: dict[str, tuple[str, ...]]) -> list
     return bind_gather_calls(raw, catalog)
 
 
+def remember_write(state: LoopState, args: dict[str, Any], text: str) -> None:
+    path = str(args.get("path") or args.get("file_path") or args.get("rel_path") or "").strip()
+    if path and path not in state.files:
+        state.files.append(path)
+    state.diff = tail_text(text, 4000)
+
+
+def remember_failure(state: LoopState) -> None:
+    state.failed_tests = tail_text(
+        f"cmd={state.last_cmd} exit={state.last_exit} timeout={state.timed_out}\n"
+        f"{state.stderr_tail or state.stdout_tail}",
+        4000,
+    )
+
+
+def working_set_text(state: LoopState) -> str:
+    files = "\n".join(f"- {p}" for p in state.files) or "- (none)"
+    return (
+        f"FILES:\n{files}\n\n"
+        f"ACTIVE DIFF:\n{state.diff or '(none)'}\n\n"
+        f"FAILED TESTS:\n{state.failed_tests or '(none)'}\n"
+    )
+
+
 def repair_packets(intent: str, thread: str, state: LoopState) -> list[Packet]:
     remaining = max(0, MAX_CYCLES - state.iteration)
     prompt = (
@@ -389,6 +419,7 @@ def repair_packets(intent: str, thread: str, state: LoopState) -> list[Packet]:
         f"TIMED OUT: {state.timed_out}\n"
         f"STDOUT TAIL:\n{state.stdout_tail or '(empty)'}\n"
         f"STDERR TAIL:\n{state.stderr_tail or '(empty)'}\n\n"
+        f"{working_set_text(state)}\n"
         f"WORKSPACE EVIDENCE:\n{_clip_context(thread, 8000)}\n\n"
         "Produce the exact patch that fixes this failure."
     )

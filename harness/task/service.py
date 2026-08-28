@@ -44,10 +44,21 @@ class TaskService:
         with self.store.connect() as conn:
             conn.execute(
                 """
-                INSERT INTO tasks (task_id, intent, status, created_at, plan, hypothesis, intervened, frontier_required)
-                VALUES (?, ?, ?, ?, ?, ?, 0, 0)
+                INSERT INTO tasks (
+                    task_id, intent, status, created_at, plan, hypothesis,
+                    intervened, frontier_required, stage, frontier_calls, updated_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, 0, 0, 'new', 0, ?)
                 """,
-                (task.task_id, task.intent, task.status, task.created_at, task.plan, task.hypothesis),
+                (
+                    task.task_id,
+                    task.intent,
+                    task.status,
+                    task.created_at,
+                    task.plan,
+                    task.hypothesis,
+                    task.created_at,
+                ),
             )
         return task
 
@@ -65,6 +76,10 @@ class TaskService:
             hypothesis=row["hypothesis"] or "",
             intervened=bool(row["intervened"]),
             frontier_required=bool(row["frontier_required"]),
+            stage=row["stage"] or "new",
+            frontier_calls=int(row["frontier_calls"] or 0),
+            updated_at=row["updated_at"] or "",
+            final_outcome=row["final_outcome"] or "",
         )
 
     def list_tasks(self, limit: int = 20) -> list[Task]:
@@ -114,14 +129,24 @@ class TaskService:
         latest = self.attempts(task.task_id)
         files: list[str] = []
         failed = ""
+        diff = ""
         if latest:
-            files = latest[-1].files_changed
+            files = list(latest[-1].files_changed)
             if latest[-1].tests_failed:
                 failed = f"tests failed={latest[-1].tests_failed} passed={latest[-1].tests_passed}"
+        for item in reversed(self.evidence(task.task_id, kind="orch_loop")):
+            payload = item.payload if isinstance(item.payload, dict) else {}
+            loop_files = [str(p) for p in (payload.get("files") or []) if str(p).strip()]
+            if loop_files:
+                files = list(dict.fromkeys(loop_files + files))
+            diff = str(payload.get("diff") or diff)
+            failed = str(payload.get("failed_tests") or failed)
+            break
         return ContextManager(
             intent=task.intent,
             plan=task.plan,
             files=files,
+            diff=diff,
             failed_tests=failed,
             hypothesis=task.hypothesis,
             decisions=decisions,
@@ -146,8 +171,9 @@ class TaskService:
                 INSERT INTO attempts (
                     task_id, attempt, worker, started_at, finished_at, result,
                     files_changed, commands, tests_passed, tests_failed,
-                    ttft_ms, tokens_per_sec, tool_calls, input_tokens, output_tokens
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ttft_ms, tokens_per_sec, tool_calls, input_tokens, output_tokens,
+                    estimated_cost
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     rec.task_id,
@@ -165,6 +191,7 @@ class TaskService:
                     rec.tool_calls,
                     rec.input_tokens,
                     rec.output_tokens,
+                    rec.estimated_cost,
                 ),
             )
             if close:
@@ -192,6 +219,48 @@ class TaskService:
                 (item.task_id, item.actor, item.text, int(item.accepted), item.created_at),
             )
 
+    def set_stage(self, task_id: str, stage: str, outcome: str = "") -> None:
+        with self.store.connect() as conn:
+            conn.execute(
+                """
+                UPDATE tasks
+                SET stage = ?, updated_at = ?, final_outcome = CASE WHEN ? = '' THEN final_outcome ELSE ? END
+                WHERE task_id = ?
+                """,
+                (stage, utcnow(), outcome, outcome, task_id),
+            )
+
+    def finish(self, task_id: str, success: bool, outcome: str = "") -> None:
+        status = "success" if success else "failed"
+        stage = "complete" if success else "failed"
+        with self.store.connect() as conn:
+            conn.execute(
+                """
+                UPDATE tasks
+                SET status = ?, stage = ?, updated_at = ?, final_outcome = ?
+                WHERE task_id = ?
+                """,
+                (status, stage, utcnow(), outcome, task_id),
+            )
+
+    def claim_frontier(self, task_id: str, max_calls: int) -> bool:
+        """Atomically reserve one frontier call so retries cannot duplicate spend."""
+        if max_calls <= 0:
+            return False
+        with self.store.connect() as conn:
+            changed = conn.execute(
+                """
+                UPDATE tasks
+                SET frontier_required = 1,
+                    frontier_calls = frontier_calls + 1,
+                    stage = 'frontier_rescue',
+                    updated_at = ?
+                WHERE task_id = ? AND frontier_calls < ?
+                """,
+                (utcnow(), task_id, max_calls),
+            ).rowcount
+        return bool(changed)
+
     def attempts(self, task_id: str) -> list[AttemptRecord]:
         with self.store.connect() as conn:
             rows = conn.execute(
@@ -215,6 +284,7 @@ class TaskService:
                     tool_calls=row["tool_calls"],
                     input_tokens=row["input_tokens"],
                     output_tokens=row["output_tokens"],
+                    estimated_cost=row["estimated_cost"],
                     started_at=row["started_at"] or "",
                     finished_at=row["finished_at"] or "",
                 )
@@ -236,4 +306,24 @@ class TaskService:
                 created_at=r["created_at"],
             )
             for r in rows
+        ]
+
+    def evidence(self, task_id: str, kind: str | None = None) -> list[Evidence]:
+        query = "SELECT * FROM evidence WHERE task_id = ?"
+        values: list[object] = [task_id]
+        if kind:
+            query += " AND kind = ?"
+            values.append(kind)
+        query += " ORDER BY id"
+        with self.store.connect() as conn:
+            rows = conn.execute(query, values).fetchall()
+        return [
+            Evidence(
+                task_id=row["task_id"],
+                attempt=row["attempt"],
+                kind=row["kind"],
+                payload=json.loads(row["payload"] or "{}"),
+                created_at=row["created_at"] or "",
+            )
+            for row in rows
         ]

@@ -286,6 +286,8 @@ async def test_repair_path_feeds_failure_and_reverifies(tmp_path: Path, monkeypa
     prompt = repair_packets[0].prompt
     assert "EXIT CODE: 1" in prompt
     assert "FAILED tests/test_x.py::test_add" in prompt
+    assert "FAILED TESTS:" in prompt
+    assert "src/app.py" in prompt
 
     after_repair = await run_orch(
         cfg,

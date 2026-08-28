@@ -13,6 +13,7 @@ from harness.dispatch import (
     bind_gather_calls,
     default_gather_calls,
     evidence_covers_intent,
+    is_change_job,
     is_orch_echo,
     merge_tool_catalog,
     packets_claim_unread,
@@ -29,16 +30,20 @@ from harness.orch_loop import (
     commands_from_packets,
     failure_hash,
     last_run_since_write,
+    last_tool_exchanges,
     last_write_result,
     load_loop_state,
     parse_command_outcome,
     parse_mutation,
+    remember_failure,
+    remember_write,
     repair_packets,
     save_loop_state,
     select_verify_command,
     shot_texts,
     terminal_text,
     verify_tool_calls,
+    working_set_text,
 )
 
 
@@ -111,15 +116,7 @@ def has_action_round(messages: list[Any]) -> bool:
 
 
 def _is_change_job(intent: str) -> bool:
-    import re
-
-    return bool(
-        re.search(
-            r"\b(?:fix|implement|add|remove|change|update|edit|refactor|build|repair)\b",
-            intent,
-            flags=re.IGNORECASE,
-        )
-    )
+    return is_change_job(intent)
 
 
 def cline_tool_catalog(tools: list[Any] | None) -> dict[str, tuple[str, ...]]:
@@ -365,6 +362,7 @@ async def _emit_apply(
         "\n\n".join(texts),
         catalog,
         list(tools or []),
+        working_set=working_set_text(state),
     )
     if not calls:
         return None
@@ -390,6 +388,11 @@ async def _advance_after_apply(
     write = last_write_result(messages)
     if write is None:
         return _waiting(state, "Cline mutation result")
+    from harness.dispatch import WRITE_TOOLS
+
+    for name, args, text in last_tool_exchanges(messages):
+        if name.lower() in WRITE_TOOLS:
+            remember_write(state, args, text)
     changed, diff_hash = parse_mutation(write[2])
     state.prev_diff_hash = state.last_diff_hash
     state.last_diff_hash = diff_hash
@@ -436,6 +439,7 @@ async def _advance_after_verify(
     if (not timed_out) and exit_code == 0:
         state.phase = "verified"
         return _terminal(svc, task_id, state)
+    remember_failure(state)
     fail_fp = failure_hash(state)
     same_fail = bool(state.last_failure_hash and fail_fp == state.last_failure_hash)
     same_diff = bool(
@@ -500,6 +504,11 @@ async def run_orch(
         return OrchResult(text="Harness orch needs a user message.", error="no intent")
     if not thread and messages:
         thread = compact_thread(messages)
+    from harness.task.search import embedder_thread_block
+
+    embedder_hits = embedder_thread_block(intent)
+    if embedder_hits:
+        thread = f"{thread}\n\n{embedder_hits}".strip()
     if is_orch_echo(intent):
         return OrchResult(
             text=(

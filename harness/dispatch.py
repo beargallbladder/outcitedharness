@@ -182,12 +182,14 @@ WRITE_TOOLS = frozenset(
     }
 )
 
+ACTION_MAX_CALLS = 5
 ACTION_SYSTEM = (
     "You are the harness execution integrator. Cursor/Cline has the workspace tools; local "
     "workers are blind and supplied an accepted solution. Return JSON only. If the solution "
     "contains enough exact information to change the workspace, return "
     '{"mode":"act","calls":[{"name":"an available edit tool","arguments":{...}}]}. '
-    "Emit exactly one edit call this turn; tests happen after its tool result returns. "
+    "Emit 1 to 5 edit calls this turn, one distinct file per call, only paths present in "
+    "the solution. Tests happen after Cline returns those tool results. "
     "Use only a tool name and argument properties in AVAILABLE TOOLS. Never invent paths, "
     "edits, or code absent from the accepted solution and evidence. If this is written work, "
     "a review, or the patch is not exact enough to apply safely, return "
@@ -479,18 +481,25 @@ def _resolve_action_name(name: str, catalog: dict[str, tuple[str, ...]]) -> str 
 def bind_action_calls(
     raw: list[dict[str, Any]],
     catalog: dict[str, tuple[str, ...]],
-    limit: int = 1,
+    limit: int = ACTION_MAX_CALLS,
 ) -> list[dict[str, Any]]:
     from harness.gateway.qwen_tools import openai_tool_call
 
     out: list[dict[str, Any]] = []
+    seen_paths: set[str] = set()
     for row in raw:
         name = str(row.get("name") or row.get("function") or "").strip()
         bound = _resolve_action_name(name, catalog)
         if not bound:
             continue
         args = row.get("arguments") if isinstance(row.get("arguments"), dict) else {}
-        out.append(openai_tool_call(bound, _fit_args(args, catalog.get(bound) or ())))
+        fitted = _fit_args(args, catalog.get(bound) or ())
+        path = str(fitted.get("path") or fitted.get("file_path") or "")
+        if path:
+            if path in seen_paths:
+                continue
+            seen_paths.add(path)
+        out.append(openai_tool_call(bound, fitted))
         if len(out) >= limit:
             break
     return out
@@ -666,8 +675,9 @@ async def plan_actions(
     accepted_solution: str,
     catalog: dict[str, tuple[str, ...]],
     tools: list[Any],
+    working_set: str = "",
 ) -> list[dict[str, Any]]:
-    """Convert an accepted local solution into one real Cline edit call."""
+    """Convert an accepted local solution into up to five Cline edit calls."""
     available = {
         name: list(props)
         for name, props in catalog.items()
@@ -681,6 +691,7 @@ async def plan_actions(
     user = (
         f"INTENT:\n{intent[:3000]}\n\n"
         f"ACCEPTED LOCAL SOLUTION:\n{_clip_context(accepted_solution, 9000)}\n\n"
+        f"WORKING SET:\n{_clip_context(working_set, 3000)}\n\n"
         f"WORKSPACE EVIDENCE:\n{_clip_context(thread, 8000)}\n\n"
         f"AVAILABLE TOOL PROPERTIES:\n{json.dumps(available)}\n\n"
         f"AVAILABLE TOOL SCHEMAS:\n{schemas}"
@@ -706,7 +717,7 @@ async def plan_actions(
     return bind_action_calls(
         [row for row in raw if isinstance(row, dict)],
         catalog,
-        limit=1,
+        limit=ACTION_MAX_CALLS,
     )
 
 
@@ -843,6 +854,40 @@ def _is_review_job(intent: str) -> bool:
             flags=re.IGNORECASE,
         )
     )
+
+
+def is_change_job(intent: str) -> bool:
+    return bool(
+        re.search(
+            r"\b(?:fix|implement|add|remove|change|update|edit|refactor|build|repair)\b",
+            intent,
+            flags=re.IGNORECASE,
+        )
+    )
+
+
+def is_prose_invariant(inv: str) -> bool:
+    """True when an accept rule is a required phrase, not a machine check."""
+    lower = (inv or "").strip().lower()
+    if lower.startswith(("min_chars ", "tool ", "no ")):
+        return False
+    if lower.startswith("text "):
+        body = inv.split(None, 1)[1] if " " in inv.strip() else ""
+        if "/" in body or re.search(r"\.(py|ts|tsx|js|jsx|go|rs)$", body):
+            return False
+        return True
+    return False
+
+
+def strip_prose_invariants(packets: list[Packet]) -> list[Packet]:
+    """Change jobs cannot be accepted by echoing words like 'not yet'."""
+    for packet in packets:
+        kept = tuple(inv for inv in packet.accept.invariants if not is_prose_invariant(inv))
+        if not kept:
+            kept = ("min_chars 40",)
+        if kept != packet.accept.invariants:
+            packet.accept = AcceptSpec(commands=packet.accept.commands, invariants=kept)
+    return packets
 
 
 def fallback_packets(intent: str, thread: str, limit: int) -> list[Packet]:
@@ -1328,6 +1373,8 @@ async def run_dispatch(
     if report.packets and thread.strip():
         report.packets = hydrate_packets(report.packets, thread)
         report.packets = sanitize_packets(report.packets, thread)
+    if report.packets and is_change_job(intent):
+        report.packets = strip_prose_invariants(report.packets)
     if not report.packets:
         report.slice_error = (
             "no usable workspace evidence reached dispatch and the foreman emitted "

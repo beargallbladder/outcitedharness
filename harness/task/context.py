@@ -17,6 +17,16 @@ class ContextManager:
     hypothesis: str = ""
     decisions: list[str] = field(default_factory=list)
 
+    @classmethod
+    def from_loop(cls, intent: str, state) -> "ContextManager":
+        files = list(getattr(state, "files", None) or [])
+        return cls(
+            intent=intent,
+            files=files,
+            diff=str(getattr(state, "diff", "") or ""),
+            failed_tests=str(getattr(state, "failed_tests", "") or ""),
+        )
+
     def packet(self, task_id: str, worker: str) -> WorkPacket:
         return WorkPacket(
             task_id=task_id,

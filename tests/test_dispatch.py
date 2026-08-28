@@ -149,6 +149,56 @@ def test_action_binding_uses_only_available_edit_tool():
     assert "src/app.py" in calls[0]["function"]["arguments"]
 
 
+def test_action_binding_allows_five_distinct_files():
+    from harness.dispatch import ACTION_MAX_CALLS, bind_action_calls
+
+    raw = [
+        {"name": "editor", "arguments": {"path": f"src/f{i}.py", "content": "x"}}
+        for i in range(7)
+    ]
+    calls = bind_action_calls(raw, {"editor": ("path", "content")})
+    assert ACTION_MAX_CALLS == 5
+    assert len(calls) == 5
+    paths = [c["function"]["arguments"] for c in calls]
+    assert paths[0].count("src/f0.py") == 1
+    dup = bind_action_calls(
+        [
+            {"name": "editor", "arguments": {"path": "src/a.py", "content": "1"}},
+            {"name": "editor", "arguments": {"path": "src/a.py", "content": "2"}},
+            {"name": "editor", "arguments": {"path": "src/b.py", "content": "3"}},
+        ],
+        {"editor": ("path", "content")},
+    )
+    assert len(dup) == 2
+
+
+def test_change_job_strips_prose_invariants():
+    from harness.dispatch import (
+        AcceptSpec,
+        Packet,
+        is_change_job,
+        is_prose_invariant,
+        strip_prose_invariants,
+    )
+
+    assert is_change_job("fix the failing unit test")
+    assert is_prose_invariant("text not yet")
+    assert is_prose_invariant("text PONG")
+    assert not is_prose_invariant("min_chars 40")
+    assert not is_prose_invariant("text apps/web")
+    packets = [
+        Packet(
+            id="p1",
+            title="fix",
+            prompt="patch it",
+            accept=AcceptSpec(commands=("pytest",), invariants=("text not yet", "min_chars 10")),
+        )
+    ]
+    cleaned = strip_prose_invariants(packets)
+    assert cleaned[0].accept.invariants == ("min_chars 10",)
+    assert cleaned[0].accept.commands == ("pytest",)
+
+
 def test_score_invariants():
     from harness.dispatch import AcceptSpec, Packet, score_invariants
 
