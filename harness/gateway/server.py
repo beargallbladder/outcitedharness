@@ -304,6 +304,7 @@ async def _complete_orch(cfg, spec, store, requested, body):
             thread=thread,
             messages=messages,
             tools=body.get("tools") or body.get("functions"),
+            extra=body if isinstance(body, dict) else None,
         )
         status = 200
         error = result.error
@@ -358,6 +359,7 @@ async def _stream_orch(cfg, spec, store, requested, body):
                 thread=thread,
                 messages=messages,
                 tools=body.get("tools") or body.get("functions"),
+                extra=body if isinstance(body, dict) else None,
             )
             text = outcome.text
             result_calls = outcome.tool_calls

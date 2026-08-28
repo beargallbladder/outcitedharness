@@ -7,6 +7,7 @@ import json
 import re
 import time
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 
 from harness.config import AppConfig, ModelConfig
@@ -559,7 +560,11 @@ def evidence_covers_intent(intent: str, thread: str) -> bool:
     return thread_has_ui_source(thread)
 
 
-def default_gather_calls(catalog: dict[str, tuple[str, ...]], intent: str) -> list[dict[str, Any]]:
+def default_gather_calls(
+    catalog: dict[str, tuple[str, ...]],
+    intent: str,
+    workspace: Path | str | None = None,
+) -> list[dict[str, Any]]:
     tokens = list(dict.fromkeys(
         w for w in re.findall(r"[A-Za-z][A-Za-z0-9_]{3,}", intent) if w.lower() not in _STOPWORDS
     ))
@@ -613,7 +618,7 @@ def default_gather_calls(catalog: dict[str, tuple[str, ...]], intent: str) -> li
 
         extra = [
             {"name": "read_file", "arguments": {"path": path}}
-            for path in gather_paths_for_intent(intent, limit=6)
+            for path in gather_paths_for_intent(intent, workspace=workspace, limit=6)
         ]
         if extra:
             raw = extra + raw

@@ -181,13 +181,54 @@ def test_last_user_text_and_orch_alias():
     assert "split this" in thread
 
 
+def test_cline_workspace_root_from_env_block(tmp_path: Path):
+    from harness.gateway.orch import cline_workspace_root
+
+    root = tmp_path / "locationlocationlocation"
+    root.mkdir()
+    messages = [
+        {
+            "role": "system",
+            "content": (
+                "You are Cline.\n"
+                "<env>\n"
+                "1. Platform: darwin\n"
+                "3. IDE: VS Code\n"
+                f"4. Working Directory: {root}/\n"
+                "</env>\n"
+            ),
+        },
+        {"role": "user", "content": "review the score"},
+    ]
+    assert cline_workspace_root(messages) == root.resolve()
+
+
+def test_cline_workspace_root_disagreement_fails_closed(tmp_path: Path):
+    from harness.gateway.orch import cline_workspace_root
+
+    a = tmp_path / "repoA"
+    b = tmp_path / "repoB"
+    a.mkdir()
+    b.mkdir()
+    messages = [
+        {
+            "role": "system",
+            "content": f"<env>\n4. Working Directory: {a}\n</env>",
+        }
+    ]
+    extra = {"cwd": str(b)}
+    assert cline_workspace_root(messages, extra) is None
+    assert cline_workspace_root([{"role": "user", "content": "no env here"}]) is None
+    assert cline_workspace_root(messages, extra={"cwd": "relative/path"}) == a.resolve()
+
+
 def test_orch_complete_stitches(tmp_path: Path, monkeypatch):
     from harness.config import AppConfig, Settings
     from harness.gateway.orch import OrchResult
     from harness.gateway.server import create_app
     from starlette.testclient import TestClient
 
-    async def fake_run(cfg, intent, thread="", messages=None, tools=None):
+    async def fake_run(cfg, intent, thread="", messages=None, tools=None, extra=None):
         return OrchResult(text=f"STITCHED:{intent}")
 
     monkeypatch.setattr("harness.gateway.orch.run_orch", fake_run)
@@ -217,7 +258,7 @@ def test_orch_gather_returns_tool_calls(tmp_path: Path, monkeypatch):
     from harness.gateway.server import create_app
     from starlette.testclient import TestClient
 
-    async def fake_run(cfg, intent, thread="", messages=None, tools=None):
+    async def fake_run(cfg, intent, thread="", messages=None, tools=None, extra=None):
         return OrchResult(
             tool_calls=[
                 {

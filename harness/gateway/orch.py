@@ -3,10 +3,14 @@
 from __future__ import annotations
 
 import json
+import re
 import time
 import uuid
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
+
+from harness.task.code_index import normalize_repo_root
 
 from harness.dispatch import (
     DispatchReport,
@@ -45,6 +49,48 @@ from harness.orch_loop import (
     verify_tool_calls,
     working_set_text,
 )
+
+
+_ENV_BLOCK = re.compile(r"<env>(.*?)</env>", re.IGNORECASE | re.DOTALL)
+_ENV_WORKDIR = re.compile(r"Working Directory:\s*([^\n<]+)", re.IGNORECASE)
+_BODY_WORKSPACE_KEYS = ("workspace_root", "workspace_path", "workspace", "cwd")
+
+
+def _add_workspace_candidate(found: list[str], raw: str) -> None:
+    text = raw.strip().strip("\"'")
+    if not text:
+        return
+    path = Path(text).expanduser()
+    if not path.is_absolute():
+        return
+    found.append(str(normalize_repo_root(path)))
+
+
+def cline_workspace_root(
+    messages: list[Any] | None = None,
+    extra: dict[str, Any] | None = None,
+) -> Path | None:
+    """Active Cline workspace. Fail closed if missing or if two roots disagree."""
+    found: list[str] = []
+    if extra:
+        for key in _BODY_WORKSPACE_KEYS:
+            value = extra.get(key)
+            if isinstance(value, str) and value.strip():
+                _add_workspace_candidate(found, value)
+    for item in messages or []:
+        if not isinstance(item, dict):
+            continue
+        text = _content_text(item.get("content"))
+        if not text:
+            continue
+        for block in _ENV_BLOCK.findall(text):
+            match = _ENV_WORKDIR.search(block)
+            if match:
+                _add_workspace_candidate(found, match.group(1))
+    unique = list(dict.fromkeys(found))
+    if len(unique) != 1:
+        return None
+    return Path(unique[0])
 
 
 def _content_text(content: Any) -> str:
@@ -498,12 +544,14 @@ async def run_orch(
     thread: str = "",
     messages: list[Any] | None = None,
     tools: list[Any] | None = None,
+    extra: dict[str, Any] | None = None,
 ) -> OrchResult:
     intent = (intent or "").strip()
     if not intent:
         return OrchResult(text="Harness orch needs a user message.", error="no intent")
     if not thread and messages:
         thread = compact_thread(messages)
+    workspace = cline_workspace_root(messages, extra)
     from harness.task.search import embedder_thread_block
 
     embedder_hits = embedder_thread_block(intent)
@@ -578,7 +626,7 @@ async def run_orch(
         not tools or rounds >= 4 or (evidence and rounds >= 2 and not acted and covered)
     )
     if not force_dispatch and (not evidence or not covered):
-        calls = default_gather_calls(catalog, intent)
+        calls = default_gather_calls(catalog, intent, workspace=workspace)
         if calls:
             if svc and task_id and state is not None:
                 state.phase = "gather"
@@ -604,7 +652,9 @@ async def run_orch(
             gather_round=rounds,
         )
         if mode == "gather":
-            calls = bind_gather_calls(raw_calls, catalog) or default_gather_calls(catalog, intent)
+            calls = bind_gather_calls(raw_calls, catalog) or default_gather_calls(
+                catalog, intent, workspace=workspace
+            )
             if calls:
                 if svc and task_id and state is not None:
                     state.phase = "gather"
@@ -613,13 +663,13 @@ async def run_orch(
         if planned:
             planned = sanitize_packets(planned, thread)
             if packets_claim_unread(planned) and not covered:
-                calls = default_gather_calls(catalog, intent)
+                calls = default_gather_calls(catalog, intent, workspace=workspace)
                 if calls:
                     return _with_loop(OrchResult(tool_calls=calls), state)
             packets = planned
     report = await run_dispatch(cfg, intent, thread=thread, packets=packets)
     if report.slice_error and not force_dispatch:
-        calls = default_gather_calls(catalog, intent)
+        calls = default_gather_calls(catalog, intent, workspace=workspace)
         if calls:
             return _with_loop(OrchResult(tool_calls=calls), state)
     if svc and task_id and state is not None and picked is not None:

@@ -619,19 +619,24 @@ def index_cmd(
 def retrieve_cmd(
     query: str,
     limit: int = typer.Option(8, help="Top chunks"),
+    workspace: Optional[str] = typer.Option(
+        None,
+        help="Active workspace root (default: cwd). Other indexed repos are not searched.",
+    ),
 ) -> None:
     """Query the M5 code index. Does not hit the CR category search endpoint."""
     from harness.task.code_index import default_index_path, query_index
 
     cfg = _cfg()
     db = cfg.settings.code_index_path or default_index_path(cfg.root)
-    hits = query_index(query, db, limit=limit)
+    root = _path(workspace) if workspace else Path.cwd()
+    hits = query_index(query, db, repo_root=root, limit=limit)
     if not hits:
-        console.print(f"no hits in {db}")
+        console.print(f"no hits in {db} workspace={root}")
         raise typer.Exit(code=1)
     for hit in hits:
         console.print(
-            f"{hit.score:.3f}  {hit.repo}/{hit.path}:{hit.start_line}-{hit.end_line}"
+            f"{hit.score:.3f}  {hit.path}:{hit.start_line}-{hit.end_line}"
         )
         console.print(hit.text.splitlines()[0][:160] if hit.text else "")
 
