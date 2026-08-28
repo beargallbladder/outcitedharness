@@ -32,6 +32,8 @@ from harness.orch_loop import (
     TERMINAL,
     LoopState,
     commands_from_packets,
+    commands_named_in_intent,
+    complete_working_set_refresh,
     failure_hash,
     last_run_since_write,
     last_tool_exchanges,
@@ -40,7 +42,9 @@ from harness.orch_loop import (
     parse_command_outcome,
     parse_mutation,
     remember_failure,
+    remember_reads,
     remember_write,
+    refresh_working_set_calls,
     repair_packets,
     save_loop_state,
     select_verify_command,
@@ -399,6 +403,12 @@ async def _emit_apply(
         return _terminal(svc, task_id, state)
     if report is not None:
         state.commands = commands_from_packets(report.packets) or state.commands
+    if not select_verify_command(state.commands)[0]:
+        seeded = commands_named_in_intent(intent)
+        if seeded:
+            state.commands = list(dict.fromkeys([*state.commands, *seeded]))
+    state.working_set.objective = state.working_set.objective or intent
+    state.working_set.acceptance_commands = list(state.commands)
     command, reason = select_verify_command(state.commands)
     if not command:
         state.phase = "blocked"
@@ -505,7 +515,10 @@ async def _advance_after_verify(
         state.phase = "exhausted"
         return _terminal(svc, task_id, state)
     state.phase = "repair"
+    refresh_calls = refresh_working_set_calls(state, catalog)
     save_loop_state(svc, task_id, state)
+    if refresh_calls:
+        return _with_loop(OrchResult(tool_calls=refresh_calls), state)
     return await _run_repair_apply(
         cfg, intent, thread, catalog, tools, svc, task_id, state, picked
     )
@@ -525,6 +538,8 @@ async def _run_repair_apply(
     if state.iteration >= MAX_CYCLES:
         state.phase = "exhausted"
         return _terminal(svc, task_id, state)
+    if not complete_working_set_refresh(state, messages=[]):
+        return _waiting(state, "changed-file refresh results")
     if picked is None:
         picked = await pick_foreman(cfg)
     if picked is None:
@@ -589,6 +604,10 @@ async def run_orch(
         if state is None:
             state = LoopState(phase="gather", intent=intent)
             save_loop_state(svc, task_id, state)
+        state.working_set.objective = state.working_set.objective or intent
+        remember_reads(state, messages or [])
+        if state.phase == "repair":
+            complete_working_set_refresh(state, messages or [])
         if state.phase in TERMINAL:
             return _with_loop(OrchResult(text=terminal_text(state)), state)
         if state.phase == "apply":

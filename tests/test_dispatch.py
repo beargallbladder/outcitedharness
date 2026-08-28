@@ -1158,6 +1158,52 @@ def test_frontend_job_gathers_apps_web_not_readme_only():
     assert "text apps/web" in cleaned[0].accept.invariants
 
 
+def test_named_source_listing_is_not_coverage():
+    from harness.dispatch import (
+        default_gather_calls,
+        evidence_covers_intent,
+        merge_tool_catalog,
+        needed_source_paths,
+        thread_has_file_read,
+    )
+
+    intent = (
+        "fix the failing unit test in test_add.py. add(1, 2) must return 3. "
+        "Use pytest test_add.py as the acceptance command."
+    )
+    listing = (
+        "assistant-tool list_files {\"path\": \".\", \"recursive\": false}\n"
+        "tool(list_files): .git/\nadd.py\ntest_add.py\n"
+        "assistant-tool run_commands {\"commands\": [\"ls -la\"]}\n"
+        "tool(run_commands): add.py test_add.py README.md\n"
+    )
+    assert needed_source_paths(intent, listing) == ["test_add.py", "add.py"]
+    assert thread_has_file_read(listing, "test_add.py") is False
+    assert evidence_covers_intent(intent, listing) is False
+    read = (
+        'assistant-tool read_files {"paths":["test_add.py"]}\n'
+        "tool(read_files): FILE test_add.py\nfrom add import add\n"
+        'assistant-tool read_files {"paths":["add.py"]}\n'
+        "tool(read_files): FILE add.py\ndef add(x, y):\n    return x - y\n"
+    )
+    assert evidence_covers_intent(intent, listing + read) is True
+
+    catalog = merge_tool_catalog(
+        {
+            "read_files": ("paths",),
+            "search_codebase": ("query", "path"),
+            "run_commands": ("commands",),
+            "list_files": ("path", "recursive"),
+        }
+    )
+    calls = default_gather_calls(catalog, intent)
+    blob = " ".join(c["function"]["arguments"] for c in calls)
+    assert "test_add.py" in blob
+    assert "add.py" in blob
+    first = calls[0]["function"]["arguments"]
+    assert "test_add.py" in first or "add.py" in first
+
+
 def test_dispatch_cli_help():
     from typer.testing import CliRunner
 

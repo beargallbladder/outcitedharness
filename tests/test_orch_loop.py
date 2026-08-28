@@ -10,6 +10,7 @@ from harness.dispatch import AcceptSpec, DispatchReport, Packet, Shot
 from harness.orch_loop import (
     MAX_CYCLES,
     command_allowed,
+    commands_named_in_intent,
     load_loop_state,
     parse_argv,
     parse_command_outcome,
@@ -82,7 +83,7 @@ def _read_pair(index: int) -> list[dict]:
                     "type": "function",
                     "function": {
                         "name": "read_files",
-                        "arguments": '{"paths":["src/app.py"]}',
+                        "arguments": '{"paths":["src/app.py","tests/test_x.py"]}',
                     },
                 }
             ],
@@ -90,7 +91,10 @@ def _read_pair(index: int) -> list[dict]:
         {
             "role": "tool",
             "tool_call_id": f"read_{index}",
-            "content": "src/app.py\n" + ("def work(): pass\n" * 20),
+            "content": (
+                "FILE tests/test_x.py\ndef test_x():\n    assert True\n\n"
+                "FILE src/app.py\n" + ("def work(): pass\n" * 20)
+            ),
         },
     ]
 
@@ -139,6 +143,50 @@ def _verify_pair(index: int, result: str) -> list[dict]:
             ],
         },
         {"role": "tool", "tool_call_id": f"ver_{index}", "content": result},
+    ]
+
+
+def _refresh_pair(index: int, content: str | None = None) -> list[dict]:
+    body = content or f"def work():\n    return {index + 1}\n"
+    diff = (
+        "diff --git a/src/app.py b/src/app.py\n"
+        "--- a/src/app.py\n+++ b/src/app.py\n"
+        f"@@ -1 +1 @@\n-def work(): pass\n+{body.strip()}\n"
+    )
+    return [
+        {
+            "role": "assistant",
+            "tool_calls": [
+                {
+                    "id": f"refresh_read_{index}",
+                    "type": "function",
+                    "function": {
+                        "name": "read_files",
+                        "arguments": '{"paths":["src/app.py"]}',
+                    },
+                },
+                {
+                    "id": f"refresh_diff_{index}",
+                    "type": "function",
+                    "function": {
+                        "name": "execute_command",
+                        "arguments": '{"command":"git diff -- src/app.py","timeout":60}',
+                    },
+                },
+            ],
+        },
+        {
+            "role": "tool",
+            "tool_call_id": f"refresh_read_{index}",
+            "content": f"FILE src/app.py\n{body}",
+        },
+        {
+            "role": "tool",
+            "tool_call_id": f"refresh_diff_{index}",
+            "content": json.dumps(
+                [{"query": "git diff -- src/app.py", "result": diff, "exitCode": 0}]
+            ),
+        },
     ]
 
 
@@ -215,6 +263,13 @@ def test_allowlist_rejects_shell_and_unknowns():
     command, reason = select_verify_command(["pytest tests; rm -rf /tmp/x"])
     assert command is None
     assert "unsafe" in reason
+    assert commands_named_in_intent(
+        "fix test_add.py. Use pytest test_add.py as the acceptance command."
+    ) == ["pytest test_add.py"]
+    assert commands_named_in_intent(
+        "add a comment to hello.py. Do not invent tests. Do not run pytest."
+    ) == []
+    assert commands_named_in_intent("fix the failing unit test in tests/test_x.py") == []
 
 
 def test_parse_command_outcome_reads_cline_payloads_and_fails_closed():
@@ -303,20 +358,58 @@ async def test_repair_path_feeds_failure_and_reverifies(tmp_path: Path, monkeypa
         ),
         tools=tools,
     )
-    assert failed.loop_phase == "apply"
-    assert failed.loop_iteration == 2
+    assert failed.loop_phase == "repair"
+    assert failed.loop_iteration == 1
+    assert failed.tool_calls
+    refresh_names = [call["function"]["name"] for call in failed.tool_calls]
+    assert "read_files" in refresh_names
+    assert "execute_command" in refresh_names
+
+    repair = await run_orch(
+        cfg,
+        FIX,
+        messages=_ready_messages(
+            _edit_pair(0)
+            + _verify_pair(0, "FAILED tests/test_x.py::test_add\nExit code: 1")
+            + _refresh_pair(0)
+        ),
+        tools=tools,
+    )
+    assert repair.loop_phase == "apply"
+    assert repair.loop_iteration == 2
     repair_packets = captured["dispatches"][-1]
     assert repair_packets
     prompt = repair_packets[0].prompt
-    assert "EXIT CODE: 1" in prompt
+    assert "exit: 1" in prompt
     assert "FAILED tests/test_x.py::test_add" in prompt
-    assert "FAILED TESTS:" in prompt
-    assert "src/app.py" in prompt
+    assert "FILE: src/app.py" in prompt
+    assert "return 1" in prompt
+    assert "CURRENT DIFF" in prompt
+    assert "diff --git a/src/app.py" in prompt
+    assert "ORIGINAL OBJECTIVE" in prompt
+    assert "INSTRUCTION" in prompt
+    assert "Do not restart investigation" in prompt
+
+    svc = TaskService(Store(cfg.settings.db_path))
+    persisted = load_loop_state(svc, svc.session_task().task_id)
+    assert persisted is not None
+    assert persisted.working_set.objective == FIX
+    assert persisted.working_set.acceptance_commands == ["pytest tests/test_x.py"]
+    assert persisted.working_set.files_changed == ["src/app.py"]
+    assert persisted.working_set.files_read["src/app.py"].content.endswith("return 1\n")
+    assert len(persisted.working_set.files_read["src/app.py"].content_hash) == 64
+    assert "diff --git a/src/app.py" in persisted.working_set.current_diff
+    assert persisted.working_set.refresh_pending == []
 
     after_repair = await run_orch(
         cfg,
         FIX,
-        messages=_ready_messages(_edit_pair(0) + _verify_pair(0, "FAILED\nExit code: 1") + _edit_pair(1)),
+        messages=_ready_messages(
+            _edit_pair(0)
+            + _verify_pair(0, "FAILED\nExit code: 1")
+            + _refresh_pair(0)
+            + _edit_pair(1)
+        ),
         tools=tools,
     )
     assert after_repair.loop_phase == "verify"
@@ -326,6 +419,7 @@ async def test_repair_path_feeds_failure_and_reverifies(tmp_path: Path, monkeypa
         messages=_ready_messages(
             _edit_pair(0)
             + _verify_pair(0, "FAILED\nExit code: 1")
+            + _refresh_pair(0)
             + _edit_pair(1)
             + _verify_pair(1, "2 passed\nExit code: 0")
         ),
@@ -353,6 +447,10 @@ async def test_five_cycles_exhaust_without_sixth_apply(tmp_path: Path, monkeypat
         extra.extend(_verify_pair(cycle, f"FAIL unique-{cycle}\nExit code: 1"))
         result = await run_orch(cfg, FIX, messages=_ready_messages(extra), tools=tools)
         if cycle < MAX_CYCLES - 1:
+            assert result.loop_phase == "repair"
+            assert result.tool_calls
+            extra.extend(_refresh_pair(cycle))
+            result = await run_orch(cfg, FIX, messages=_ready_messages(extra), tools=tools)
             assert result.loop_phase == "apply"
             extra.extend(_edit_pair(cycle + 1))
             nxt = await run_orch(cfg, FIX, messages=_ready_messages(extra), tools=tools)
@@ -419,10 +517,12 @@ async def test_identical_failure_exhausts_early(tmp_path: Path, monkeypatch):
         messages=_ready_messages(_edit_pair(0) + _verify_pair(0, same)),
         tools=tools,
     )
+    history = _edit_pair(0) + _verify_pair(0, same) + _refresh_pair(0)
+    await run_orch(cfg, FIX, messages=_ready_messages(history), tools=tools)
     await run_orch(
         cfg,
         FIX,
-        messages=_ready_messages(_edit_pair(0) + _verify_pair(0, same) + _edit_pair(1, "no changes made")),
+        messages=_ready_messages(history + _edit_pair(1, "no changes made")),
         tools=tools,
     )
     # empty mutation after repair also exhausts; use a real second apply then same fail
@@ -451,8 +551,11 @@ async def test_same_failure_hash_after_repair_exhausts(tmp_path: Path, monkeypat
         messages=_ready_messages(extra + _verify_pair(0, same)),
         tools=tools,
     )
+    assert repaired.loop_phase == "repair"
+    extra = extra + _verify_pair(0, same) + _refresh_pair(0)
+    repaired = await run_orch(cfg, FIX, messages=_ready_messages(extra), tools=tools)
     assert repaired.loop_phase == "apply"
-    extra = extra + _verify_pair(0, same) + _edit_pair(1, "Successfully applied a different hunk")
+    extra = extra + _edit_pair(1, "Successfully applied a different hunk")
     await run_orch(cfg, FIX, messages=_ready_messages(extra), tools=tools)
     done = await run_orch(
         cfg,
@@ -476,6 +579,19 @@ async def test_missing_command_blocks_and_does_not_invent(tmp_path: Path, monkey
     assert "status: blocked" in result.text
     assert not result.tool_calls
     assert "pytest" not in result.text or "accept.commands" in result.text
+
+
+@pytest.mark.asyncio
+async def test_intent_named_command_seeds_empty_packet(tmp_path: Path, monkeypatch):
+    from harness.gateway.orch import run_orch
+
+    cfg = _cfg(tmp_path)
+    _patch_loop(monkeypatch, report=_report(command=""))
+    intent = FIX + " Use pytest tests/test_x.py as the acceptance command."
+    result = await run_orch(cfg, intent, messages=_ready_messages(), tools=_tools())
+    assert result.loop_phase == "apply"
+    assert result.tool_calls
+    assert result.tool_calls[0]["function"]["name"] == "editor"
 
 
 @pytest.mark.asyncio

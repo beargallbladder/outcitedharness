@@ -27,6 +27,7 @@ LOOP_KIND = "orch_loop"
 MAX_CYCLES = 5
 VERIFY_TIMEOUT_S = 60
 TAIL_CHARS = 8000
+WORKING_FILE_MAX_CHARS = 16000
 
 Phase = Literal[
     "gather",
@@ -64,6 +65,56 @@ _RUN_TOOLS = frozenset(
         "shell",
     }
 )
+_READ_TOOLS = frozenset({"read_file", "read_files", "readfile", "read"})
+
+
+@dataclass
+class WorkingFile:
+    content: str = ""
+    content_hash: str = ""
+
+    @classmethod
+    def from_dict(cls, raw: Any) -> WorkingFile:
+        data = raw if isinstance(raw, dict) else {}
+        return cls(
+            content=str(data.get("content") or ""),
+            content_hash=str(data.get("content_hash") or ""),
+        )
+
+
+@dataclass
+class WorkingSet:
+    objective: str = ""
+    acceptance_commands: list[str] = field(default_factory=list)
+    files_read: dict[str, WorkingFile] = field(default_factory=dict)
+    files_changed: list[str] = field(default_factory=list)
+    current_diff: str = ""
+    refresh_pending: list[str] = field(default_factory=list)
+    refresh_diff_pending: bool = False
+
+    @classmethod
+    def from_dict(cls, raw: Any) -> WorkingSet:
+        data = raw if isinstance(raw, dict) else {}
+        files = data.get("files_read") if isinstance(data.get("files_read"), dict) else {}
+        return cls(
+            objective=str(data.get("objective") or ""),
+            acceptance_commands=[
+                str(c) for c in (data.get("acceptance_commands") or []) if str(c).strip()
+            ],
+            files_read={
+                str(path): WorkingFile.from_dict(value)
+                for path, value in files.items()
+                if str(path).strip()
+            },
+            files_changed=[
+                str(path) for path in (data.get("files_changed") or []) if str(path).strip()
+            ],
+            current_diff=str(data.get("current_diff") or ""),
+            refresh_pending=[
+                str(path) for path in (data.get("refresh_pending") or []) if str(path).strip()
+            ],
+            refresh_diff_pending=bool(data.get("refresh_diff_pending")),
+        )
 
 
 @dataclass
@@ -82,9 +133,8 @@ class LoopState:
     prev_diff_hash: str | None = None
     prev_failure_hash: str | None = None
     blocked_reason: str = ""
-    files: list[str] = field(default_factory=list)
-    diff: str = ""
     failed_tests: str = ""
+    working_set: WorkingSet = field(default_factory=WorkingSet)
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -121,9 +171,8 @@ class LoopState:
             prev_diff_hash=data.get("prev_diff_hash") or None,
             prev_failure_hash=data.get("prev_failure_hash") or None,
             blocked_reason=str(data.get("blocked_reason") or ""),
-            files=[str(p) for p in (data.get("files") or []) if str(p).strip()],
-            diff=str(data.get("diff") or ""),
             failed_tests=str(data.get("failed_tests") or ""),
+            working_set=WorkingSet.from_dict(data.get("working_set")),
         )
 
 
@@ -217,6 +266,61 @@ def select_verify_command(commands: list[str]) -> tuple[str | None, str]:
             return raw, ""
         return None, "command not on allowlist"
     return None, "no allowed accept.commands"
+
+
+_NEGATED_VERIFY_RE = re.compile(
+    r"(?i)\b(?:do\s+not|don't|dont|never|without)\b[\s\w,-]{0,48}"
+    r"\b(?:pytest|ruff|eslint|tsc|npx|npm|pnpm)\b"
+)
+_VERIFY_HEAD_RE = re.compile(
+    r"(?i)\b(?:python3?\s+-m\s+pytest|python3?\s+-m\s+ruff|npx\s+tsc|"
+    r"npm\s+run\s+[A-Za-z0-9_:-]+|pnpm\s+(?:run\s+)?[A-Za-z0-9_:-]+|"
+    r"pytest|ruff|eslint|tsc)\b"
+)
+_CMD_STOP = frozenset(
+    {
+        "as",
+        "the",
+        "a",
+        "an",
+        "to",
+        "for",
+        "and",
+        "with",
+        "after",
+        "before",
+        "then",
+        "use",
+        "using",
+        "acceptance",
+        "command",
+        "must",
+        "please",
+    }
+)
+
+
+def commands_named_in_intent(intent: str) -> list[str]:
+    """Copy an allowlisted command the user already named. Never invent one."""
+    text = intent or ""
+    if _NEGATED_VERIFY_RE.search(text):
+        return []
+    out: list[str] = []
+    seen: set[str] = set()
+    for match in _VERIFY_HEAD_RE.finditer(text):
+        tokens = [re.sub(r"\s+", " ", match.group(0)).strip()]
+        for tok in re.findall(r"[A-Za-z0-9_./:-]+", text[match.end() :]):
+            if tok.lower() in _CMD_STOP:
+                break
+            tokens.append(tok)
+            if len(tokens) >= 6:
+                break
+        cmd = " ".join(tokens).strip()
+        if not command_allowed(cmd) or cmd in seen:
+            continue
+        seen.add(cmd)
+        out.append(cmd)
+    return out
 
 
 def commands_from_packets(packets: list[Any]) -> list[str]:
@@ -441,11 +545,176 @@ def verify_tool_calls(command: str, catalog: dict[str, tuple[str, ...]]) -> list
     return bind_gather_calls(raw, catalog)
 
 
+def _normalized_workspace_path(raw: Any) -> str:
+    path = str(raw or "").strip().replace("\\", "/")
+    if not path or path.startswith("/") or "\x00" in path:
+        return ""
+    parts = [part for part in path.split("/") if part not in {"", "."}]
+    if not parts or any(part == ".." for part in parts):
+        return ""
+    return "/".join(parts)
+
+
+def _read_paths(args: dict[str, Any]) -> list[str]:
+    raw = args.get("paths")
+    values = raw if isinstance(raw, list) else [
+        args.get("path") or args.get("file_path") or args.get("rel_path")
+    ]
+    out: list[str] = []
+    for value in values:
+        path = _normalized_workspace_path(value)
+        if path and path not in out:
+            out.append(path)
+    return out
+
+
+def _read_result_files(paths: list[str], text: str) -> dict[str, str]:
+    """Map a successful Cline read result back to its requested paths."""
+    blob = text or ""
+    if not paths or not blob.strip() or re.search(r"(?im)^\s*ERROR:", blob):
+        return {}
+    markers = list(re.finditer(r"(?im)^FILE\s+(.+?)\s*\r?\n", blob))
+    if markers:
+        out: dict[str, str] = {}
+        requested = {path.lower(): path for path in paths}
+        by_name = {Path(path).name.lower(): path for path in paths}
+        for index, marker in enumerate(markers):
+            raw_path = _normalized_workspace_path(marker.group(1))
+            path = requested.get(raw_path.lower()) or by_name.get(Path(raw_path).name.lower())
+            if not path:
+                continue
+            end = markers[index + 1].start() if index + 1 < len(markers) else len(blob)
+            out[path] = blob[marker.end() : end]
+        return out
+    if len(paths) == 1:
+        return {paths[0]: blob}
+    return {}
+
+
+def remember_reads(state: LoopState, messages: list[Any]) -> None:
+    """Persist the latest successful content for every task-scoped file read."""
+    state.working_set.objective = state.working_set.objective or state.intent
+    for name, args, text in last_tool_exchanges(messages):
+        if name.lower().replace("-", "_") not in _READ_TOOLS:
+            continue
+        for path, content in _read_result_files(_read_paths(args), text).items():
+            full_hash = hashlib.sha256(content.encode("utf-8", errors="replace")).hexdigest()
+            stored = content
+            if len(stored) > WORKING_FILE_MAX_CHARS:
+                stored = (
+                    stored[:WORKING_FILE_MAX_CHARS]
+                    + "\n[WORKING FILE TRUNCATED BY HARNESS]"
+                )
+            state.working_set.files_read[path] = WorkingFile(
+                content=stored,
+                content_hash=full_hash,
+            )
+
+
+def _command_args(args: dict[str, Any]) -> list[str]:
+    commands = args.get("commands")
+    if isinstance(commands, list):
+        return [str(command).strip() for command in commands if str(command).strip()]
+    command = args.get("command") or args.get("query")
+    return [str(command).strip()] if str(command or "").strip() else []
+
+
+def _after_latest_verification(
+    messages: list[Any], command: str | None
+) -> list[tuple[str, dict[str, Any], str]]:
+    exchanges = last_tool_exchanges(messages)
+    verify_at = -1
+    for index, (name, args, _text) in enumerate(exchanges):
+        if name.lower() in _RUN_TOOLS and command in _command_args(args):
+            verify_at = index
+    return exchanges[verify_at + 1 :] if verify_at >= 0 else []
+
+
+def complete_working_set_refresh(state: LoopState, messages: list[Any]) -> bool:
+    """Consume only reads/diff results that arrived after the failed verify."""
+    pending = list(state.working_set.refresh_pending)
+    if not pending and not state.working_set.refresh_diff_pending:
+        return True
+    seen: set[str] = set()
+    diff_seen = False
+    for name, args, text in _after_latest_verification(messages, state.last_cmd):
+        lower = name.lower().replace("-", "_")
+        if lower in _READ_TOOLS:
+            results = _read_result_files(_read_paths(args), text)
+            for path, content in results.items():
+                if path not in pending:
+                    continue
+                full_hash = hashlib.sha256(content.encode("utf-8", errors="replace")).hexdigest()
+                stored = content
+                if len(stored) > WORKING_FILE_MAX_CHARS:
+                    stored = (
+                        stored[:WORKING_FILE_MAX_CHARS]
+                        + "\n[WORKING FILE TRUNCATED BY HARNESS]"
+                    )
+                state.working_set.files_read[path] = WorkingFile(stored, full_hash)
+                seen.add(path)
+        if lower in _RUN_TOOLS and any(
+            command.startswith("git diff --") for command in _command_args(args)
+        ):
+            flat, _exit_code, _timed_out = _flatten_command_blob(text)
+            state.working_set.current_diff = tail_text(flat or text, 8000)
+            diff_seen = True
+    state.working_set.refresh_pending = [path for path in pending if path not in seen]
+    if diff_seen:
+        state.working_set.refresh_diff_pending = False
+    return not state.working_set.refresh_pending and not state.working_set.refresh_diff_pending
+
+
+def refresh_working_set_calls(
+    state: LoopState, catalog: dict[str, tuple[str, ...]]
+) -> list[dict[str, Any]]:
+    paths = [
+        path
+        for path in state.working_set.files_changed
+        if _normalized_workspace_path(path) == path
+    ][:5]
+    if not paths:
+        return []
+    raw: list[dict[str, Any]] = [
+        {"name": "read_file", "arguments": {"path": path}} for path in paths
+    ]
+    diff_command = "git diff -- " + " ".join(shlex.quote(path) for path in paths)
+    raw.append(
+        {
+            "name": "execute_command",
+            "arguments": {
+                "command": diff_command,
+                "timeout": VERIFY_TIMEOUT_S,
+                "timeout_s": VERIFY_TIMEOUT_S,
+            },
+        }
+    )
+    calls = bind_gather_calls(raw, catalog, limit=8)
+    pending: list[str] = []
+    diff_pending = False
+    for call in calls:
+        fn = call.get("function") if isinstance(call, dict) else {}
+        name = str((fn or {}).get("name") or "").lower().replace("-", "_")
+        args = _args_dict((fn or {}).get("arguments"))
+        if name in _READ_TOOLS:
+            pending.extend(path for path in _read_paths(args) if path not in pending)
+        if name in _RUN_TOOLS and any(
+            command.startswith("git diff --") for command in _command_args(args)
+        ):
+            diff_pending = True
+    state.working_set.refresh_pending = pending
+    state.working_set.refresh_diff_pending = diff_pending
+    return calls
+
+
 def remember_write(state: LoopState, args: dict[str, Any], text: str) -> None:
-    path = str(args.get("path") or args.get("file_path") or args.get("rel_path") or "").strip()
-    if path and path not in state.files:
-        state.files.append(path)
-    state.diff = tail_text(text, 4000)
+    path = _normalized_workspace_path(
+        args.get("path") or args.get("file_path") or args.get("rel_path")
+    )
+    if path and path not in state.working_set.files_changed:
+        state.working_set.files_changed.append(path)
+    # Until git diff returns, retain the edit result as explicit provisional state.
+    state.working_set.current_diff = tail_text(text, 4000)
 
 
 def remember_failure(state: LoopState) -> None:
@@ -456,29 +725,48 @@ def remember_failure(state: LoopState) -> None:
     )
 
 
+def working_files_text(state: LoopState) -> str:
+    files: list[str] = []
+    for path, snapshot in state.working_set.files_read.items():
+        files.append(
+            f"FILE: {path}\nCONTENT_HASH: {snapshot.content_hash}\n{snapshot.content}"
+        )
+    return "\n\n".join(files) or "(none)"
+
+
 def working_set_text(state: LoopState) -> str:
-    files = "\n".join(f"- {p}" for p in state.files) or "- (none)"
     return (
-        f"FILES:\n{files}\n\n"
-        f"ACTIVE DIFF:\n{state.diff or '(none)'}\n\n"
-        f"FAILED TESTS:\n{state.failed_tests or '(none)'}\n"
+        f"OBJECTIVE:\n{state.working_set.objective or state.intent}\n\n"
+        f"ACCEPTANCE COMMANDS:\n"
+        f"{chr(10).join(state.working_set.acceptance_commands) or '(none)'}\n\n"
+        f"WORKING FILES:\n{_clip_context(working_files_text(state), 8000)}\n\n"
+        f"CURRENT DIFF:\n"
+        f"{_clip_context(state.working_set.current_diff or '(none)', 3000)}\n"
     )
 
 
 def repair_packets(intent: str, thread: str, state: LoopState) -> list[Packet]:
     remaining = max(0, MAX_CYCLES - state.iteration)
+    objective = _clip_context(state.working_set.objective or intent, 1200)
+    files = _clip_context(working_files_text(state), 6500)
+    diff = _clip_context(state.working_set.current_diff or "(none)", 3500)
+    failure = _clip_context(
+        state.stderr_tail or state.stdout_tail or "(empty)",
+        3000,
+    )
     prompt = (
-        f"USER REQUEST:\n{intent[:1200]}\n\n"
-        f"REPAIR the actual verification failure. Do not re-investigate from scratch.\n"
-        f"ITERATION: {state.iteration} of {MAX_CYCLES} ({remaining} remaining after this repair)\n"
-        f"ACCEPTANCE COMMAND:\n{state.last_cmd or '(none)'}\n"
-        f"EXIT CODE: {state.last_exit if state.last_exit is not None else 'timeout/unknown'}\n"
-        f"TIMED OUT: {state.timed_out}\n"
-        f"STDOUT TAIL:\n{state.stdout_tail or '(empty)'}\n"
-        f"STDERR TAIL:\n{state.stderr_tail or '(empty)'}\n\n"
-        f"{working_set_text(state)}\n"
-        f"WORKSPACE EVIDENCE:\n{_clip_context(thread, 8000)}\n\n"
-        "Produce the exact patch that fixes this failure."
+        f"ORIGINAL OBJECTIVE\n{objective}\n\n"
+        f"WORKING FILES\n{files}\n\n"
+        f"CURRENT DIFF\n{diff}\n\n"
+        f"FAILED VERIFICATION\n"
+        f"command: {state.last_cmd or '(none)'}\n"
+        f"exit: {state.last_exit if state.last_exit is not None else 'timeout/unknown'}\n"
+        f"timed_out: {state.timed_out}\n"
+        f"stdout/stderr tail:\n{failure}\n\n"
+        f"ITERATION\n{state.iteration} of {MAX_CYCLES} ({remaining} remaining)\n\n"
+        "INSTRUCTION\n"
+        "Repair the observed failure. Do not restart investigation unless the "
+        "failure points to code outside the working set."
     )
     return [
         Packet(

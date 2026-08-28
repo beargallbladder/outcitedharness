@@ -480,3 +480,61 @@ async def test_frontend_thin_evidence_keeps_gathering(monkeypatch):
     assert result.tool_calls
     blob = " ".join(call["function"]["arguments"] for call in result.tool_calls)
     assert "apps/web" in blob
+
+
+@pytest.mark.asyncio
+async def test_named_source_listing_keeps_gathering(monkeypatch):
+    from harness.gateway.orch import run_orch
+
+    intent = "fix the failing unit test in test_add.py"
+    messages = [{"role": "user", "content": intent}]
+    for index in range(2):
+        call_id = f"call_{index}"
+        messages.extend(
+            [
+                {
+                    "role": "assistant",
+                    "tool_calls": [
+                        {
+                            "id": call_id,
+                            "type": "function",
+                            "function": {
+                                "name": "list_files",
+                                "arguments": '{"path":".","recursive":false}',
+                            },
+                        }
+                    ],
+                },
+                {
+                    "role": "tool",
+                    "tool_call_id": call_id,
+                    "content": ".git/\nadd.py\ntest_add.py\nREADME.md\n",
+                },
+            ]
+        )
+
+    async def boom(*args, **kwargs):
+        raise AssertionError("listing named source files must not dispatch")
+
+    monkeypatch.setattr("harness.gateway.orch.pick_foreman", boom)
+    monkeypatch.setattr("harness.gateway.orch.plan_orch", boom)
+    monkeypatch.setattr("harness.gateway.orch.run_dispatch", boom)
+
+    result = await run_orch(
+        object(),
+        intent,
+        messages=messages,
+        tools=[
+            {
+                "type": "function",
+                "function": {
+                    "name": "read_files",
+                    "parameters": {"type": "object", "properties": {"paths": {}}},
+                },
+            }
+        ],
+    )
+    assert result.tool_calls
+    blob = " ".join(call["function"]["arguments"] for call in result.tool_calls)
+    assert "test_add.py" in blob
+    assert "add.py" in blob

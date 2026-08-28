@@ -557,12 +557,104 @@ def thread_lists_frontend(thread: str) -> bool:
     return "apps/web" in text or "@locdna/web" in text
 
 
+_SOURCE_PATH_RE = re.compile(
+    r"(?<![A-Za-z0-9_])(?:[A-Za-z0-9_.-]+/)*[A-Za-z0-9_.-]+\.(?:py|ts|tsx|js|jsx|mjs|cjs|go|rs|java|rb)\b"
+)
+
+
+def paths_named_in_intent(intent: str) -> list[str]:
+    """Source paths the user already named. A directory listing is not a read."""
+    seen: set[str] = set()
+    out: list[str] = []
+    for match in _SOURCE_PATH_RE.finditer(intent or ""):
+        raw = match.group(0).lstrip("./")
+        key = raw.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(raw)
+    return out
+
+
+def implied_impl_paths(named: list[str]) -> list[str]:
+    """test_foo.py → foo.py in the same directory, when the user named the test."""
+    out: list[str] = []
+    seen: set[str] = set()
+    for raw in named:
+        name = Path(raw).name
+        sibling = ""
+        match = re.match(r"test_(.+)\.(py|ts|tsx|js)$", name, flags=re.I)
+        if match:
+            sibling = f"{match.group(1)}.{match.group(2)}"
+        else:
+            match = re.match(r"(.+)_test\.py$", name, flags=re.I)
+            if match:
+                sibling = f"{match.group(1)}.py"
+            else:
+                match = re.match(r"(.+)\.test\.(tsx?|jsx?)$", name, flags=re.I)
+                if match:
+                    sibling = f"{match.group(1)}.{match.group(2)}"
+        if not sibling:
+            continue
+        impl = str(Path(raw).with_name(sibling))
+        if impl.startswith("./"):
+            impl = impl[2:]
+        key = impl.lower()
+        if key in seen or key in {p.lower() for p in named}:
+            continue
+        seen.add(key)
+        out.append(impl)
+    return out
+
+
+def needed_source_paths(intent: str, thread: str = "") -> list[str]:
+    named = paths_named_in_intent(intent)
+    needed = list(named)
+    blob = thread or ""
+    for path in implied_impl_paths(named):
+        base = Path(path).name
+        if blob and not re.search(rf"(?<![A-Za-z0-9_.]){re.escape(base)}(?![A-Za-z0-9_])", blob):
+            continue
+        needed.append(path)
+    seen: set[str] = set()
+    out: list[str] = []
+    for path in needed:
+        key = path.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(path)
+    return out
+
+
+def thread_has_file_read(thread: str, path: str) -> bool:
+    """True only when a read tool targeted this file. ls/list_files do not count."""
+    want = Path(path).name.lower()
+    if not want or not thread:
+        return False
+    for match in re.finditer(r"assistant-tool\s+(\S+)\s+([^\n]*)", thread, flags=re.I):
+        tool = match.group(1).lower().replace("-", "_")
+        if not tool.startswith("read"):
+            continue
+        tokens = re.findall(r"[A-Za-z0-9_./\\-]+\.[A-Za-z0-9]+", match.group(2))
+        tokens.extend(re.findall(r'"([^"]+)"', match.group(2)))
+        for tok in tokens:
+            name = Path(str(tok).replace("\\", "/")).name.lower()
+            if name == want:
+                return True
+    return False
+
+
 def evidence_covers_intent(intent: str, thread: str) -> bool:
     """True when THREAD already has the files this INTENT needs to answer.
 
-    A frontend/UX question is not covered by README or package.json. Those
-    prove the tree exists; they do not let a blind coder judge the UI.
+    A named source/test file is not covered by ls or list_files. Those prove
+    the path exists; they do not let a blind coder patch it. A frontend/UX
+    question is not covered by README or package.json.
     """
+    needed = needed_source_paths(intent, thread)
+    if needed:
+        return all(thread_has_file_read(thread, path) for path in needed)
     if not is_frontend_job(intent):
         return True
     return thread_has_ui_source(thread)
@@ -579,6 +671,12 @@ def default_gather_calls(
     regex = "|".join(tokens[:6]) if tokens else "."
     # Semantic search tools reject regex syntax; give them plain words.
     query = " ".join(tokens[:6]) if tokens else "main entry point"
+    named_reads = [
+        {"name": "read_file", "arguments": {"path": path}}
+        for path in (
+            paths_named_in_intent(intent) + implied_impl_paths(paths_named_in_intent(intent))
+        )
+    ]
     generic = [
         {"name": "search_files", "arguments": {"path": ".", "regex": regex, "query": query}},
         {"name": "list_files", "arguments": {"path": ".", "recursive": False}},
@@ -632,6 +730,8 @@ def default_gather_calls(
             raw = extra + raw
     except Exception:
         pass
+    if named_reads:
+        raw = named_reads + raw
     return bind_gather_calls(raw, catalog)
 
 
@@ -715,7 +815,7 @@ async def plan_actions(
     user = (
         f"INTENT:\n{intent[:3000]}\n\n"
         f"ACCEPTED LOCAL SOLUTION:\n{_clip_context(accepted_solution, 9000)}\n\n"
-        f"WORKING SET:\n{_clip_context(working_set, 3000)}\n\n"
+        f"WORKING SET:\n{_clip_context(working_set, 12000)}\n\n"
         f"WORKSPACE EVIDENCE:\n{_clip_context(thread, 8000)}\n\n"
         f"AVAILABLE TOOL PROPERTIES:\n{json.dumps(available)}\n\n"
         f"AVAILABLE TOOL SCHEMAS:\n{schemas}"
