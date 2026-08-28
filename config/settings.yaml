@@ -15,7 +15,13 @@ checkpoint_max_file_bytes: 1000000
 code_index_path: results/code_index.sqlite
 code_index_repos:
   - /Users/samkim/Harnessv1
+  - /Users/samkim/crownpointshrimp
   - /Users/samkim/locationlocationlocation
+  - /Volumes/M5_4TB/DigiKey_Reference_Designs
+gci_enabled: true
+gci_url: http://100.81.201.24:8810
+gci_token_env: HARNESS_GCI_TOKEN
+gci_timeout_s: 8
 system_prompt: |
   You are completing a benchmark task.
   Follow the instructions exactly.

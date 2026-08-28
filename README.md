@@ -17,9 +17,10 @@ This is a client of existing local/cloud model endpoints. Cline / VS Code talks 
 
 ## Safety
 
-The harness never starts, stops, restarts, or reconfigures inference services. If a model is down, it reports that and continues.
-
-Do not point it at the live embedding (`:8800`–`:8803`) or OCR ports. Those are out of scope for v0.1.
+The harness never starts, stops, restarts, or reconfigures inference services.
+If a model is down, it reports that and continues. GCI may call only the
+existing `:8800/v1/embeddings` route through its bounded encoder client; all
+other live embedding/search and OCR routes remain out of scope.
 
 ## Setup
 
@@ -116,6 +117,35 @@ harness rollback-task TASK_ID
 Rollback requires confirmation (or `--yes`), refuses the entire operation if
 any task path changed after the latest checkpoint, and preserves unrelated
 dirty and untracked work. It never uses `git reset`, `checkout`, or `clean`.
+
+## Global Code Intelligence
+
+GCI is an independent authenticated service on Spark port `8810`. Its SQLite
+database lives under `/data/harness-gci`; it never opens CategoryRank index
+paths. The only shared dependency is a bounded request to
+`http://127.0.0.1:8800/v1/embeddings`, with one request in flight and index
+batches capped at 16.
+
+```shell
+harness gci status
+harness gci scan
+harness gci refresh
+harness gci search "repository verification contract"
+harness gci search --mode symbol RepoContract
+harness gci pause
+harness gci resume
+```
+
+Approved roots come from `code_index_repos`. Scans include dirty and untracked
+source files but exclude ignored/vendor files and reject symlink escapes.
+Global results are discovery evidence only. A hit becomes a Cline `read_file`
+path only when its source host and canonical repository root exactly match the
+active workspace.
+
+Deployment uses `scripts/deploy_gci.sh spark`. It installs only
+`harness-gci.service`, with a separate virtual environment, bearer-token
+environment file, resource controls, and restart lifecycle. It does not change
+or restart `bge-m3-embed.service`.
 
 ## Case format
 

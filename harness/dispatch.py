@@ -693,6 +693,7 @@ def default_gather_calls(
     catalog: dict[str, tuple[str, ...]],
     intent: str,
     workspace: Path | str | None = None,
+    gci_settings: Any | None = None,
 ) -> list[dict[str, Any]]:
     tokens = list(dict.fromkeys(
         w for w in re.findall(r"[A-Za-z][A-Za-z0-9_]{3,}", intent) if w.lower() not in _STOPWORDS
@@ -757,6 +758,17 @@ def default_gather_calls(
         ]
         if extra:
             raw = extra + raw
+    except Exception:
+        pass
+    try:
+        from harness.gci.integration import workspace_paths
+
+        bound = [
+            {"name": "read_file", "arguments": {"path": path}}
+            for path in workspace_paths(gci_settings, intent, workspace, limit=6)
+        ]
+        if bound:
+            raw = bound + raw
     except Exception:
         pass
     if named_reads:

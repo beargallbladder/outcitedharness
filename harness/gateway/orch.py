@@ -940,6 +940,18 @@ def _semantic_expansion_paths(cfg, state: LoopState) -> list[str]:
     ).strip()
     if not query:
         return []
+    bound: list[str] = []
+    try:
+        from harness.gci.integration import workspace_paths
+
+        bound = workspace_paths(
+            getattr(cfg, "settings", None),
+            query,
+            Path(root),
+            limit=4,
+        )
+    except Exception:
+        log.exception("GCI workspace-bound semantic expansion failed")
     try:
         from harness.task.code_index import (
             default_index_path,
@@ -948,15 +960,16 @@ def _semantic_expansion_paths(cfg, state: LoopState) -> list[str]:
 
         settings = getattr(cfg, "settings", None)
         db_path = getattr(settings, "code_index_path", None)
-        return gather_paths_for_intent(
+        local = gather_paths_for_intent(
             query,
             db_path=db_path or default_index_path(getattr(cfg, "root", None)),
             workspace=Path(root),
             limit=4,
         )
+        return list(dict.fromkeys([*bound, *local]))[:4]
     except Exception:
         log.exception("workspace-scoped semantic expansion failed")
-        return []
+        return bound
 
 
 async def _advance_expansion(
@@ -1156,7 +1169,12 @@ async def run_orch(
         not tools or rounds >= 4 or (evidence and rounds >= 2 and not acted and covered)
     )
     if not force_dispatch and (not evidence or not covered):
-        calls = default_gather_calls(catalog, intent, workspace=workspace)
+        calls = default_gather_calls(
+            catalog,
+            intent,
+            workspace=workspace,
+            gci_settings=getattr(cfg, "settings", None),
+        )
         if calls:
             if svc and task_id and state is not None:
                 state.phase = "gather"
@@ -1183,7 +1201,10 @@ async def run_orch(
         )
         if mode == "gather":
             calls = bind_gather_calls(raw_calls, catalog) or default_gather_calls(
-                catalog, intent, workspace=workspace
+                catalog,
+                intent,
+                workspace=workspace,
+                gci_settings=getattr(cfg, "settings", None),
             )
             if calls:
                 if svc and task_id and state is not None:
@@ -1193,7 +1214,12 @@ async def run_orch(
         if planned:
             planned = sanitize_packets(planned, thread)
             if packets_claim_unread(planned) and not covered:
-                calls = default_gather_calls(catalog, intent, workspace=workspace)
+                calls = default_gather_calls(
+                    catalog,
+                    intent,
+                    workspace=workspace,
+                    gci_settings=getattr(cfg, "settings", None),
+                )
                 if calls:
                     return _with_loop(OrchResult(tool_calls=calls), state)
             packets = planned
@@ -1211,6 +1237,20 @@ async def run_orch(
         ).text
         dispatch_thread = compiled_context
         save_loop_state(svc, task_id, state)
+    try:
+        from harness.gci.integration import global_discovery_context
+
+        global_context = global_discovery_context(
+            getattr(cfg, "settings", None),
+            intent,
+            limit=6,
+        )
+        if global_context:
+            dispatch_thread = f"{dispatch_thread}\n\n{global_context}".strip()
+            if compiled_context:
+                compiled_context = f"{compiled_context}\n\n{global_context}".strip()
+    except Exception:
+        log.exception("global code-intelligence discovery failed")
     report = await run_dispatch(
         cfg,
         intent,
@@ -1219,7 +1259,12 @@ async def run_orch(
         compiled_context=compiled_context,
     )
     if report.slice_error and not force_dispatch:
-        calls = default_gather_calls(catalog, intent, workspace=workspace)
+        calls = default_gather_calls(
+            catalog,
+            intent,
+            workspace=workspace,
+            gci_settings=getattr(cfg, "settings", None),
+        )
         if calls:
             return _with_loop(OrchResult(tool_calls=calls), state)
     if svc and task_id and state is not None and picked is not None:

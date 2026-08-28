@@ -92,6 +92,10 @@ class Settings(BaseModel):
     )
     code_index_path: Path | None = None
     code_index_repos: list[str] = Field(default_factory=list)
+    gci_enabled: bool = False
+    gci_url: str = "http://100.81.201.24:8810"
+    gci_token_env: str = "HARNESS_GCI_TOKEN"
+    gci_timeout_s: float = Field(default=8.0, ge=0.5, le=120.0)
 
 
 class AppConfig(BaseModel):
@@ -172,6 +176,10 @@ def load_config(root: Path | None = None) -> AppConfig:
         ),
         code_index_path=_optional_path(root, raw_settings.get("code_index_path")),
         code_index_repos=[str(p) for p in (raw_settings.get("code_index_repos") or []) if str(p).strip()],
+        gci_enabled=bool(raw_settings.get("gci_enabled", False)),
+        gci_url=str(raw_settings.get("gci_url") or "http://100.81.201.24:8810"),
+        gci_token_env=str(raw_settings.get("gci_token_env") or "HARNESS_GCI_TOKEN"),
+        gci_timeout_s=float(raw_settings.get("gci_timeout_s", 8.0)),
     )
 
     raw_models = _read_yaml(root / "config" / "models.yaml").get("models") or {}

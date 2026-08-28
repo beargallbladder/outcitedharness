@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import asyncio
+import os
+import socket
 from pathlib import Path
 from typing import Optional
 
@@ -43,6 +45,8 @@ from harness.workers.registry import load_registry
 app = typer.Typer(help="Local/cloud model tournament harness", no_args_is_help=True)
 fleet_app = typer.Typer(help="Validate the manually configured model fleet")
 app.add_typer(fleet_app, name="fleet")
+gci_app = typer.Typer(help="Global Code Intelligence service and repository registry")
+app.add_typer(gci_app, name="gci")
 console = Console()
 
 
@@ -767,6 +771,136 @@ def search_cmd(
     console.print(f"{result.backend}  {result.detail or 'ok'}  hits={len(result.hits)}")
     for hit in result.hits[:40]:
         console.print(f"{hit.path}:{hit.line}:{hit.text}")
+
+
+def _gci_client(cfg=None):
+    from harness.gci.client import GCIClient
+
+    cfg = cfg or _cfg()
+    token = os.environ.get(cfg.settings.gci_token_env, "")
+    return GCIClient(
+        cfg.settings.gci_url,
+        token=token,
+        timeout=cfg.settings.gci_timeout_s,
+    )
+
+
+@gci_app.command("serve")
+def gci_serve(
+    host: Optional[str] = typer.Option(None, help="Bind host (default: Spark Tailscale IP)"),
+    port: Optional[int] = typer.Option(None, help="Bind port (default: 8810)"),
+    db: Optional[str] = typer.Option(None, help="Independent GCI SQLite path"),
+) -> None:
+    """Run the isolated :8810 service. Requires HARNESS_GCI_TOKEN."""
+    from harness.gci.api import serve
+
+    serve(host=host, port=port, db_path=_path(db) if db else None)
+
+
+@gci_app.command("status")
+def gci_status() -> None:
+    """Show service health and registered repositories."""
+    client = _gci_client()
+    health = client.health()
+    console.print(
+        f"ready={health.get('ready')} paused={health.get('paused')} "
+        f"queue_depth={health.get('queue_depth')}"
+    )
+    for row in client.repos():
+        console.print(
+            f"{row['repo_id']} {row['source_host']}:{row['repo_root']} "
+            f"files={row['file_count']} state={str(row['state_hash'])[:12]}",
+            markup=False,
+        )
+
+
+def _gci_scan(repos: list[str] | None, *, wait: bool) -> None:
+    from harness.gci.scanner import build_snapshot, repo_id
+
+    cfg = _cfg()
+    approved = cfg.settings.code_index_repos
+    selected = repos or approved
+    if not selected:
+        raise typer.BadParameter("No approved repositories configured in code_index_repos")
+    client = _gci_client(cfg)
+    source_host = socket.gethostname()
+    for value in selected:
+        root = _path(value).resolve()
+        rid = repo_id(source_host, root)
+        previous = client.manifest(rid)
+        snapshot = build_snapshot(
+            root,
+            approved_roots=approved,
+            previous_files=previous.get("files") or {},
+            source_host=source_host,
+        )
+        if snapshot.state_hash == previous.get("state_hash"):
+            console.print(f"{root}: unchanged")
+            continue
+        job_id = client.submit(snapshot, refresh=bool(previous.get("state_hash")))
+        console.print(
+            f"{root}: queued {job_id} changed={len(snapshot.documents)} "
+            f"deleted={len(snapshot.deleted)} files={len(snapshot.file_hashes)}"
+        )
+        if wait:
+            row = client.wait_job(job_id)
+            console.print(f"{root}: {row['state']}")
+            if row["state"] != "complete":
+                raise typer.Exit(code=1)
+
+
+@gci_app.command("scan")
+def gci_scan(
+    repo: Optional[list[str]] = typer.Option(None, "--repo", help="Approved repo root"),
+    wait: bool = typer.Option(True, "--wait/--no-wait", help="Wait for each index job"),
+) -> None:
+    """Register and index approved repositories from this machine."""
+    _gci_scan(repo, wait=wait)
+
+
+@gci_app.command("refresh")
+def gci_refresh(
+    repo: Optional[list[str]] = typer.Option(None, "--repo", help="Approved repo root"),
+    wait: bool = typer.Option(True, "--wait/--no-wait", help="Wait for each index job"),
+) -> None:
+    """Push only changed source documents and deletions."""
+    _gci_scan(repo, wait=wait)
+
+
+@gci_app.command("search")
+def gci_search(
+    query: str = typer.Argument(...),
+    mode: str = typer.Option("semantic", help="semantic|exact|symbol"),
+    limit: int = typer.Option(8, min=1, max=100),
+    workspace: Optional[str] = typer.Option(None, help="Optional exact repo-root filter"),
+) -> None:
+    """Search registered repositories without granting filesystem access."""
+    hits = _gci_client().search(
+        query,
+        mode=mode,
+        limit=limit,
+        repo_root=str(_path(workspace).resolve()) if workspace else None,
+    )
+    for hit in hits:
+        console.print(
+            f"{hit.score:.3f} {hit.source_host}:{hit.repo_root}/{hit.path}:"
+            f"{hit.start_line}-{hit.end_line} [{hit.match_type}]",
+            markup=False,
+        )
+
+
+@gci_app.command("pause")
+def gci_pause() -> None:
+    """Pause background indexing after the current bounded encoder batch."""
+    _gci_client().pause(True)
+    console.print("GCI indexing paused")
+
+
+@gci_app.command("resume")
+def gci_resume() -> None:
+    """Resume background indexing."""
+    _gci_client().pause(False)
+    console.print("GCI indexing resumed")
 
 
 app.add_typer(task_app, name="task")

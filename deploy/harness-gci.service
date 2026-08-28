@@ -1,0 +1,29 @@
+[Unit]
+Description=Harness Global Code Intelligence
+After=network-online.target tailscaled.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=samkim
+Group=samkim
+WorkingDirectory=/home/samkim/harness-gci/app
+EnvironmentFile=/etc/harness-gci.env
+Environment=PYTHONDONTWRITEBYTECODE=1
+ExecStart=/home/samkim/harness-gci/venv/bin/harness gci serve
+Restart=on-failure
+RestartSec=10
+Nice=10
+IOSchedulingClass=idle
+CPUQuota=100%
+MemoryHigh=3G
+MemoryMax=4G
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/data/harness-gci
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+
+[Install]
+WantedBy=multi-user.target
