@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -9,12 +10,15 @@ from harness.config import AppConfig, ModelConfig, Settings
 from harness.dispatch import AcceptSpec, DispatchReport, Packet, Shot
 from harness.orch_loop import (
     MAX_CYCLES,
+    LoopState,
+    WorkingFile,
     command_allowed,
     commands_named_in_intent,
     load_loop_state,
     parse_argv,
     parse_command_outcome,
     select_verify_command,
+    working_set_diff_hash,
 )
 from harness.providers.base import ChatResult
 from harness.storage.db import Store
@@ -109,6 +113,15 @@ def _ready_messages(extra: list[dict] | None = None) -> list[dict]:
 
 
 def _edit_pair(index: int, result: str = "Successfully applied edit to src/app.py\n+ return 1") -> list[dict]:
+    return _edit_path_pair(index, "src/app.py", "fixed", result)
+
+
+def _edit_path_pair(
+    index: int,
+    path: str,
+    content: str,
+    result: str = "Successfully applied edit",
+) -> list[dict]:
     return [
         {
             "role": "assistant",
@@ -118,7 +131,7 @@ def _edit_pair(index: int, result: str = "Successfully applied edit to src/app.p
                     "type": "function",
                     "function": {
                         "name": "editor",
-                        "arguments": '{"path":"src/app.py","content":"fixed"}',
+                        "arguments": json.dumps({"path": path, "content": content}),
                     },
                 }
             ],
@@ -128,6 +141,10 @@ def _edit_pair(index: int, result: str = "Successfully applied edit to src/app.p
 
 
 def _verify_pair(index: int, result: str) -> list[dict]:
+    return _command_pair(index, "pytest tests/test_x.py", result)
+
+
+def _command_pair(index: int, command: str, result: str) -> list[dict]:
     return [
         {
             "role": "assistant",
@@ -137,7 +154,7 @@ def _verify_pair(index: int, result: str) -> list[dict]:
                     "type": "function",
                     "function": {
                         "name": "execute_command",
-                        "arguments": '{"command":"pytest tests/test_x.py","timeout":60}',
+                        "arguments": json.dumps({"command": command, "timeout": 60}),
                     },
                 }
             ],
@@ -211,6 +228,15 @@ def _report(command: str = "pytest tests/test_x.py", text: str = "replace the re
     return DispatchReport(run_id="loop-test", intent=FIX, packets=[packet], shots=[shot])
 
 
+def _report_commands(commands: list[str]) -> DispatchReport:
+    report = _report(command="")
+    report.packets[0].accept = AcceptSpec(
+        commands=tuple(commands),
+        invariants=("min_chars 10",),
+    )
+    return report
+
+
 def _edit_call() -> list[dict]:
     return [
         {
@@ -239,10 +265,29 @@ def _patch_loop(monkeypatch, report: DispatchReport | None = None, captured: dic
         captured["planned"] = True
         return _edit_call()
 
+    packet_commands = [
+        command
+        for packet in payload.packets
+        for command in packet.accept.commands
+    ]
+    contract = SimpleNamespace(
+        repo_root="/tmp/test-repo",
+        fingerprint="contract-test",
+        configs=[".harness.toml"],
+        commands=[
+            SimpleNamespace(command=command, timeout_s=60)
+            for command in packet_commands
+        ],
+    )
+
     monkeypatch.setattr("harness.gateway.orch.pick_foreman", pick)
     monkeypatch.setattr("harness.gateway.orch.run_dispatch", dispatch)
     monkeypatch.setattr("harness.gateway.orch.plan_actions", actions)
     monkeypatch.setattr("harness.gateway.orch.plan_orch", dispatch)
+    monkeypatch.setattr(
+        "harness.gateway.orch.build_repo_contract",
+        lambda *_a, **_k: contract if packet_commands else None,
+    )
     return captured
 
 
@@ -295,6 +340,21 @@ def test_parse_command_outcome_reads_cline_payloads_and_fails_closed():
     assert timed
 
 
+def test_diff_hash_preserves_exact_file_state():
+    state = LoopState()
+    state.working_set.files_changed = ["src/app.py"]
+    state.working_set.files_read["src/app.py"] = WorkingFile(
+        content="VALUE = 'A'\n",
+        content_hash="hash-A",
+    )
+    first = working_set_diff_hash(state)
+    state.working_set.files_read["src/app.py"] = WorkingFile(
+        content="value = 'a'\n",
+        content_hash="hash-a",
+    )
+    assert working_set_diff_hash(state) != first
+
+
 @pytest.mark.asyncio
 async def test_happy_path_persists_across_run_orch_calls(tmp_path: Path, monkeypatch):
     from harness.gateway.orch import run_orch
@@ -338,6 +398,119 @@ async def test_happy_path_persists_across_run_orch_calls(tmp_path: Path, monkeyp
     assert "exit_code: 0" in third.text
     again = load_loop_state(svc, svc.session_task().task_id)
     assert again is not None and again.phase == "verified"
+
+
+@pytest.mark.asyncio
+async def test_all_commands_verify_the_same_diff(tmp_path: Path, monkeypatch):
+    from harness.gateway.orch import run_orch
+
+    cfg = _cfg(tmp_path)
+    commands = ["pytest tests/test_x.py", "ruff check src"]
+    _patch_loop(monkeypatch, report=_report_commands(commands))
+    tools = _tools()
+    edit = _edit_pair(0)
+
+    await run_orch(cfg, FIX, messages=_ready_messages(), tools=tools)
+    first_verify = await run_orch(cfg, FIX, messages=_ready_messages(edit), tools=tools)
+    first_args = json.loads(first_verify.tool_calls[0]["function"]["arguments"])
+    assert first_args["command"] == commands[0]
+
+    first_pass = _command_pair(0, commands[0], "1 passed\nExit code: 0")
+    second_verify = await run_orch(
+        cfg,
+        FIX,
+        messages=_ready_messages(edit + first_pass),
+        tools=tools,
+    )
+    second_args = json.loads(second_verify.tool_calls[0]["function"]["arguments"])
+    assert second_args["command"] == commands[1]
+    assert second_verify.loop_phase == "verify"
+
+    svc = TaskService(Store(cfg.settings.db_path))
+    mid = load_loop_state(svc, svc.session_task().task_id)
+    assert mid is not None
+    assert mid.verify_index == 1
+    assert len(mid.verification_results) == 1
+    assert mid.verification_results[0].diff_hash == mid.active_diff_hash
+
+    second_pass = _command_pair(1, commands[1], "All checks passed\nExit code: 0")
+    done = await run_orch(
+        cfg,
+        FIX,
+        messages=_ready_messages(edit + first_pass + second_pass),
+        tools=tools,
+    )
+    assert done.loop_phase == "verified"
+    state = load_loop_state(svc, svc.session_task().task_id)
+    assert state is not None
+    assert [(row.command, row.exit_code) for row in state.verification_results] == [
+        (commands[0], 0),
+        (commands[1], 0),
+    ]
+    assert {row.diff_hash for row in state.verification_results} == {
+        state.active_diff_hash
+    }
+
+
+@pytest.mark.asyncio
+async def test_mutation_invalidates_prior_command_success(tmp_path: Path, monkeypatch):
+    from harness.gateway.orch import run_orch
+
+    cfg = _cfg(tmp_path)
+    commands = ["pytest tests/test_x.py", "ruff check src"]
+    _patch_loop(monkeypatch, report=_report_commands(commands))
+    tools = _tools()
+    edit = _edit_pair(0)
+    pytest_pass = _command_pair(0, commands[0], "1 passed\nExit code: 0")
+    ruff_fail = _command_pair(1, commands[1], "E501 too long\nExit code: 1")
+
+    await run_orch(cfg, FIX, messages=_ready_messages(), tools=tools)
+    await run_orch(cfg, FIX, messages=_ready_messages(edit), tools=tools)
+    await run_orch(cfg, FIX, messages=_ready_messages(edit + pytest_pass), tools=tools)
+    before_failure = load_loop_state(
+        TaskService(Store(cfg.settings.db_path)),
+        TaskService(Store(cfg.settings.db_path)).session_task().task_id,
+    )
+    assert before_failure is not None
+    original_diff_hash = before_failure.active_diff_hash
+    failed = await run_orch(
+        cfg,
+        FIX,
+        messages=_ready_messages(edit + pytest_pass + ruff_fail),
+        tools=tools,
+    )
+    assert failed.loop_phase == "repair"
+
+    history = edit + pytest_pass + ruff_fail + _refresh_pair(0)
+    repair = await run_orch(cfg, FIX, messages=_ready_messages(history), tools=tools)
+    assert repair.loop_phase == "apply"
+
+    repaired_edit = _edit_path_pair(
+        1,
+        "src/generated_helper.py",
+        "VALUE = 'new untracked task file'\n",
+        "Successfully created src/generated_helper.py",
+    )
+    verify_again = await run_orch(
+        cfg,
+        FIX,
+        messages=_ready_messages(history + repaired_edit),
+        tools=tools,
+    )
+    args = json.loads(verify_again.tool_calls[0]["function"]["arguments"])
+    assert args["command"] == commands[0]
+    state = load_loop_state(
+        TaskService(Store(cfg.settings.db_path)),
+        TaskService(Store(cfg.settings.db_path)).session_task().task_id,
+    )
+    assert state is not None
+    assert state.verify_index == 0
+    assert state.verification_results == []
+    assert state.active_diff_hash != original_diff_hash
+    assert "src/generated_helper.py" in state.working_set.files_changed
+    helper = state.working_set.files_read["src/generated_helper.py"]
+    assert helper.content == "VALUE = 'new untracked task file'\n"
+    assert len(helper.content_hash) == 64
 
 
 @pytest.mark.asyncio

@@ -56,10 +56,10 @@ FOREMAN_SYSTEM = (
     '"files":[],"accept":{"commands":[],"invariants":["text PONG"]}}. '
     "expect_tool must be null. "
     "accept.invariants is required. Use \"text SUBSTR\" for a phrase the answer must contain. "
-    "If INTENT is a code change (fix/implement/edit/add/remove), accept.commands MUST contain "
-    "one allowlisted command Cline will run after the patch: pytest, python -m pytest, ruff, "
-    "eslint, tsc, npx tsc, npm run test|lint|typecheck, pnpm test. Empty commands cannot be "
-    "verified. Review-only jobs leave commands empty. "
+    "For a code change, copy an allowlisted verification command into accept.commands only "
+    "when INTENT explicitly names it. Otherwise leave commands empty; the harness resolves "
+    "its deterministic RepoContract. Never invent a shell command. Review-only jobs also "
+    "leave commands empty. "
     "Each prompt is the full brief the coder needs. Under 1200 characters. "
     "One independent written deliverable per packet."
 )
@@ -134,10 +134,10 @@ FOREMAN_ORCH_SYSTEM = (
     "If THREAD already has enough file contents, or the question needs no repo, dispatch: "
     '{"mode":"dispatch","packets":[{"id":"p1","title":"...","prompt":"...","expect_tool":null,'
     '"files":[],"accept":{"commands":[],"invariants":["text PONG"]}}]}. '
-    "If INTENT is a code change (fix/implement/edit/add/remove), accept.commands MUST contain "
-    "one allowlisted command Cline will run after the patch: pytest, python -m pytest, ruff, "
-    "eslint, tsc, npx tsc, npm run test|lint|typecheck, pnpm test. Empty commands cannot be "
-    "verified and the edit will be refused. Review-only jobs leave commands empty. "
+    "For a code change, copy an allowlisted verification command into accept.commands only "
+    "when INTENT explicitly names it. Otherwise leave commands empty; the harness resolves "
+    "its deterministic RepoContract. Never invent a shell command. Review-only jobs also "
+    "leave commands empty. "
     "If THREAD tool results show the workspace does NOT contain the requested files, dispatch ONE "
     "packet: report the mismatch, quote the listing, accept invariant \"text workspace\". "
     "That missing-files packet is only for empty ls or explicit missing-path errors. "

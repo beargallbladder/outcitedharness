@@ -56,6 +56,34 @@ harness judge RUN_ID CASE_ID MODEL_KEY PASS|PARTIAL|FAIL
 
 `harness health` probes configured chat endpoints only. It does not repair anything.
 
+## Repository verification contract
+
+For coding tasks, `harness-orch` first uses an explicitly named allowlisted
+verification command. Otherwise it deterministically compiles a repository
+contract from `pyproject.toml`, `pytest.ini`, `package.json`, workspace/lock
+files, TypeScript/Ruff configuration, and single-line verifier commands in CI
+workflows. If no safe command can be selected, the task is blocked before any
+edit.
+
+Repositories can override inference with a checked-in `.harness.toml`:
+
+```toml
+[verification]
+required = ["unit", "lint"]
+
+[verification.commands.unit]
+argv = [".venv/bin/pytest", "-q"]
+timeout = 60
+
+[verification.commands.lint]
+argv = [".venv/bin/ruff", "check", "."]
+timeout = 60
+```
+
+Only verifier executables and named package scripts on the harness allowlist
+are accepted. Every required command must exit zero against the same current
+file-state hash; any mutation clears earlier verification results.
+
 ## Case format
 
 ```text

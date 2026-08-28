@@ -85,9 +85,13 @@ class WorkingFile:
 @dataclass
 class WorkingSet:
     objective: str = ""
+    repo_root: str = ""
+    contract_fingerprint: str = ""
+    contract_configs: list[str] = field(default_factory=list)
     acceptance_commands: list[str] = field(default_factory=list)
     files_read: dict[str, WorkingFile] = field(default_factory=dict)
     files_changed: list[str] = field(default_factory=list)
+    stale_files: list[str] = field(default_factory=list)
     current_diff: str = ""
     refresh_pending: list[str] = field(default_factory=list)
     refresh_diff_pending: bool = False
@@ -98,6 +102,11 @@ class WorkingSet:
         files = data.get("files_read") if isinstance(data.get("files_read"), dict) else {}
         return cls(
             objective=str(data.get("objective") or ""),
+            repo_root=str(data.get("repo_root") or ""),
+            contract_fingerprint=str(data.get("contract_fingerprint") or ""),
+            contract_configs=[
+                str(path) for path in (data.get("contract_configs") or []) if str(path).strip()
+            ],
             acceptance_commands=[
                 str(c) for c in (data.get("acceptance_commands") or []) if str(c).strip()
             ],
@@ -109,6 +118,9 @@ class WorkingSet:
             files_changed=[
                 str(path) for path in (data.get("files_changed") or []) if str(path).strip()
             ],
+            stale_files=[
+                str(path) for path in (data.get("stale_files") or []) if str(path).strip()
+            ],
             current_diff=str(data.get("current_diff") or ""),
             refresh_pending=[
                 str(path) for path in (data.get("refresh_pending") or []) if str(path).strip()
@@ -118,11 +130,31 @@ class WorkingSet:
 
 
 @dataclass
+class VerificationRecord:
+    diff_hash: str = ""
+    command: str = ""
+    exit_code: int | None = None
+
+    @classmethod
+    def from_dict(cls, raw: Any) -> VerificationRecord:
+        data = raw if isinstance(raw, dict) else {}
+        return cls(
+            diff_hash=str(data.get("diff_hash") or ""),
+            command=str(data.get("command") or ""),
+            exit_code=data.get("exit_code") if data.get("exit_code") is not None else None,
+        )
+
+
+@dataclass
 class LoopState:
     phase: Phase = "gather"
     intent: str = ""
     iteration: int = 0
     commands: list[str] = field(default_factory=list)
+    command_timeouts: dict[str, int] = field(default_factory=dict)
+    verify_index: int = 0
+    active_diff_hash: str | None = None
+    verification_results: list[VerificationRecord] = field(default_factory=list)
     last_cmd: str | None = None
     last_exit: int | None = None
     timed_out: bool = False
@@ -161,6 +193,22 @@ class LoopState:
             intent=str(data.get("intent") or ""),
             iteration=int(data.get("iteration") or 0),
             commands=[str(c) for c in commands if str(c).strip()],
+            command_timeouts={
+                str(command): int(timeout)
+                for command, timeout in (
+                    data.get("command_timeouts")
+                    if isinstance(data.get("command_timeouts"), dict)
+                    else {}
+                ).items()
+                if str(command).strip()
+            },
+            verify_index=int(data.get("verify_index") or 0),
+            active_diff_hash=data.get("active_diff_hash") or None,
+            verification_results=[
+                VerificationRecord.from_dict(row)
+                for row in (data.get("verification_results") or [])
+                if isinstance(row, dict)
+            ],
             last_cmd=data.get("last_cmd") or None,
             last_exit=data.get("last_exit") if data.get("last_exit") is not None else None,
             timed_out=bool(data.get("timed_out")),
@@ -256,16 +304,23 @@ def command_allowed(command: str) -> bool:
 
 
 def select_verify_command(commands: list[str]) -> tuple[str | None, str]:
+    selected, reason = select_verify_commands(commands)
+    return (selected[0], "") if selected else (None, reason)
+
+
+def select_verify_commands(commands: list[str]) -> tuple[list[str], str]:
     usable = [str(c).strip() for c in commands if str(c).strip()]
     if not usable:
-        return None, "no accept.commands"
+        return [], "no accept.commands"
+    selected: list[str] = []
     for raw in usable:
         if parse_argv(raw) is None:
-            return None, "unsafe or unparseable command"
-        if command_allowed(raw):
-            return raw, ""
-        return None, "command not on allowlist"
-    return None, "no allowed accept.commands"
+            return [], "unsafe or unparseable command"
+        if not command_allowed(raw):
+            return [], "command not on allowlist"
+        if raw not in selected:
+            selected.append(raw)
+    return selected, ""
 
 
 _NEGATED_VERIFY_RE = re.compile(
@@ -431,6 +486,24 @@ def last_run_since_write(messages: list[Any]) -> tuple[str, dict[str, Any], str]
     return latest
 
 
+def last_run_for_command_since_write(
+    messages: list[Any], command: str
+) -> tuple[str, dict[str, Any], str] | None:
+    """Latest result for COMMAND after the latest mutation."""
+    exchanges = last_tool_exchanges(messages)
+    write_at = -1
+    for index, (name, _args, _text) in enumerate(exchanges):
+        if name.lower() in WRITE_TOOLS:
+            write_at = index
+    if write_at < 0:
+        return None
+    latest: tuple[str, dict[str, Any], str] | None = None
+    for name, args, text in exchanges[write_at + 1 :]:
+        if name.lower() in _RUN_TOOLS and command in _command_args(args):
+            latest = (name, args, text)
+    return latest
+
+
 def _coerce_exit(value: Any) -> int | None:
     if value is None or isinstance(value, bool):
         return None
@@ -531,14 +604,19 @@ def failure_hash(state: LoopState) -> str:
     )
 
 
-def verify_tool_calls(command: str, catalog: dict[str, tuple[str, ...]]) -> list[dict[str, Any]]:
+def verify_tool_calls(
+    command: str,
+    catalog: dict[str, tuple[str, ...]],
+    timeout_s: int = VERIFY_TIMEOUT_S,
+) -> list[dict[str, Any]]:
+    timeout = max(1, min(int(timeout_s), 600))
     raw = [
         {
             "name": "execute_command",
             "arguments": {
                 "command": command,
-                "timeout": VERIFY_TIMEOUT_S,
-                "timeout_s": VERIFY_TIMEOUT_S,
+                "timeout": timeout,
+                "timeout_s": timeout,
             },
         }
     ]
@@ -609,6 +687,9 @@ def remember_reads(state: LoopState, messages: list[Any]) -> None:
                 content=stored,
                 content_hash=full_hash,
             )
+            state.working_set.stale_files = [
+                stale for stale in state.working_set.stale_files if stale != path
+            ]
 
 
 def _command_args(args: dict[str, Any]) -> list[str]:
@@ -652,6 +733,9 @@ def complete_working_set_refresh(state: LoopState, messages: list[Any]) -> bool:
                         + "\n[WORKING FILE TRUNCATED BY HARNESS]"
                     )
                 state.working_set.files_read[path] = WorkingFile(stored, full_hash)
+                state.working_set.stale_files = [
+                    stale for stale in state.working_set.stale_files if stale != path
+                ]
                 seen.add(path)
         if lower in _RUN_TOOLS and any(
             command.startswith("git diff --") for command in _command_args(args)
@@ -665,20 +749,45 @@ def complete_working_set_refresh(state: LoopState, messages: list[Any]) -> bool:
     return not state.working_set.refresh_pending and not state.working_set.refresh_diff_pending
 
 
+def working_set_diff_hash(state: LoopState) -> str:
+    """Content-state hash shared by every verifier in one logical cycle."""
+    digest = hashlib.sha256()
+    has_snapshot = False
+    for path in sorted(state.working_set.files_changed):
+        snapshot = state.working_set.files_read.get(path)
+        digest.update(path.encode("utf-8", errors="replace"))
+        digest.update(b"\0")
+        digest.update(
+            (snapshot.content_hash if snapshot else "(unread)").encode(
+                "utf-8", errors="replace"
+            )
+        )
+        digest.update(b"\0")
+        has_snapshot = has_snapshot or snapshot is not None
+    if not has_snapshot:
+        digest.update(
+            state.working_set.current_diff.encode("utf-8", errors="replace")
+        )
+    return digest.hexdigest()[:16]
+
+
 def refresh_working_set_calls(
-    state: LoopState, catalog: dict[str, tuple[str, ...]]
+    state: LoopState,
+    catalog: dict[str, tuple[str, ...]],
+    paths: list[str] | None = None,
 ) -> list[dict[str, Any]]:
-    paths = [
+    selected = paths if paths is not None else state.working_set.files_changed
+    safe_paths = [
         path
-        for path in state.working_set.files_changed
+        for path in selected
         if _normalized_workspace_path(path) == path
     ][:5]
-    if not paths:
+    if not safe_paths:
         return []
     raw: list[dict[str, Any]] = [
-        {"name": "read_file", "arguments": {"path": path}} for path in paths
+        {"name": "read_file", "arguments": {"path": path}} for path in safe_paths
     ]
-    diff_command = "git diff -- " + " ".join(shlex.quote(path) for path in paths)
+    diff_command = "git diff -- " + " ".join(shlex.quote(path) for path in safe_paths)
     raw.append(
         {
             "name": "execute_command",
@@ -713,6 +822,20 @@ def remember_write(state: LoopState, args: dict[str, Any], text: str) -> None:
     )
     if path and path not in state.working_set.files_changed:
         state.working_set.files_changed.append(path)
+    content = args.get("content")
+    if content is None:
+        content = args.get("new_content")
+    if path and isinstance(content, str):
+        full_hash = hashlib.sha256(content.encode("utf-8", errors="replace")).hexdigest()
+        stored = content
+        if len(stored) > WORKING_FILE_MAX_CHARS:
+            stored = stored[:WORKING_FILE_MAX_CHARS] + "\n[WORKING FILE TRUNCATED BY HARNESS]"
+        state.working_set.files_read[path] = WorkingFile(stored, full_hash)
+        state.working_set.stale_files = [
+            stale for stale in state.working_set.stale_files if stale != path
+        ]
+    elif path and path not in state.working_set.stale_files:
+        state.working_set.stale_files.append(path)
     # Until git diff returns, retain the edit result as explicit provisional state.
     state.working_set.current_diff = tail_text(text, 4000)
 

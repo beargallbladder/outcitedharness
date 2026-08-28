@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from harness.task.code_index import normalize_repo_root
+from harness.repo_contract import build_repo_contract
 
 from harness.dispatch import (
     DispatchReport,
@@ -31,11 +32,11 @@ from harness.orch_loop import (
     MAX_CYCLES,
     TERMINAL,
     LoopState,
-    commands_from_packets,
+    VerificationRecord,
     commands_named_in_intent,
     complete_working_set_refresh,
     failure_hash,
-    last_run_since_write,
+    last_run_for_command_since_write,
     last_tool_exchanges,
     last_write_result,
     load_loop_state,
@@ -47,10 +48,11 @@ from harness.orch_loop import (
     refresh_working_set_calls,
     repair_packets,
     save_loop_state,
-    select_verify_command,
+    select_verify_commands,
     shot_texts,
     terminal_text,
     verify_tool_calls,
+    working_set_diff_hash,
     working_set_text,
 )
 
@@ -397,20 +399,33 @@ async def _emit_apply(
     state: LoopState,
     *,
     picked,
+    workspace: Path | None = None,
 ) -> OrchResult | None:
     if state.iteration >= MAX_CYCLES:
         state.phase = "exhausted"
         return _terminal(svc, task_id, state)
-    if report is not None:
-        state.commands = commands_from_packets(report.packets) or state.commands
-    if not select_verify_command(state.commands)[0]:
-        seeded = commands_named_in_intent(intent)
-        if seeded:
-            state.commands = list(dict.fromkeys([*state.commands, *seeded]))
+    if state.iteration == 0:
+        explicit = commands_named_in_intent(intent)
+        contract = build_repo_contract(workspace)
+        if explicit:
+            state.commands = explicit
+            state.command_timeouts = {command: 60 for command in explicit}
+        elif contract and contract.commands:
+            state.commands = [spec.command for spec in contract.commands]
+            state.command_timeouts = {
+                spec.command: spec.timeout_s for spec in contract.commands
+            }
+        else:
+            state.commands = []
+            state.command_timeouts = {}
+        if contract:
+            state.working_set.repo_root = contract.repo_root
+            state.working_set.contract_fingerprint = contract.fingerprint
+            state.working_set.contract_configs = list(contract.configs)
     state.working_set.objective = state.working_set.objective or intent
     state.working_set.acceptance_commands = list(state.commands)
-    command, reason = select_verify_command(state.commands)
-    if not command:
+    commands, reason = select_verify_commands(state.commands)
+    if not commands:
         state.phase = "blocked"
         state.blocked_reason = reason
         return _terminal(svc, task_id, state)
@@ -429,7 +444,7 @@ async def _emit_apply(
     )
     if not calls:
         return None
-    state.last_cmd = command
+    state.last_cmd = commands[0]
     state.iteration += 1
     if state.iteration > MAX_CYCLES:
         state.phase = "exhausted"
@@ -462,18 +477,32 @@ async def _advance_after_apply(
         state.phase = "exhausted"
         state.blocked_reason = state.blocked_reason or "empty mutation after repair"
         return _terminal(svc, task_id, state)
-    command, reason = select_verify_command(state.commands)
-    if not command:
+    commands, reason = select_verify_commands(state.commands)
+    if not commands:
         state.phase = "blocked"
         state.blocked_reason = reason
         return _terminal(svc, task_id, state)
-    calls = verify_tool_calls(command, catalog)
-    if not calls:
-        state.phase = "blocked"
-        state.blocked_reason = "no Cline run tool available"
-        return _terminal(svc, task_id, state)
+    state.verify_index = 0
+    state.active_diff_hash = None
+    state.verification_results = []
     state.phase = "verify"
-    state.last_cmd = command
+    state.last_cmd = commands[0]
+    calls = refresh_working_set_calls(
+        state,
+        catalog,
+        paths=list(state.working_set.stale_files),
+    )
+    if not calls:
+        state.active_diff_hash = working_set_diff_hash(state)
+        calls = verify_tool_calls(
+            state.last_cmd,
+            catalog,
+            state.command_timeouts.get(state.last_cmd, 60),
+        )
+        if not calls:
+            state.phase = "blocked"
+            state.blocked_reason = "no Cline run tool available"
+            return _terminal(svc, task_id, state)
     save_loop_state(svc, task_id, state)
     return _with_loop(OrchResult(tool_calls=calls), state)
 
@@ -490,17 +519,73 @@ async def _advance_after_verify(
     state: LoopState,
     picked,
 ) -> OrchResult:
-    run = last_run_since_write(messages)
+    if not complete_working_set_refresh(state, messages):
+        return _waiting(state, "post-mutation working-set snapshot")
+    commands, reason = select_verify_commands(state.commands)
+    if not commands:
+        state.phase = "blocked"
+        state.blocked_reason = reason
+        return _terminal(svc, task_id, state)
+    if state.active_diff_hash is None:
+        state.active_diff_hash = working_set_diff_hash(state)
+    if state.verify_index >= len(commands):
+        state.phase = "blocked"
+        state.blocked_reason = "invalid verification cursor"
+        return _terminal(svc, task_id, state)
+    command = commands[state.verify_index]
+    state.last_cmd = command
+    run = last_run_for_command_since_write(messages, command)
     if run is None:
-        return _waiting(state, "Cline verification result")
+        calls = verify_tool_calls(
+            command,
+            catalog,
+            state.command_timeouts.get(command, 60),
+        )
+        if not calls:
+            state.phase = "blocked"
+            state.blocked_reason = "no Cline run tool available"
+            return _terminal(svc, task_id, state)
+        save_loop_state(svc, task_id, state)
+        return _with_loop(OrchResult(tool_calls=calls), state)
     exit_code, timed_out, stdout, stderr = parse_command_outcome(run[2])
     state.last_exit = exit_code
     state.timed_out = timed_out
     state.stdout_tail = stdout
     state.stderr_tail = stderr
     if (not timed_out) and exit_code == 0:
-        state.phase = "verified"
-        return _terminal(svc, task_id, state)
+        state.verification_results.append(
+            VerificationRecord(
+                diff_hash=state.active_diff_hash,
+                command=command,
+                exit_code=0,
+            )
+        )
+        state.verify_index += 1
+        if state.verify_index == len(commands):
+            expected = {(state.active_diff_hash, item) for item in commands}
+            observed = {
+                (record.diff_hash, record.command)
+                for record in state.verification_results
+                if record.exit_code == 0
+            }
+            if observed == expected:
+                state.phase = "verified"
+                return _terminal(svc, task_id, state)
+            state.phase = "blocked"
+            state.blocked_reason = "verification evidence does not match current diff"
+            return _terminal(svc, task_id, state)
+        state.last_cmd = commands[state.verify_index]
+        calls = verify_tool_calls(
+            state.last_cmd,
+            catalog,
+            state.command_timeouts.get(state.last_cmd, 60),
+        )
+        if not calls:
+            state.phase = "blocked"
+            state.blocked_reason = "no Cline run tool available"
+            return _terminal(svc, task_id, state)
+        save_loop_state(svc, task_id, state)
+        return _with_loop(OrchResult(tool_calls=calls), state)
     remember_failure(state)
     fail_fp = failure_hash(state)
     same_fail = bool(state.last_failure_hash and fail_fp == state.last_failure_hash)
@@ -709,6 +794,7 @@ async def run_orch(
             task_id,
             state,
             picked=picked,
+            workspace=workspace,
         )
         if applied is not None:
             return applied

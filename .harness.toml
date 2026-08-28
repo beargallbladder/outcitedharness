@@ -1,0 +1,6 @@
+[verification]
+required = ["unit"]
+
+[verification.commands.unit]
+argv = [".venv/bin/pytest", "-q"]
+timeout = 60
