@@ -397,6 +397,13 @@ async def _emit_apply(
     if state.iteration >= MAX_CYCLES:
         state.phase = "exhausted"
         return _terminal(svc, task_id, state)
+    if report is not None:
+        state.commands = commands_from_packets(report.packets) or state.commands
+    command, reason = select_verify_command(state.commands)
+    if not command:
+        state.phase = "blocked"
+        state.blocked_reason = reason
+        return _terminal(svc, task_id, state)
     texts = shot_texts(report, require_qa=False)
     if not texts or picked is None:
         return None
@@ -412,8 +419,7 @@ async def _emit_apply(
     )
     if not calls:
         return None
-    if report is not None:
-        state.commands = commands_from_packets(report.packets) or state.commands
+    state.last_cmd = command
     state.iteration += 1
     if state.iteration > MAX_CYCLES:
         state.phase = "exhausted"

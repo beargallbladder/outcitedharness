@@ -42,7 +42,15 @@ TERMINAL = frozenset({"verified", "blocked", "exhausted"})
 
 _UNSAFE = re.compile(r"""[;&|`$<>]|&&|\|\||\$\(""")
 _NPM_SCRIPT = re.compile(r"^(typecheck|lint|test|test:[A-Za-z0-9_-]+|check)$")
-_EXIT_RE = re.compile(r"(?i)exit(?:[\s_-]*code)?\s*[:=]\s*(-?\d+)")
+_EXIT_RES = (
+    re.compile(r"<exit_code>\s*(-?\d+)\s*</exit_code>", re.I),
+    re.compile(r"(?i)exit(?:[\s_-]*code)?\s*[:=]\s*(-?\d+)"),
+    re.compile(
+        r"(?i)(?:command|process)\s+(?:completed|finished|ended|exited|failed)"
+        r"[^\n]{0,80}(?:exit(?:[\s_-]*code)?|code)\s*[:=]?\s*(-?\d+)"
+    ),
+    re.compile(r"(?i)exited with (?:status |code )?(-?\d+)"),
+)
 _TIMEOUT_RE = re.compile(r"(?i)\b(timed?\s*out|timeout(?:error)?)\b")
 _EMPTY_MUTATION = re.compile(
     r"(?i)(no changes?|did not change|no modifications?|empty diff|nothing to (?:apply|change))"
@@ -319,35 +327,84 @@ def last_run_since_write(messages: list[Any]) -> tuple[str, dict[str, Any], str]
     return latest
 
 
-def parse_command_outcome(text: str) -> tuple[int | None, bool, str, str]:
-    """Return (exit_code, timed_out, stdout_tail, stderr_tail)."""
-    blob = text or ""
-    timed_out = bool(_TIMEOUT_RE.search(blob))
+def _coerce_exit(value: Any) -> int | None:
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _exit_from_mapping(data: dict[str, Any]) -> int | None:
+    for key in ("exit_code", "exitCode", "exitcode"):
+        if key in data and data[key] is not None:
+            code = _coerce_exit(data[key])
+            if code is not None:
+                return code
+    return None
+
+
+def _flatten_command_blob(blob: str) -> tuple[str, int | None, bool]:
+    """Unwrap Cline JSON wrappers. Return (text, exit_from_json, timed_out)."""
+    raw = blob or ""
+    timed_out = False
     exit_code: int | None = None
-    match = _EXIT_RE.search(blob)
-    if match:
-        exit_code = int(match.group(1))
-    else:
-        try:
-            data = json.loads(blob)
-        except json.JSONDecodeError:
-            data = None
-        if isinstance(data, dict):
-            for key in ("exit_code", "exitCode", "code"):
-                if key in data and data[key] is not None:
-                    try:
-                        exit_code = int(data[key])
-                    except (TypeError, ValueError):
-                        pass
-                    break
-            if data.get("timeout") or data.get("timed_out"):
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError:
+        return raw, None, False
+    chunks: list[str] = []
+
+    def walk(node: Any) -> None:
+        nonlocal exit_code, timed_out
+        if isinstance(node, dict):
+            found = _exit_from_mapping(node)
+            if found is not None:
+                exit_code = found
+            if node.get("timeout") or node.get("timed_out"):
                 timed_out = True
-            stdout = str(data.get("stdout") or data.get("output") or blob)
-            stderr = str(data.get("stderr") or "")
-            return exit_code, timed_out, tail_text(stdout), tail_text(stderr)
+            for key in ("stdout", "stderr", "output", "result", "text", "content"):
+                value = node.get(key)
+                if isinstance(value, str) and value.strip():
+                    chunks.append(value)
+            for value in node.values():
+                if isinstance(value, (dict, list)):
+                    walk(value)
+        elif isinstance(node, list):
+            for item in node:
+                walk(item)
+        elif isinstance(node, str) and node.strip():
+            chunks.append(node)
+
+    walk(data)
+    text = "\n".join(chunks) if chunks else raw
+    return text, exit_code, timed_out
+
+
+def parse_command_outcome(text: str) -> tuple[int | None, bool, str, str]:
+    """Return (exit_code, timed_out, stdout_tail, stderr_tail).
+
+    Fail closed: a missing exit code is not 0. 'passed' in pytest output is not enough.
+    """
+    blob = text or ""
+    flat, json_exit, json_timeout = _flatten_command_blob(blob)
+    timed_out = json_timeout or bool(_TIMEOUT_RE.search(blob)) or bool(_TIMEOUT_RE.search(flat))
+    exit_code = json_exit
+    if exit_code is None:
+        last: int | None = None
+        for pattern in _EXIT_RES:
+            for match in pattern.finditer(flat):
+                last = int(match.group(1))
+        if last is None:
+            for pattern in _EXIT_RES:
+                for match in pattern.finditer(blob):
+                    last = int(match.group(1))
+        exit_code = last
     if timed_out and exit_code is None:
         exit_code = None
-    return exit_code, timed_out, tail_text(blob), ""
+    stdout = tail_text(flat or blob)
+    return exit_code, timed_out, stdout, ""
 
 
 def parse_mutation(text: str) -> tuple[bool, str]:

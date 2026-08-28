@@ -12,6 +12,7 @@ from harness.orch_loop import (
     command_allowed,
     load_loop_state,
     parse_argv,
+    parse_command_outcome,
     select_verify_command,
 )
 from harness.providers.base import ChatResult
@@ -214,6 +215,29 @@ def test_allowlist_rejects_shell_and_unknowns():
     command, reason = select_verify_command(["pytest tests; rm -rf /tmp/x"])
     assert command is None
     assert "unsafe" in reason
+
+
+def test_parse_command_outcome_reads_cline_payloads_and_fails_closed():
+    code, timed, out, _err = parse_command_outcome("1 passed\nExit code: 0")
+    assert code == 0 and not timed
+    code, timed, out, _err = parse_command_outcome(
+        json.dumps([{"query": "pytest tests/test_x.py", "result": "1 passed", "exitCode": 0}])
+    )
+    assert code == 0
+    assert "1 passed" in out
+    code, timed, out, _err = parse_command_outcome(
+        "<terminal_output>ok</terminal_output>\n<exit_code>0</exit_code>"
+    )
+    assert code == 0
+    code, timed, out, _err = parse_command_outcome(
+        "Command completed with exit code 1\nFAILED tests/test_x.py"
+    )
+    assert code == 1
+    code, timed, out, _err = parse_command_outcome("===== 1 passed in 0.02s =====")
+    assert code is None
+    assert not timed
+    code, timed, out, _err = parse_command_outcome("pytest timed out after 60s")
+    assert timed
 
 
 @pytest.mark.asyncio
@@ -447,8 +471,7 @@ async def test_missing_command_blocks_and_does_not_invent(tmp_path: Path, monkey
     cfg = _cfg(tmp_path)
     _patch_loop(monkeypatch, report=_report(command=""))
     tools = _tools()
-    await run_orch(cfg, FIX, messages=_ready_messages(), tools=tools)
-    result = await run_orch(cfg, FIX, messages=_ready_messages(_edit_pair(0)), tools=tools)
+    result = await run_orch(cfg, FIX, messages=_ready_messages(), tools=tools)
     assert result.loop_phase == "blocked"
     assert "status: blocked" in result.text
     assert not result.tool_calls
@@ -462,8 +485,7 @@ async def test_unsafe_command_is_blocked_and_never_returned(tmp_path: Path, monk
     cfg = _cfg(tmp_path)
     _patch_loop(monkeypatch, report=_report(command="pytest tests; rm -rf /tmp/harness-unsafe"))
     tools = _tools()
-    await run_orch(cfg, FIX, messages=_ready_messages(), tools=tools)
-    result = await run_orch(cfg, FIX, messages=_ready_messages(_edit_pair(0)), tools=tools)
+    result = await run_orch(cfg, FIX, messages=_ready_messages(), tools=tools)
     assert result.loop_phase == "blocked"
     assert not result.tool_calls
     assert "rm -rf" not in (result.text or "")
@@ -508,3 +530,84 @@ async def test_qa_pass_does_not_establish_or_revoke_verified(tmp_path: Path, mon
     text_only = await run_orch(cfg2, FIX, messages=_ready_messages(), tools=tools)
     assert text_only.loop_phase != "verified"
     assert "status: verified" not in (text_only.text or "")
+
+
+@pytest.mark.asyncio
+async def test_cline_run_commands_json_exit_verifies(tmp_path: Path, monkeypatch):
+    from harness.gateway.orch import run_orch
+
+    cfg = _cfg(tmp_path)
+    _patch_loop(monkeypatch)
+    tools = _tools()
+    payload = json.dumps(
+        [{"query": "pytest tests/test_x.py", "result": "1 passed", "exitCode": 0}]
+    )
+    await run_orch(cfg, FIX, messages=_ready_messages(), tools=tools)
+    await run_orch(cfg, FIX, messages=_ready_messages(_edit_pair(0)), tools=tools)
+    done = await run_orch(
+        cfg,
+        FIX,
+        messages=_ready_messages(_edit_pair(0) + _verify_pair(0, payload)),
+        tools=tools,
+    )
+    assert done.loop_phase == "verified"
+    assert "exit_code: 0" in done.text
+
+
+@pytest.mark.asyncio
+async def test_pytest_passed_without_exit_is_not_verified(tmp_path: Path, monkeypatch):
+    from harness.gateway.orch import run_orch
+
+    cfg = _cfg(tmp_path)
+    _patch_loop(monkeypatch)
+    tools = _tools()
+    await run_orch(cfg, FIX, messages=_ready_messages(), tools=tools)
+    await run_orch(cfg, FIX, messages=_ready_messages(_edit_pair(0)), tools=tools)
+    result = await run_orch(
+        cfg,
+        FIX,
+        messages=_ready_messages(
+            _edit_pair(0) + _verify_pair(0, "===== 1 passed in 0.02s =====")
+        ),
+        tools=tools,
+    )
+    assert result.loop_phase != "verified"
+    assert "status: verified" not in (result.text or "")
+
+
+@pytest.mark.asyncio
+async def test_verify_binds_to_cline_run_commands_catalog(tmp_path: Path, monkeypatch):
+    from harness.gateway.orch import run_orch
+
+    cfg = _cfg(tmp_path)
+    _patch_loop(monkeypatch)
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "read_files",
+                "parameters": {"type": "object", "properties": {"paths": {}}},
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "editor",
+                "parameters": {"type": "object", "properties": {"path": {}, "content": {}}},
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "run_commands",
+                "parameters": {"type": "object", "properties": {"commands": {}}},
+            },
+        },
+    ]
+    await run_orch(cfg, FIX, messages=_ready_messages(), tools=tools)
+    second = await run_orch(cfg, FIX, messages=_ready_messages(_edit_pair(0)), tools=tools)
+    assert second.tool_calls
+    assert second.tool_calls[0]["function"]["name"] == "run_commands"
+    args = json.loads(second.tool_calls[0]["function"]["arguments"])
+    assert args["commands"] == ["pytest tests/test_x.py"]
+    assert "rm " not in json.dumps(args)
