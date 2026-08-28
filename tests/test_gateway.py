@@ -1,3 +1,6 @@
+from pathlib import Path
+
+import pytest
 from starlette.requests import Request
 
 from harness.gateway.anthropic_compat import openai_to_anthropic_payload
@@ -71,6 +74,37 @@ def test_models_list_exposes_cline_ids():
     assert ids == {"harness-auto", "harness-local", "harness-m5", "harness-frontier"}
 
 
+def test_remote_gateway_exposes_only_harness_identity(tmp_path: Path):
+    from harness.config import AppConfig, Settings
+    from harness.gateway.server import create_app
+    from starlette.testclient import TestClient
+
+    cfg = AppConfig(
+        root=tmp_path,
+        settings=Settings(results_dir=tmp_path / "results", db_path=tmp_path / "h.db"),
+        models={},
+        pricing={},
+    )
+    spec = _spec()
+    spec.listen_host = "0.0.0.0"
+    spec.aliases["harness-orch"] = "orch"
+    client = TestClient(create_app(cfg, spec))
+
+    models = client.get("/v1/models").json()["data"]
+    assert [row["id"] for row in models] == ["harness-orch"]
+    health = client.get("/healthz").json()
+    assert health == {"ready": True, "service": "harness", "model": "harness-orch"}
+    index = client.get("/").json()
+    assert index["models"] == ["harness-orch"]
+    assert spec.api_key not in str(index)
+    blocked = client.post(
+        "/v1/chat/completions",
+        headers={"Authorization": f"Bearer {spec.api_key}"},
+        json={"model": "harness-local", "messages": []},
+    )
+    assert blocked.status_code == 404
+
+
 def test_qwen_xml_becomes_openai_tool_calls():
     text = """<tool_call>
 <function=execute_command>
@@ -123,3 +157,285 @@ def test_openai_tools_become_anthropic_tools():
     assert payload["max_tokens"] == 99
     assert payload["tools"][0]["name"] == "read_file"
     assert payload["tools"][0]["input_schema"]["properties"]["path"]["type"] == "string"
+
+
+def test_last_user_text_and_orch_alias():
+    from harness.gateway.orch import last_user_text
+    from harness.gateway.spec import is_orch_alias
+
+    spec = _spec()
+    spec.aliases["harness-orch"] = "orch"
+    assert is_orch_alias(spec, "harness-orch") is True
+    assert is_orch_alias(spec, "harness-local") is False
+    assert last_user_text([{"role": "system", "content": "x"}, {"role": "user", "content": "split this"}]) == "split this"
+    from harness.gateway.orch import compact_thread
+
+    thread = compact_thread(
+        [
+            {"role": "user", "content": "first"},
+            {"role": "assistant", "content": "ok"},
+            {"role": "user", "content": "split this"},
+        ]
+    )
+    assert "first" in thread
+    assert "split this" in thread
+
+
+def test_orch_complete_stitches(tmp_path: Path, monkeypatch):
+    from harness.config import AppConfig, Settings
+    from harness.gateway.orch import OrchResult
+    from harness.gateway.server import create_app
+    from starlette.testclient import TestClient
+
+    async def fake_run(cfg, intent, thread="", messages=None, tools=None):
+        return OrchResult(text=f"STITCHED:{intent}")
+
+    monkeypatch.setattr("harness.gateway.orch.run_orch", fake_run)
+    cfg = AppConfig(
+        root=tmp_path,
+        settings=Settings(results_dir=tmp_path / "results", db_path=tmp_path / "h.db"),
+        models={},
+        pricing={},
+    )
+    spec = _spec()
+    spec.aliases["harness-orch"] = "orch"
+    client = TestClient(create_app(cfg, spec))
+    body = client.post(
+        "/v1/chat/completions",
+        json={
+            "model": "harness-orch",
+            "messages": [{"role": "user", "content": "read ARCHITECTURE.md"}],
+            "stream": False,
+        },
+    ).json()
+    assert "STITCHED:read ARCHITECTURE.md" in body["choices"][0]["message"]["content"]
+
+
+def test_orch_gather_returns_tool_calls(tmp_path: Path, monkeypatch):
+    from harness.config import AppConfig, Settings
+    from harness.gateway.orch import OrchResult
+    from harness.gateway.server import create_app
+    from starlette.testclient import TestClient
+
+    async def fake_run(cfg, intent, thread="", messages=None, tools=None):
+        return OrchResult(
+            tool_calls=[
+                {
+                    "id": "call_1",
+                    "type": "function",
+                    "function": {"name": "read_file", "arguments": '{"path":"ARCHITECTURE.md"}'},
+                }
+            ]
+        )
+
+    monkeypatch.setattr("harness.gateway.orch.run_orch", fake_run)
+    cfg = AppConfig(
+        root=tmp_path,
+        settings=Settings(results_dir=tmp_path / "results", db_path=tmp_path / "h.db"),
+        models={},
+        pricing={},
+    )
+    spec = _spec()
+    spec.aliases["harness-orch"] = "orch"
+    client = TestClient(create_app(cfg, spec))
+    body = client.post(
+        "/v1/chat/completions",
+        json={
+            "model": "harness-orch",
+            "messages": [{"role": "user", "content": "review this repo"}],
+            "tools": [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "read_file",
+                        "parameters": {"type": "object", "properties": {"path": {"type": "string"}}},
+                    },
+                }
+            ],
+            "stream": False,
+        },
+    ).json()
+    msg = body["choices"][0]["message"]
+    assert body["choices"][0]["finish_reason"] == "tool_calls"
+    assert msg["tool_calls"][0]["function"]["name"] == "read_file"
+    assert msg["content"] == ""
+
+
+def test_compact_thread_keeps_tool_results():
+    from harness.gateway.orch import compact_thread, last_user_text
+
+    messages = [
+        {"role": "user", "content": "review this project"},
+        {
+            "role": "assistant",
+            "tool_calls": [
+                {
+                    "id": "call_1",
+                    "type": "function",
+                    "function": {"name": "read_file", "arguments": '{"path":"package.json"}'},
+                }
+            ],
+        },
+        {"role": "tool", "tool_call_id": "call_1", "content": '{"name":"outcited"}'},
+    ]
+    thread = compact_thread(messages)
+    assert "package.json" in thread
+    assert "outcited" in thread
+    assert last_user_text(messages) == "review this project"
+
+
+@pytest.mark.asyncio
+async def test_no_repo_evidence_gathers_immediately(monkeypatch):
+    from harness.gateway.orch import has_repo_evidence, run_orch
+
+    assert has_repo_evidence([{"role": "user", "content": "review this"}]) is False
+    assert has_repo_evidence(
+        [
+            {"role": "assistant", "content": "Harness orch x\nQA FAIL closed: nope"},
+            {"role": "user", "content": "review this"},
+        ]
+    ) is False
+    assert has_repo_evidence(
+        [{"role": "tool", "tool_call_id": "call_1", "content": '{"name":"outcited","reach":120}'}]
+    ) is True
+
+    async def boom(*args, **kwargs):
+        raise AssertionError("dispatch must not run before Cline gathers")
+
+    monkeypatch.setattr("harness.gateway.orch.run_dispatch", boom)
+    monkeypatch.setattr("harness.gateway.orch.plan_orch", boom)
+
+    class Cfg:
+        models = {}
+
+    result = await run_orch(
+        Cfg(),
+        "verify category rank consensus math",
+        messages=[{"role": "user", "content": "verify category rank consensus math"}],
+        tools=[
+            {
+                "type": "function",
+                "function": {
+                    "name": "search_files",
+                    "parameters": {"type": "object", "properties": {"path": {}, "regex": {}}},
+                },
+            }
+        ],
+    )
+    assert result.tool_calls
+    assert result.tool_calls[0]["function"]["name"] in {"search_files", "list_files", "execute_command", "read_file"}
+
+
+@pytest.mark.asyncio
+async def test_two_evidence_gathers_force_dispatch(monkeypatch):
+    from harness.dispatch import DispatchReport
+    from harness.gateway.orch import run_orch
+
+    messages = [{"role": "user", "content": "review this code base"}]
+    for index in range(2):
+        call_id = f"call_{index}"
+        messages.extend(
+            [
+                {
+                    "role": "assistant",
+                    "tool_calls": [
+                        {
+                            "id": call_id,
+                            "type": "function",
+                            "function": {"name": "read_files", "arguments": '{"paths":["src/app.py"]}'},
+                        }
+                    ],
+                },
+                {
+                    "role": "tool",
+                    "tool_call_id": call_id,
+                    "content": "src/app.py\n" + ("def work(): pass\n" * 20),
+                },
+            ]
+        )
+
+    called = {}
+
+    async def pick(*args, **kwargs):
+        return "m5_qwen", object()
+
+    async def no_more_planning(*args, **kwargs):
+        raise AssertionError("two successful gather rounds must not ask for more")
+
+    async def dispatch(_cfg, intent, **kwargs):
+        called["thread"] = kwargs["thread"]
+        return DispatchReport(run_id="forced", intent=intent, slice_error="test stop")
+
+    monkeypatch.setattr("harness.gateway.orch.pick_foreman", pick)
+    monkeypatch.setattr("harness.gateway.orch.plan_orch", no_more_planning)
+    monkeypatch.setattr("harness.gateway.orch.run_dispatch", dispatch)
+
+    result = await run_orch(
+        object(),
+        "review this code base",
+        messages=messages,
+        tools=[
+            {
+                "type": "function",
+                "function": {
+                    "name": "read_files",
+                    "parameters": {"type": "object", "properties": {"paths": {}}},
+                },
+            }
+        ],
+    )
+    assert "src/app.py" in called["thread"]
+    assert "test stop" in result.text
+
+
+@pytest.mark.asyncio
+async def test_frontend_thin_evidence_keeps_gathering(monkeypatch):
+    from harness.gateway.orch import run_orch
+
+    messages = [{"role": "user", "content": "how about the front end. is it clear, engaging?"}]
+    for index in range(2):
+        call_id = f"call_{index}"
+        messages.extend(
+            [
+                {
+                    "role": "assistant",
+                    "tool_calls": [
+                        {
+                            "id": call_id,
+                            "type": "function",
+                            "function": {"name": "read_files", "arguments": '{"paths":["README.md"]}'},
+                        }
+                    ],
+                },
+                {
+                    "role": "tool",
+                    "tool_call_id": call_id,
+                    "content": "- `apps/web` — thin debug / CRE surface\n{\"name\":\"@locdna/web\"}",
+                },
+            ]
+        )
+
+    async def boom(*args, **kwargs):
+        raise AssertionError("thin frontend evidence must not dispatch a no-frontend packet")
+
+    monkeypatch.setattr("harness.gateway.orch.pick_foreman", boom)
+    monkeypatch.setattr("harness.gateway.orch.plan_orch", boom)
+    monkeypatch.setattr("harness.gateway.orch.run_dispatch", boom)
+
+    result = await run_orch(
+        object(),
+        "how about the front end. is it clear, engaging?",
+        messages=messages,
+        tools=[
+            {
+                "type": "function",
+                "function": {
+                    "name": "read_files",
+                    "parameters": {"type": "object", "properties": {"paths": {}}},
+                },
+            }
+        ],
+    )
+    assert result.tool_calls
+    blob = " ".join(call["function"]["arguments"] for call in result.tool_calls)
+    assert "apps/web" in blob
