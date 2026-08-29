@@ -78,6 +78,38 @@ models:
     capabilities:
       vision: false
 
+  # DesignWins document lane placeholders. Keep both disabled until the
+  # 200-page MCU bakeoff proves extraction quality, latency, and engine choice.
+  # The 8B entry is task-specific extraction only; unresolved pages escalate
+  # directly to frontier vision rather than a general local-VLM middle tier.
+  dgx3_designwins_ocr:
+    enabled: false
+    tier: 0
+    display_name: "DGX3 PaddleOCR-VL 1.6 (qualification placeholder)"
+    short_name: "DGX3_DW_OCR"
+    provider: openai_compatible
+    base_url: http://100.73.119.63:8902/v1
+    model: PaddlePaddle/PaddleOCR-VL-1.6
+    temperature: 0
+    timeout_s: 180
+    max_tokens: 4096
+    capabilities:
+      vision: true
+
+  dgx3_designwins_extractor:
+    enabled: false
+    tier: 0
+    display_name: "DGX3 DesignWins 8B extractor (qualification placeholder)"
+    short_name: "DGX3_DW_EXTRACT"
+    provider: openai_compatible
+    base_url: http://100.73.119.63:8903/v1
+    model: qwen3-vl-8b-designwins-lora
+    temperature: 0
+    timeout_s: 180
+    max_tokens: 4096
+    capabilities:
+      vision: true
+
   asus2_qwen:
     enabled: true
     tier: 0
@@ -268,7 +300,7 @@ models:
     timeout_s: 180
     max_tokens: 4096
     capabilities:
-      vision: false
+      vision: true
 
   openai:
     enabled: true

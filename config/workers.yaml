@@ -50,6 +50,27 @@ workers:
       - long_context
     notes: compatibility alias only; the same endpoint is active as primary_coder
 
+  dgx3_designwins_ocr:
+    enabled: false
+    role: vision_ocr
+    model_key: dgx3_designwins_ocr
+    endpoint: http://100.73.119.63:8902/v1
+    capabilities:
+      - vision
+      - document_layout
+      - ocr
+    notes: Disabled placeholder only. Do not displace the DGX3 coder until the 200-page DesignWins bakeoff and an explicit cutover.
+
+  dgx3_designwins_extractor:
+    enabled: false
+    role: vision_extractor
+    model_key: dgx3_designwins_extractor
+    endpoint: http://100.73.119.63:8903/v1
+    capabilities:
+      - vision
+      - structured_extraction
+    notes: Disabled task-specific 8B placeholder. Low-confidence pages escalate directly to frontier vision; there is no general local-VLM fallback tier.
+
   fallback_reasoner:
     enabled: true
     role: foreman
@@ -70,8 +91,10 @@ workers:
     endpoint: https://api.anthropic.com/v1
     capabilities:
       - review
+      - vision
+      - document_extraction
     failover_order: 3
-    notes: single-call quality rescue after bounded local repair is exhausted; also available through manual harness rescue
+    notes: single-call quality rescue after bounded local repair is exhausted; sole escalation path for unresolved vision/document pages; also available through manual harness rescue
 
   researcher:
     enabled: true
