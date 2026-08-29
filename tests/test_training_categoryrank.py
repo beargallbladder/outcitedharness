@@ -74,6 +74,8 @@ def test_categoryrank_source_is_retrieval_only_and_schema_bound():
     raw["mutable_facts"] = False
     with pytest.raises(ValidationError, match="marked mutable"):
         CategoryRankSource(provenance=raw, mentions=())
+    with pytest.raises(ValidationError, match="Invalid week"):
+        _mention("Laptops", time_window="2025-W53")
 
 
 def test_alias_ranges_and_successor_graph_are_validated():

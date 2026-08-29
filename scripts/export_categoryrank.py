@@ -171,6 +171,11 @@ base AS (
   JOIN cohort ON cohort.brand_id = cm.brand_id
   WHERE lower(trim(cm.category)) NOT IN {SENTINELS}
     AND cm.kim_category_id IS NOT NULL
+    AND cm.time_window ~ '^\\d{{4}}-W\\d{{2}}$'
+    AND to_char(
+      to_date(cm.time_window || '-1', 'IYYY-"W"IW-ID'),
+      'IYYY-"W"IW'
+    ) = cm.time_window
     AND cm.time_window <= '{through_week}'
   GROUP BY
     cm.brand_id, cm.kim_category_id, cm.model, cm.time_window
@@ -268,6 +273,7 @@ def export(postgres_id: str, destination: Path, *, week: str, layer: str) -> Non
         "filters": {
             "sentinels_excluded": list(SENTINELS),
             "requires_kim_category_id": True,
+            "requires_valid_iso_week": True,
             "through_week": week,
             "identity_policy": "verified-successor-one-hop",
             "mutable_facts": True,

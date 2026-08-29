@@ -20,6 +20,8 @@ def test_query_is_bounded_stitched_and_uses_canonical_tensor_grain() -> None:
     query = export_categoryrank._query("electronics", "2026-W34")
 
     assert "cm.time_window <= '2026-W34'" in query
+    assert "to_date(cm.time_window || '-1'" in query
+    assert ") = cm.time_window" in query
     assert "cr_brand_canonical_successor_map" in query
     assert "sm.grounding_status LIKE 'verified_%'" in query
     assert "b.primary_vertical = 'electronics'" in query

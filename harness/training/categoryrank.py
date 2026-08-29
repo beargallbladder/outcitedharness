@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 from collections.abc import Iterable
+from datetime import date
 from typing import Annotated, Literal
 
 from pydantic import Field, field_validator, model_validator
@@ -34,6 +35,13 @@ class CategoryMentionV2(StrictModel):
     fact: FactValue = FactValue.UNKNOWN
     mutable_facts: Literal[True] = True
     data_use: Literal[DataUse.RETRIEVAL_ONLY] = DataUse.RETRIEVAL_ONLY
+
+    @field_validator("time_window")
+    @classmethod
+    def require_real_iso_week(cls, value: str) -> str:
+        year, week = value.split("-W", 1)
+        date.fromisocalendar(int(year), int(week), 1)
+        return value
 
     @property
     def is_sentinel(self) -> bool:
