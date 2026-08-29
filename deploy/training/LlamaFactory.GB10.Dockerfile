@@ -28,6 +28,6 @@ path.write_text(text.replace(needle, replacement))
 PY
 
 RUN python -m pip install --no-cache-dir -e . \
-    && python -m pip uninstall -y torchaudio
+    && python -m pip uninstall -y torchaudio torchao
 
 ENTRYPOINT ["llamafactory-cli"]
