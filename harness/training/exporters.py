@@ -404,11 +404,10 @@ def _native_designwins_text_pair(
 ) -> TextPair:
     part = str(_required(row, "part")).strip()
     prompt = _clean_training_text(_required(row, "prompt"), field="prompt")
-    response = _clean_training_text(_required(row, "target"), field="target")
-    try:
-        json.loads(response)
-    except json.JSONDecodeError as exc:
-        raise ExportValidationError(f"{part}: target is not valid JSON") from exc
+    response = _native_designwins_pin_target(
+        _required(row, "target"),
+        part=part,
+    )
     provenance = _native_designwins_provenance(
         row,
         source,
@@ -423,6 +422,28 @@ def _native_designwins_text_pair(
         provenance=provenance,
         metadata={"part": part, "modality": "text"},
     )
+
+
+def _native_designwins_pin_target(value: Any, *, part: str) -> str:
+    """Project native MCU truth onto the root ``pins`` schema required by prompts."""
+
+    response = _clean_training_text(value, field="target")
+    try:
+        target = json.loads(response)
+    except json.JSONDecodeError as exc:
+        raise ExportValidationError(f"{part}: target is not valid JSON") from exc
+    if not isinstance(target, Mapping):
+        raise ExportValidationError(f"{part}: target must be a JSON object")
+    pins = target.get("pins")
+    if pins is None:
+        pinout = target.get("pinout")
+        if isinstance(pinout, Mapping):
+            pins = pinout.get("pin_functions_summary")
+    if not isinstance(pins, list):
+        raise ExportValidationError(
+            f"{part}: target lacks pins or pinout.pin_functions_summary"
+        )
+    return json.dumps({"pins": pins}, ensure_ascii=False, separators=(",", ":"))
 
 
 def load_native_designwins_vision_pairs(
@@ -487,11 +508,10 @@ def _native_designwins_vision_pair(
 ) -> VisionPair:
     part = str(_required(row, "part")).strip()
     prompt = _clean_training_text(_required(row, "prompt"), field="prompt")
-    response = _clean_training_text(_required(row, "target"), field="target")
-    try:
-        json.loads(response)
-    except json.JSONDecodeError as exc:
-        raise ExportValidationError(f"{part}: target is not valid JSON") from exc
+    response = _native_designwins_pin_target(
+        _required(row, "target"),
+        part=part,
+    )
     raw_images = _required(row, "images")
     if not isinstance(raw_images, list) or not raw_images:
         raise ExportValidationError(f"{part}: images must be a non-empty list")

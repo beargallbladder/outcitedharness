@@ -58,7 +58,7 @@ config_real="$(realpath "$config")"
   die "config must be below DGX2_ROOT/configs"
 docker image inspect "$image" >/dev/null 2>&1 || die "training image is unavailable"
 [[ -s "$root/models/Qwen3-8B/config.json" ]] || die "Qwen3-8B is incomplete"
-[[ -s "$root/datasets/designwins-v2-20260829/artifact.sha256.json" ]] ||
+[[ -s "$root/datasets/designwins-v3-20260829/artifact.sha256.json" ]] ||
   die "DesignWins dataset is incomplete"
 
 container_config="/training/configs/${config_real#"$root_real/configs/"}"

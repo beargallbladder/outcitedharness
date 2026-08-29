@@ -161,6 +161,43 @@ def test_native_designwins_pairs_gain_provenance_and_image_hashes(
     )
 
 
+def test_native_designwins_projects_full_truth_onto_prompt_pin_schema(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "text_pairs.jsonl"
+    source.write_text(
+        json.dumps(
+            {
+                "part": "part-a",
+                "prompt": 'Return ONLY valid JSON: {"pins": [...]}',
+                "target": json.dumps(
+                    {
+                        "overview": {"manufacturer": "Example"},
+                        "pinout": {
+                            "pin_functions_summary": [
+                                {"pin_no": 1, "name": "VCC"},
+                                {"pin_no": 2, "name": "GND"},
+                            ],
+                            "total_pins_extracted": 2,
+                        },
+                    }
+                ),
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    pairs = load_native_designwins_text_pairs(source)
+
+    assert json.loads(pairs[0].response) == {
+        "pins": [
+            {"pin_no": 1, "name": "VCC"},
+            {"pin_no": 2, "name": "GND"},
+        ]
+    }
+
+
 def test_secret_bearing_training_data_is_rejected():
     with pytest.raises(SecretDetectedError):
         load_designwins_text_pairs(

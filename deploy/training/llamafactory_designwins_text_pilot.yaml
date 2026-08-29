@@ -10,7 +10,7 @@ finetuning_type: lora
 lora_target: all
 
 dataset: designwins_text_train
-dataset_dir: /training/datasets/designwins-v2-20260829/llamafactory
+dataset_dir: /training/datasets/designwins-v3-20260829/llamafactory
 template: qwen3_nothink
 cutoff_len: 4096
 max_samples: 64
@@ -18,7 +18,7 @@ overwrite_cache: false
 preprocessing_num_workers: 8
 dataloader_num_workers: 4
 
-output_dir: /training/checkpoints/designwins-text-qwen3-8b-pilot
+output_dir: /training/checkpoints/designwins-text-qwen3-8b-pilot-v2
 logging_steps: 1
 save_steps: 16
 plot_loss: true
