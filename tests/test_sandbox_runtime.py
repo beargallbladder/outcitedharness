@@ -44,7 +44,16 @@ def test_sandbox_cli_exposes_lifecycle_commands() -> None:
     result = CliRunner().invoke(app, ["sandbox", "--help"])
 
     assert result.exit_code == 0
-    for command in ("up", "list", "status", "logs", "down", "unpublish", "gc"):
+    for command in (
+        "up",
+        "list",
+        "status",
+        "logs",
+        "down",
+        "unpublish",
+        "events",
+        "gc",
+    ):
         assert command in result.stdout
 
     build_help = CliRunner().invoke(app, ["build", "--help"])

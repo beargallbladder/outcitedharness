@@ -42,12 +42,15 @@ labels before acting.
 harness sandbox list
 harness sandbox status example-preview --refresh
 harness sandbox logs example-preview --tail 200
+harness sandbox events --id example-preview
 harness sandbox unpublish example-preview
 harness sandbox down example-preview
 harness sandbox gc
 ```
 
-`down` removes the Tailscale route before removing containers. `gc` reaps
+Lifecycle transitions are appended to
+`state/sandbox-events.sqlite3`; the JSON registry remains the current-state
+source of truth. `down` removes the Tailscale route before removing containers. `gc` reaps
 expired previews and records managed orphan containers without adopting
 unlabelled Docker resources.
 

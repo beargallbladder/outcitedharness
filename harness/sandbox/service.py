@@ -5,6 +5,7 @@ from datetime import datetime, timedelta
 from typing import Callable
 
 from .backend import BackendContainer, BackendError, DockerCLIBackend
+from .events import SandboxEvent, SandboxEventStore
 from .models import (
     SandboxManifest,
     SandboxRecord,
@@ -32,6 +33,7 @@ class SandboxService:
         clock: Callable[[], datetime] = utc_now,
         preview_publisher: TailscalePreviewPublisher | None = None,
         max_active_sandboxes: int = 8,
+        event_store: SandboxEventStore | None = None,
     ) -> None:
         if not 1 <= max_active_sandboxes <= 64:
             raise ValueError("max_active_sandboxes must be between 1 and 64")
@@ -40,6 +42,7 @@ class SandboxService:
         self.clock = clock
         self.preview_publisher = preview_publisher
         self.max_active_sandboxes = max_active_sandboxes
+        self.event_store = event_store
 
     def create(self, spec: SandboxSpec, *, start: bool = True) -> SandboxStatus:
         now = self._now()
@@ -53,6 +56,7 @@ class SandboxService:
             updated_at=now,
         )
         self.registry.add(record, max_active=self.max_active_sandboxes)
+        self._event("create_requested", record)
         try:
             manifest = self.backend.create(spec)
             record = replace(
@@ -62,6 +66,7 @@ class SandboxService:
                 updated_at=self._now(),
             )
             self.registry.put(record)
+            self._event("container_created", record)
             if start:
                 container = self.backend.start(manifest)
                 record = replace(
@@ -70,6 +75,7 @@ class SandboxService:
                     updated_at=self._now(),
                 )
                 self.registry.put(record)
+                self._event("container_started", record)
         except Exception as exc:
             detail = self._safe_detail(exc)
             failed = replace(
@@ -79,6 +85,7 @@ class SandboxService:
                 detail=detail,
             )
             self.registry.put(failed)
+            self._event("create_failed", failed)
             raise LifecycleError(
                 f"could not create sandbox {spec.sandbox_id}: {detail}"
             ) from exc
@@ -161,6 +168,7 @@ class SandboxService:
             updated_at=self._now(),
         )
         self.registry.put(updated)
+        self._event("preview_published", updated)
         return updated.status()
 
     def remove_preview(self, sandbox_id: str) -> SandboxStatus:
@@ -186,6 +194,16 @@ class SandboxService:
 
     def list(self) -> tuple[SandboxStatus, ...]:
         return tuple(record.status() for record in self.registry.list())
+
+    def events(
+        self,
+        *,
+        sandbox_id: str | None = None,
+        limit: int = 200,
+    ) -> tuple[SandboxEvent, ...]:
+        if self.event_store is None:
+            raise LifecycleError("sandbox event store is not configured")
+        return self.event_store.list(sandbox_id=sandbox_id, limit=limit)
 
     def reap_expired(self) -> tuple[SandboxStatus, ...]:
         now = self._now()
@@ -315,6 +333,7 @@ class SandboxService:
             updated_at=self._now(),
         )
         self.registry.put(updated)
+        self._event("preview_removed", updated)
         return updated
 
     def _mark(
@@ -330,7 +349,13 @@ class SandboxService:
             detail=detail,
         )
         self.registry.put(updated)
+        if updated.state is not record.state or updated.detail != record.detail:
+            self._event("state_changed", updated)
         return updated
+
+    def _event(self, kind: str, record: SandboxRecord) -> None:
+        if self.event_store is not None:
+            self.event_store.append(kind, record)
 
     @staticmethod
     def _matches(record: SandboxRecord, container: BackendContainer) -> bool:

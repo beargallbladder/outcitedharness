@@ -9,6 +9,7 @@ from .backend import (
     OwnershipError,
     SubprocessCommandRunner,
 )
+from .events import SandboxEvent, SandboxEventStore
 from .models import (
     BuildSpec,
     EgressMode,
@@ -54,6 +55,8 @@ __all__ = [
     "RegistryError",
     "ResourceLimits",
     "SandboxManifest",
+    "SandboxEvent",
+    "SandboxEventStore",
     "SandboxPolicy",
     "SandboxRecord",
     "SandboxService",

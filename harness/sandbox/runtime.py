@@ -8,6 +8,7 @@ import urllib.request
 from pathlib import Path
 
 from .backend import DockerCLIBackend, SubprocessCommandRunner
+from .events import SandboxEventStore
 from .policy import SandboxPolicy
 from .preview import TailscalePreviewPublisher
 from .registry import JsonSandboxRegistry
@@ -50,6 +51,7 @@ def create_service(
         JsonSandboxRegistry(root / "state" / "sandboxes.json"),
         preview_publisher=TailscalePreviewPublisher(timeout=60),
         max_active_sandboxes=max_active_sandboxes,
+        event_store=SandboxEventStore(root / "state" / "sandbox-events.sqlite3"),
     )
 
 

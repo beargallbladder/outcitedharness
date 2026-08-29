@@ -21,6 +21,7 @@ from harness.sandbox import (
     RecordExistsError,
     ResourceLimits,
     SandboxPolicy,
+    SandboxEventStore,
     SandboxService,
     SandboxSpec,
     SandboxState,
@@ -388,10 +389,12 @@ def test_preview_route_is_persisted_and_removed_before_sandbox(
     runner = FakeDockerRunner()
     publisher = FakePreviewPublisher()
     registry = JsonSandboxRegistry(tmp_path / "registry.json")
+    events = SandboxEventStore(tmp_path / "events.sqlite3")
     service = SandboxService(
         DockerCLIBackend(policy(tmp_path), runner),
         registry,
         preview_publisher=publisher,  # type: ignore[arg-type]
+        event_store=events,
     )
     service.create(spec(tmp_path))
 
@@ -407,6 +410,14 @@ def test_preview_route_is_persisted_and_removed_before_sandbox(
     assert publisher.removed[0].https_port == 20_001
     assert registry.require("job-1").preview_url is None
     assert not runner.containers
+    assert [row.kind for row in reversed(events.list(sandbox_id="job-1"))] == [
+        "create_requested",
+        "container_created",
+        "container_started",
+        "preview_published",
+        "preview_removed",
+        "state_changed",
+    ]
 
 
 def test_active_sandbox_limit_is_enforced_atomically(tmp_path: Path) -> None:

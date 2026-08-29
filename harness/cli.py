@@ -1442,6 +1442,32 @@ def sandbox_unpublish(
         raise typer.BadParameter(str(exc)) from None
 
 
+@sandbox_app.command("events")
+def sandbox_events(
+    sandbox_id: Optional[str] = typer.Option(None, "--id"),
+    limit: int = typer.Option(200, min=1, max=10_000),
+    root: Path = typer.Option(Path("/Volumes/M5_4TB/harness-sandboxes")),
+) -> None:
+    """Show append-only SQLite lifecycle evidence."""
+    rows = _sandbox_service(root).events(
+        sandbox_id=sandbox_id,
+        limit=limit,
+    )
+    table = Table(title="Sandbox lifecycle events")
+    for column in ("Event", "Sandbox", "Kind", "State", "Time", "Detail"):
+        table.add_column(column)
+    for row in reversed(rows):
+        table.add_row(
+            str(row.event_id),
+            row.sandbox_id,
+            row.kind,
+            row.state,
+            row.created_at,
+            row.detail or "",
+        )
+    console.print(table)
+
+
 @sandbox_app.command("gc")
 def sandbox_gc(
     root: Path = typer.Option(Path("/Volumes/M5_4TB/harness-sandboxes")),
