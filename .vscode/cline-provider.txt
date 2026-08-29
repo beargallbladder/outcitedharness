@@ -1,6 +1,7 @@
 Cline -> Settings -> API Provider: OpenAI Compatible
 
-Base URL:  http://127.0.0.1:7410/v1
+Base URL (Cline on the M5):  http://127.0.0.1:7410/v1
+Base URL (any tailnet machine):  https://m5max-ai.tail61e9a0.ts.net/v1
 API Key:   value of LITELLM_MASTER_KEY in the Harness .env
 Model ID:  harness-orch
 
@@ -8,5 +9,6 @@ Context window: 131072
 Max output: 8192
 Tools: enabled
 
-The public client boundary is LiteLLM :7410. Harness :8787 is an internal
+The public client boundary is LiteLLM :7410. The tailnet URL securely proxies
+to it and is unavailable outside the tailnet. Harness :8787 is an internal
 orchestration gateway and should not be configured directly in Cline.

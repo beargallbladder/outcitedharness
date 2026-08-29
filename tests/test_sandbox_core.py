@@ -17,6 +17,8 @@ from harness.sandbox import (
     Mount,
     PolicyViolation,
     PortBinding,
+    PreviewRoute,
+    RecordExistsError,
     ResourceLimits,
     SandboxPolicy,
     SandboxService,
@@ -114,6 +116,8 @@ class FakeDockerRunner:
         if operation == "rm":
             self.containers.pop(args[-1])
             return CommandResult(0, f"{args[-1]}\n")
+        if operation == "logs":
+            return CommandResult(0, "application ready\n")
         if operation == "ps":
             return CommandResult(0, "\n".join(self.containers))
         raise AssertionError(f"unexpected fake Docker operation: {operation}")
@@ -122,6 +126,26 @@ class FakeDockerRunner:
     def _image_index(args: tuple[str, ...]) -> int:
         # Test specs have no command. The image is therefore the final argument.
         return len(args) - 1
+
+
+class FakePreviewPublisher:
+    def __init__(self) -> None:
+        self.published: list[tuple[int, int | None]] = []
+        self.removed: list[PreviewRoute] = []
+
+    def publish(
+        self, host_port: int, *, https_port: int | None = None
+    ) -> PreviewRoute:
+        selected = https_port or host_port
+        self.published.append((host_port, https_port))
+        return PreviewRoute(
+            host_port=host_port,
+            https_port=selected,
+            url=f"https://m5.tailnet.ts.net:{selected}/",
+        )
+
+    def remove(self, route: PreviewRoute) -> None:
+        self.removed.append(route)
 
 
 def policy(root: Path, **overrides: object) -> SandboxPolicy:
@@ -200,6 +224,57 @@ def test_build_defaults_to_offline_arm64_and_rejects_secret_args(
                 build_args={"API_TOKEN": "not-allowed"},
             )
         )
+
+
+def test_build_rejects_remote_add_and_secret_context_files(
+    tmp_path: Path,
+) -> None:
+    dockerfile = tmp_path / "Dockerfile"
+    dockerfile.write_text(
+        "FROM --platform=linux/arm64 alpine\n"
+        "ADD https://example.test/app /app\n",
+        encoding="utf-8",
+    )
+    build = BuildSpec(
+        image="local/sandbox:test",
+        context=tmp_path,
+        state_hash=STATE_HASH,
+    )
+    sandbox_policy = policy(tmp_path)
+
+    with pytest.raises(PolicyViolation, match="remote ADD"):
+        sandbox_policy.validate_build(build)
+
+    dockerfile.write_text(
+        "FROM --platform=linux/arm64 alpine\nCOPY . /app\n",
+        encoding="utf-8",
+    )
+    (tmp_path / ".env").write_text("TOKEN=do-not-copy\n", encoding="utf-8")
+    with pytest.raises(PolicyViolation, match="secret-bearing build input"):
+        sandbox_policy.validate_build(build)
+
+
+def test_build_rejects_symlinks_and_foreign_platforms(tmp_path: Path) -> None:
+    dockerfile = tmp_path / "Dockerfile"
+    dockerfile.write_text(
+        "FROM --platform=linux/amd64 alpine\n", encoding="utf-8"
+    )
+    build = BuildSpec(
+        image="local/sandbox:test",
+        context=tmp_path,
+        state_hash=STATE_HASH,
+    )
+    sandbox_policy = policy(tmp_path)
+
+    with pytest.raises(PolicyViolation, match="ARM64"):
+        sandbox_policy.validate_build(build)
+
+    dockerfile.write_text(
+        "FROM --platform=linux/arm64 alpine\n", encoding="utf-8"
+    )
+    (tmp_path / "outside-link").symlink_to(tmp_path.parent / "outside")
+    with pytest.raises(PolicyViolation, match="non-regular build input"):
+        sandbox_policy.validate_build(build)
 
 
 def test_policy_rejects_secrets_socket_host_network_and_unbounded_ports(
@@ -305,6 +380,49 @@ def test_cleanup_refuses_a_state_hash_label_mismatch(tmp_path: Path) -> None:
     with pytest.raises(Exception, match="not owned"):
         service.destroy("job-1")
     assert CONTAINER_ID in runner.containers
+
+
+def test_preview_route_is_persisted_and_removed_before_sandbox(
+    tmp_path: Path,
+) -> None:
+    runner = FakeDockerRunner()
+    publisher = FakePreviewPublisher()
+    registry = JsonSandboxRegistry(tmp_path / "registry.json")
+    service = SandboxService(
+        DockerCLIBackend(policy(tmp_path), runner),
+        registry,
+        preview_publisher=publisher,  # type: ignore[arg-type]
+    )
+    service.create(spec(tmp_path))
+
+    published = service.publish_preview("job-1")
+
+    assert published.preview_url == "https://m5.tailnet.ts.net:20001/"
+    assert registry.require("job-1").preview_https_port == 20_001
+    assert service.logs("job-1", tail=20) == "application ready\n"
+
+    removed = service.destroy("job-1")
+
+    assert removed.state is SandboxState.REMOVED
+    assert publisher.removed[0].https_port == 20_001
+    assert registry.require("job-1").preview_url is None
+    assert not runner.containers
+
+
+def test_active_sandbox_limit_is_enforced_atomically(tmp_path: Path) -> None:
+    runner = FakeDockerRunner()
+    service = SandboxService(
+        DockerCLIBackend(policy(tmp_path), runner),
+        JsonSandboxRegistry(tmp_path / "registry.json"),
+        max_active_sandboxes=1,
+    )
+    service.create(spec(tmp_path))
+
+    with pytest.raises(RecordExistsError, match="active sandbox limit"):
+        service.create(spec(tmp_path, sandbox_id="job-2"))
+
+    service.destroy("job-1")
+    assert service.create(spec(tmp_path, sandbox_id="job-2")).state is SandboxState.RUNNING
 
 
 def _pair(argv: tuple[str, ...], option: str) -> tuple[str, str]:

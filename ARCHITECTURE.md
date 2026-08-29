@@ -76,9 +76,17 @@ scripts/install_harness_orch.sh status
 scripts/install_harness_orch.sh restart
 ```
 
-Cursor remains the agent and owns IDE tools. Local models are Harness workers
-and explicit API routes; they do not replace Cursor's built-in model. No Cline
-extension or Cline-specific configuration is required.
+Cursor remains the primary IDE and owns its native tools. Cline is restored as
+an optional tool-executing frontend for the Harness orchestrator:
+
+- provider: OpenAI Compatible
+- base URL: `http://127.0.0.1:7410/v1`
+- model: `harness-orch`
+- API key: `LITELLM_MASTER_KEY` from the uncommitted `.env`
+
+The client boundary is LiteLLM; Cline does not connect directly to physical
+SGLang workers. `.clinerules`, `.vscode/cline-provider.txt`, and
+`scripts/configure_cline.py` define and reproduce that setup.
 
 Service checks:
 
@@ -115,6 +123,24 @@ uv run harness fleet validate
 
 Results are written beneath `results/`. Harness run, packet, critic, and
 verification evidence remains in `results/harness.db` and task artifacts.
+
+## M5 deployment sandboxes
+
+Generated applications are staged under
+`/Volumes/M5_4TB/harness-sandboxes` and run through the dedicated
+`colima-harness-sandbox` Docker context. Application containers are ARM64,
+non-root, capability-free, read-only, resource-bounded, and denied egress.
+A separately labelled Caddy proxy is the only bridge to a loopback host port.
+
+`harness sandbox up` publishes that loopback port at the root path of a
+dedicated tailnet-only Tailscale HTTPS port. Preview routes, ownership
+manifests, state hashes, and TTLs persist across process restarts. `down` and
+TTL garbage collection remove the route before ownership-verified containers.
+`harness build preview` additionally requires a completed greenfield run whose
+workspace still matches its final verified state hash.
+
+Operational commands and security constraints are documented in
+`deploy/sandbox/README.md`.
 
 ## Tools and MCP
 

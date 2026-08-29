@@ -23,6 +23,7 @@ from .models import (
     SandboxStatus,
 )
 from .policy import PolicyViolation, SandboxPolicy
+from .preview import PreviewError, PreviewRoute, TailscalePreviewPublisher
 from .registry import (
     JsonSandboxRegistry,
     RecordExistsError,
@@ -46,6 +47,8 @@ __all__ = [
     "OwnershipError",
     "PolicyViolation",
     "PortBinding",
+    "PreviewError",
+    "PreviewRoute",
     "RecordExistsError",
     "RecordNotFoundError",
     "RegistryError",
@@ -58,4 +61,5 @@ __all__ = [
     "SandboxState",
     "SandboxStatus",
     "SubprocessCommandRunner",
+    "TailscalePreviewPublisher",
 ]

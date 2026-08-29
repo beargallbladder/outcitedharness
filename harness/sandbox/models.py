@@ -314,6 +314,8 @@ class SandboxStatus:
     updated_at: datetime
     container_id: str | None = None
     detail: str | None = None
+    preview_url: str | None = None
+    preview_https_port: int | None = None
 
 
 @dataclass(frozen=True)
@@ -327,6 +329,8 @@ class SandboxRecord:
     updated_at: datetime
     manifest: SandboxManifest | None = None
     detail: str | None = None
+    preview_url: str | None = None
+    preview_https_port: int | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -339,6 +343,8 @@ class SandboxRecord:
             "updated_at": format_time(self.updated_at),
             "manifest": self.manifest.to_dict() if self.manifest else None,
             "detail": self.detail,
+            "preview_url": self.preview_url,
+            "preview_https_port": self.preview_https_port,
         }
 
     @classmethod
@@ -359,6 +365,16 @@ class SandboxRecord:
             updated_at=updated_at,
             manifest=SandboxManifest.from_dict(manifest) if manifest else None,
             detail=str(raw["detail"]) if raw.get("detail") is not None else None,
+            preview_url=(
+                str(raw["preview_url"])
+                if raw.get("preview_url") is not None
+                else None
+            ),
+            preview_https_port=(
+                int(raw["preview_https_port"])
+                if raw.get("preview_https_port") is not None
+                else None
+            ),
         )
 
     def status(self) -> SandboxStatus:
@@ -371,4 +387,6 @@ class SandboxRecord:
             updated_at=self.updated_at,
             container_id=self.manifest.container_id if self.manifest else None,
             detail=self.detail,
+            preview_url=self.preview_url,
+            preview_https_port=self.preview_https_port,
         )

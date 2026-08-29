@@ -49,6 +49,8 @@ gci_app = typer.Typer(help="Global Code Intelligence service and repository regi
 app.add_typer(gci_app, name="gci")
 build_app = typer.Typer(help="Plan and run autonomous greenfield projects")
 app.add_typer(build_app, name="build")
+sandbox_app = typer.Typer(help="Build and manage hardened M5 preview sandboxes")
+app.add_typer(sandbox_app, name="sandbox")
 console = Console()
 
 
@@ -1187,6 +1189,49 @@ def build_rollback(
     )
 
 
+@build_app.command("preview")
+def build_preview(
+    run_id: str,
+    sandbox_id: Optional[str] = typer.Option(None, "--id"),
+    container_port: int = typer.Option(8000, min=1, max=65535),
+    ttl_seconds: int = typer.Option(3600, min=60, max=86_400),
+    expected: Optional[str] = typer.Option(None),
+    root: Path = typer.Option(
+        Path("/Volumes/M5_4TB/harness-sandboxes")
+    ),
+) -> None:
+    """Preview only a complete greenfield run whose verified state is unchanged."""
+    from harness.greenfield.workspace import full_tree_state_hash
+
+    run = _greenfield_controller().service.get(run_id)
+    if run.status != "complete" or not run.final_state_hash or not run.workspace_root:
+        raise typer.BadParameter(
+            "greenfield preview requires a complete, final-verified run"
+        )
+    workspace = Path(run.workspace_root).resolve()
+    if full_tree_state_hash(workspace) != run.final_state_hash:
+        raise typer.BadParameter(
+            "workspace changed after final verification; refusing preview"
+        )
+    if not (workspace / "Dockerfile").is_file():
+        raise typer.BadParameter(
+            "verified workspace has no Dockerfile preview contract"
+        )
+    selected_id = sandbox_id or f"greenfield-{run_id}"[:63]
+    sandbox_up(
+        context=workspace,
+        sandbox_id=selected_id,
+        container_port=container_port,
+        ttl_seconds=ttl_seconds,
+        cpus=1.0,
+        memory_mib=512,
+        pids=128,
+        expected=expected,
+        publish=True,
+        root=root,
+    )
+
+
 @build_app.command("publish")
 def build_publish(run_id: str) -> None:
     """Publish a complete run if its reserved destination is unchanged."""
@@ -1206,6 +1251,208 @@ def build_publish(run_id: str) -> None:
     )
     controller.notify_publication(destination)
     console.print(str(destination), markup=False)
+
+
+def _sandbox_service(root: Path):
+    from harness.sandbox.runtime import create_service
+
+    return create_service(root)
+
+
+def _print_sandbox_status(status) -> None:
+    console.print(
+        {
+            "sandbox_id": status.sandbox_id,
+            "state": status.state.value,
+            "state_hash": status.state_hash,
+            "expires_at": status.expires_at.isoformat(),
+            "container_id": status.container_id,
+            "preview_url": status.preview_url,
+            "detail": status.detail,
+        }
+    )
+
+
+@sandbox_app.command("up")
+def sandbox_up(
+    context: Path = typer.Argument(
+        ...,
+        exists=True,
+        file_okay=False,
+        resolve_path=True,
+        help="Application build context containing a Dockerfile",
+    ),
+    sandbox_id: str = typer.Option(..., "--id", help="Stable sandbox identifier"),
+    container_port: int = typer.Option(8000, min=1, max=65535),
+    ttl_seconds: int = typer.Option(3600, min=60, max=86_400),
+    cpus: float = typer.Option(1.0, min=0.1, max=4.0),
+    memory_mib: int = typer.Option(512, min=64, max=8192),
+    pids: int = typer.Option(128, min=16, max=1024),
+    expected: Optional[str] = typer.Option(
+        None, help="Response marker required by health checks"
+    ),
+    publish: bool = typer.Option(
+        True,
+        "--publish/--local-only",
+        help="Publish tailnet-only HTTPS after local health succeeds",
+    ),
+    root: Path = typer.Option(
+        Path("/Volumes/M5_4TB/harness-sandboxes"),
+        help="M5 sandbox state root",
+    ),
+) -> None:
+    """Build an immutable ARM64 image, start it, and return its preview URL."""
+    from harness.sandbox import (
+        BuildSpec,
+        PortBinding,
+        ResourceLimits,
+        SandboxSpec,
+    )
+    from harness.sandbox.runtime import (
+        allocate_port,
+        context_hash,
+        stage_context,
+        wait_http,
+    )
+
+    service = _sandbox_service(root)
+    created = False
+    try:
+        staged = stage_context(context, root, sandbox_id)
+        state_hash = context_hash(staged)
+        image = f"harness-sandbox/app:{state_hash[:12]}"
+        service.backend.build(
+            BuildSpec(image=image, context=staged, state_hash=state_hash)
+        )
+        host_port = allocate_port(service)
+        status = service.create(
+            SandboxSpec(
+                sandbox_id=sandbox_id,
+                image=image,
+                state_hash=state_hash,
+                ports=(
+                    PortBinding(
+                        container_port=container_port,
+                        host_port=host_port,
+                    ),
+                ),
+                limits=ResourceLimits(
+                    cpus=cpus,
+                    memory_bytes=memory_mib * 1024 * 1024,
+                    pids=pids,
+                ),
+                ttl_seconds=ttl_seconds,
+            )
+        )
+        created = True
+        wait_http(f"http://127.0.0.1:{host_port}/", expected=expected)
+        if publish:
+            status = service.publish_preview(sandbox_id)
+            wait_http(status.preview_url or "", expected=expected)
+        _print_sandbox_status(status)
+    except Exception as exc:
+        if created:
+            try:
+                logs = service.logs(sandbox_id, tail=100)
+                if logs:
+                    console.print(logs, markup=False)
+            except Exception:
+                pass
+            try:
+                service.destroy(sandbox_id)
+            except Exception:
+                pass
+        console.print(f"[red]Sandbox deployment failed:[/red] {exc}")
+        raise typer.Exit(code=1) from None
+
+
+@sandbox_app.command("list")
+def sandbox_list(
+    root: Path = typer.Option(Path("/Volumes/M5_4TB/harness-sandboxes")),
+) -> None:
+    """List persisted sandbox lifecycle records."""
+    rows = _sandbox_service(root).list()
+    table = Table(title="M5 sandboxes")
+    for column in ("ID", "State", "Expires", "Preview", "Detail"):
+        table.add_column(column)
+    for row in rows:
+        table.add_row(
+            row.sandbox_id,
+            row.state.value,
+            row.expires_at.isoformat(timespec="seconds"),
+            row.preview_url or "-",
+            row.detail or "",
+        )
+    console.print(table)
+
+
+@sandbox_app.command("status")
+def sandbox_status(
+    sandbox_id: str,
+    refresh: bool = typer.Option(True, "--refresh/--no-refresh"),
+    root: Path = typer.Option(Path("/Volumes/M5_4TB/harness-sandboxes")),
+) -> None:
+    """Show persisted and optionally refreshed runtime status."""
+    try:
+        _print_sandbox_status(
+            _sandbox_service(root).status(sandbox_id, refresh=refresh)
+        )
+    except Exception as exc:
+        raise typer.BadParameter(str(exc)) from None
+
+
+@sandbox_app.command("logs")
+def sandbox_logs(
+    sandbox_id: str,
+    tail: int = typer.Option(200, min=1, max=10_000),
+    root: Path = typer.Option(Path("/Volumes/M5_4TB/harness-sandboxes")),
+) -> None:
+    """Read logs only after validating container ownership labels."""
+    try:
+        console.print(
+            _sandbox_service(root).logs(sandbox_id, tail=tail),
+            markup=False,
+            highlight=False,
+        )
+    except Exception as exc:
+        raise typer.BadParameter(str(exc)) from None
+
+
+@sandbox_app.command("down")
+def sandbox_down(
+    sandbox_id: str,
+    root: Path = typer.Option(Path("/Volumes/M5_4TB/harness-sandboxes")),
+) -> None:
+    """Remove a preview route and its ownership-verified containers."""
+    try:
+        _print_sandbox_status(_sandbox_service(root).destroy(sandbox_id))
+    except Exception as exc:
+        raise typer.BadParameter(str(exc)) from None
+
+
+@sandbox_app.command("unpublish")
+def sandbox_unpublish(
+    sandbox_id: str,
+    root: Path = typer.Option(Path("/Volumes/M5_4TB/harness-sandboxes")),
+) -> None:
+    """Remove only the tailnet preview route."""
+    try:
+        _print_sandbox_status(_sandbox_service(root).remove_preview(sandbox_id))
+    except Exception as exc:
+        raise typer.BadParameter(str(exc)) from None
+
+
+@sandbox_app.command("gc")
+def sandbox_gc(
+    root: Path = typer.Option(Path("/Volumes/M5_4TB/harness-sandboxes")),
+) -> None:
+    """Reap expired records and recover untracked managed containers."""
+    service = _sandbox_service(root)
+    reaped = service.reap_expired()
+    recovered = service.recover_orphans()
+    console.print(
+        {"reaped": len(reaped), "recovered_orphans": len(recovered)}
+    )
 
 
 app.add_typer(task_app, name="task")

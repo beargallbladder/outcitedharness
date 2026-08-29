@@ -36,13 +36,29 @@ class JsonSandboxRegistry:
         self.lock_path = self.path.with_suffix(f"{self.path.suffix}.lock")
         self._thread_lock = threading.RLock()
 
-    def add(self, record: SandboxRecord) -> None:
+    def add(
+        self,
+        record: SandboxRecord,
+        *,
+        max_active: int | None = None,
+    ) -> None:
         def mutate(rows: dict[str, SandboxRecord]) -> None:
             existing = rows.get(record.sandbox_id)
             if existing is not None and existing.state is not SandboxState.REMOVED:
                 raise RecordExistsError(
                     f"sandbox record already exists: {record.sandbox_id}"
                 )
+            if max_active is not None:
+                if max_active < 1:
+                    raise ValueError("max_active must be positive")
+                active = sum(
+                    item.state is not SandboxState.REMOVED
+                    for item in rows.values()
+                )
+                if active >= max_active:
+                    raise RecordExistsError(
+                        f"active sandbox limit reached: {max_active}"
+                    )
             rows[record.sandbox_id] = record
 
         self._mutate(mutate)

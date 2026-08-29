@@ -13,6 +13,7 @@ from .models import (
     SandboxStatus,
     utc_now,
 )
+from .preview import PreviewRoute, TailscalePreviewPublisher
 from .registry import JsonSandboxRegistry
 
 
@@ -29,10 +30,16 @@ class SandboxService:
         registry: JsonSandboxRegistry,
         *,
         clock: Callable[[], datetime] = utc_now,
+        preview_publisher: TailscalePreviewPublisher | None = None,
+        max_active_sandboxes: int = 8,
     ) -> None:
+        if not 1 <= max_active_sandboxes <= 64:
+            raise ValueError("max_active_sandboxes must be between 1 and 64")
         self.backend = backend
         self.registry = registry
         self.clock = clock
+        self.preview_publisher = preview_publisher
+        self.max_active_sandboxes = max_active_sandboxes
 
     def create(self, spec: SandboxSpec, *, start: bool = True) -> SandboxStatus:
         now = self._now()
@@ -45,7 +52,7 @@ class SandboxService:
             expires_at=now + timedelta(seconds=spec.ttl_seconds),
             updated_at=now,
         )
-        self.registry.add(record)
+        self.registry.add(record, max_active=self.max_active_sandboxes)
         try:
             manifest = self.backend.create(spec)
             record = replace(
@@ -118,12 +125,47 @@ class SandboxService:
         if record.manifest is None:
             return self._mark(record, SandboxState.REMOVED).status()
         try:
+            record = self._remove_preview(record)
             # The backend re-inspects all ownership labels before destructive work.
             self.backend.remove_owned(record.manifest)
         except Exception as exc:
             self._mark(record, SandboxState.ERROR, self._safe_detail(exc))
             raise
         return self._mark(record, SandboxState.REMOVED).status()
+
+    def publish_preview(
+        self,
+        sandbox_id: str,
+        *,
+        https_port: int | None = None,
+    ) -> SandboxStatus:
+        record = self.registry.require(sandbox_id)
+        manifest = self._require_manifest(record)
+        if record.state is not SandboxState.RUNNING:
+            raise LifecycleError("preview publishing requires a running sandbox")
+        if record.preview_url is not None:
+            raise LifecycleError("sandbox preview is already published")
+        if self.preview_publisher is None:
+            raise LifecycleError("preview publisher is not configured")
+        if len(manifest.proxies) != 1:
+            raise LifecycleError("preview publishing requires exactly one TCP proxy")
+        proxy = manifest.proxies[0]
+        route = self.preview_publisher.publish(
+            proxy.host_port,
+            https_port=https_port,
+        )
+        updated = replace(
+            record,
+            preview_url=route.url,
+            preview_https_port=route.https_port,
+            updated_at=self._now(),
+        )
+        self.registry.put(updated)
+        return updated.status()
+
+    def remove_preview(self, sandbox_id: str) -> SandboxStatus:
+        record = self.registry.require(sandbox_id)
+        return self._remove_preview(record).status()
 
     def status(self, sandbox_id: str, *, refresh: bool = False) -> SandboxStatus:
         record = self.registry.require(sandbox_id)
@@ -136,6 +178,11 @@ class SandboxService:
                 record, SandboxState.MISSING, self._safe_detail(exc)
             ).status()
         return self._mark(record, self._state_for(container)).status()
+
+    def logs(self, sandbox_id: str, *, tail: int = 200) -> str:
+        record = self.registry.require(sandbox_id)
+        manifest = self._require_manifest(record)
+        return self.backend.logs_owned(manifest, tail=tail)
 
     def list(self) -> tuple[SandboxStatus, ...]:
         return tuple(record.status() for record in self.registry.list())
@@ -154,8 +201,9 @@ class SandboxService:
             )
             if expired.manifest is not None:
                 try:
+                    expired = self._remove_preview(expired)
                     self.backend.remove_owned(expired.manifest)
-                except BackendError as exc:
+                except Exception as exc:
                     reaped.append(
                         self._mark(
                             expired, SandboxState.ERROR, self._safe_detail(exc)
@@ -240,6 +288,34 @@ class SandboxService:
                 reaped_ids.get(status.sandbox_id, status) for status in recovered
             ]
         return tuple(recovered)
+
+    def _remove_preview(self, record: SandboxRecord) -> SandboxRecord:
+        if record.preview_url is None and record.preview_https_port is None:
+            return record
+        if (
+            self.preview_publisher is None
+            or record.preview_url is None
+            or record.preview_https_port is None
+            or record.manifest is None
+            or len(record.manifest.proxies) != 1
+        ):
+            raise LifecycleError("cannot safely remove persisted preview route")
+        proxy = record.manifest.proxies[0]
+        self.preview_publisher.remove(
+            PreviewRoute(
+                host_port=proxy.host_port,
+                https_port=record.preview_https_port,
+                url=record.preview_url,
+            )
+        )
+        updated = replace(
+            record,
+            preview_url=None,
+            preview_https_port=None,
+            updated_at=self._now(),
+        )
+        self.registry.put(updated)
+        return updated
 
     def _mark(
         self,

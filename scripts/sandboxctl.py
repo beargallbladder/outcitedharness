@@ -22,6 +22,7 @@ from harness.sandbox import (
     SandboxPolicy,
     SandboxService,
     SandboxSpec,
+    TailscalePreviewPublisher,
 )
 
 
@@ -70,6 +71,7 @@ def _service(root: Path) -> SandboxService:
     return SandboxService(
         backend,
         JsonSandboxRegistry(root / "state" / "sandboxes.json"),
+        preview_publisher=TailscalePreviewPublisher(timeout=60),
     )
 
 

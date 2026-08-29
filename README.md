@@ -236,6 +236,19 @@ milestones, while the controller verifies and commits each milestone, survives
 restarts, performs a final same-state repository gate, and publishes only if
 the reserved destination fingerprint is unchanged.
 
+Verified applications that provide a Dockerfile can be deployed to a hardened,
+tailnet-only M5 preview before publication:
+
+```shell
+harness build preview GREENFIELD_RUN_ID --container-port 8000
+harness sandbox list
+harness sandbox down greenfield-GREENFIELD_RUN_ID
+```
+
+The preview gate rechecks the final state hash, builds offline for ARM64, runs
+without application egress or host secrets, and records a TTL-bound lifecycle.
+See `deploy/sandbox/README.md`.
+
 ## Case format
 
 ```text

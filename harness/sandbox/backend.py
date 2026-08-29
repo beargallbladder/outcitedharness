@@ -47,11 +47,20 @@ class CommandRunner(Protocol):
 
 
 class SubprocessCommandRunner:
+    def __init__(self, *, environment: dict[str, str] | None = None) -> None:
+        self.environment = dict(environment or {})
+
     def run(self, argv: Sequence[str], *, timeout: float) -> CommandResult:
+        environment = None
+        if self.environment:
+            import os
+
+            environment = {**os.environ, **self.environment}
         proc = subprocess.run(
             list(argv),
             capture_output=True,
             check=False,
+            env=environment,
             shell=False,
             text=True,
             timeout=timeout,
@@ -285,6 +294,21 @@ class DockerCLIBackend:
                 f"container {manifest.container_id} is not owned by its manifest"
             )
         return container
+
+    def logs_owned(self, manifest: SandboxManifest, *, tail: int = 200) -> str:
+        if not 1 <= tail <= 10_000:
+            raise ValueError("log tail must be between 1 and 10000")
+        self.inspect_owned(manifest)
+        result = self._execute(
+            (
+                self.executable,
+                "logs",
+                "--tail",
+                str(tail),
+                manifest.container_id,
+            )
+        )
+        return result.stdout + result.stderr
 
     def inspect(self, container_id: str) -> BackendContainer:
         if not _CONTAINER_ID.fullmatch(container_id):
