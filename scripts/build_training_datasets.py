@@ -81,11 +81,66 @@ def _llamafactory_vision(pair: VisionPair) -> dict[str, Any]:
     }
 
 
-def build_designwins(source_root: Path, destination: Path) -> dict[str, Any]:
+def _designwins_eligibility(
+    audit_root: Path,
+    *,
+    include_provenance_suspect: bool,
+) -> tuple[set[str], dict[str, str], dict[str, Path]]:
+    audit_root = audit_root.resolve(strict=True)
+    quality_path = audit_root / "gt_audit.json"
+    provenance_path = audit_root / "gt_provenance_audit.json"
+    quality = json.loads(quality_path.read_text())
+    provenance = json.loads(provenance_path.read_text())
+    if not isinstance(quality, dict) or not isinstance(provenance, dict):
+        raise ValueError("DesignWins audit files must contain JSON objects")
+
+    eligible: set[str] = set()
+    reasons: dict[str, str] = {}
+    for part, result in quality.items():
+        if not isinstance(result, dict):
+            reasons[str(part)] = "ground-truth audit record is malformed"
+        elif result.get("ok") is True:
+            eligible.add(str(part))
+        else:
+            problems = result.get("problems")
+            detail = "; ".join(str(value) for value in problems or [])
+            reasons[str(part)] = f"ground-truth audit failed: {detail or 'unspecified'}"
+
+    if not include_provenance_suspect:
+        suspect = provenance.get("suspect")
+        if not isinstance(suspect, list):
+            raise ValueError("provenance audit suspect list is missing")
+        for record in suspect:
+            if not isinstance(record, dict) or not record.get("part"):
+                raise ValueError("provenance audit contains a malformed suspect record")
+            part = str(record["part"])
+            eligible.discard(part)
+            reasons[part] = "ground-truth provenance audit marked this part suspect"
+    return eligible, reasons, {
+        "gt_audit.json": quality_path,
+        "gt_provenance_audit.json": provenance_path,
+    }
+
+
+def build_designwins(
+    source_root: Path,
+    destination: Path,
+    *,
+    audit_root: Path | None = None,
+    include_provenance_suspect: bool = False,
+) -> dict[str, Any]:
     source_root = source_root.resolve(strict=True)
     destination = destination.resolve(strict=False)
     if destination.exists():
         raise ValueError(f"destination already exists: {destination}")
+    eligible_parts: set[str] | None = None
+    exclusion_reasons: dict[str, str] = {}
+    audit_paths: dict[str, Path] = {}
+    if audit_root is not None:
+        eligible_parts, exclusion_reasons, audit_paths = _designwins_eligibility(
+            audit_root,
+            include_provenance_suspect=include_provenance_suspect,
+        )
     text_source = source_root / "text_pairs.jsonl"
     vision_source = source_root / "vision_pairs.jsonl"
     text_rejections: list[dict[str, Any]] = []
@@ -94,11 +149,15 @@ def build_designwins(source_root: Path, destination: Path) -> dict[str, Any]:
         text_source,
         strict=False,
         rejections=text_rejections,
+        eligible_parts=eligible_parts,
+        exclusion_reasons=exclusion_reasons,
     )
     vision_pairs = load_native_designwins_vision_pairs(
         vision_source,
         strict=False,
         rejections=vision_rejections,
+        eligible_parts=eligible_parts,
+        exclusion_reasons=exclusion_reasons,
     )
     text_parts = _partition(text_pairs)
     vision_parts = _partition(vision_pairs)
@@ -106,7 +165,21 @@ def build_designwins(source_root: Path, destination: Path) -> dict[str, Any]:
     destination.mkdir(parents=True)
     source_images = source_root / "images"
     if source_images.is_dir():
-        shutil.copytree(source_images, destination / "images", copy_function=shutil.copy2)
+        destination_images = destination / "images"
+        if eligible_parts is None:
+            shutil.copytree(
+                source_images, destination_images, copy_function=shutil.copy2
+            )
+        else:
+            destination_images.mkdir()
+            for part in sorted(eligible_parts):
+                source_part = source_images / part
+                if source_part.is_dir():
+                    shutil.copytree(
+                        source_part,
+                        destination_images / part,
+                        copy_function=shutil.copy2,
+                    )
 
     generated: list[Path] = []
     dataset_info: dict[str, Any] = {}
@@ -164,6 +237,20 @@ def build_designwins(source_root: Path, destination: Path) -> dict[str, Any]:
                 "sha256": _sha256(vision_source),
                 "bytes": vision_source.stat().st_size,
             },
+            **{
+                name: {
+                    "sha256": _sha256(path),
+                    "bytes": path.stat().st_size,
+                }
+                for name, path in sorted(audit_paths.items())
+            },
+        },
+        "eligibility": {
+            "audit_required": audit_root is not None,
+            "provenance_suspect_included": include_provenance_suspect,
+            "eligible_parts": len(eligible_parts or set())
+            if audit_root is not None
+            else None,
         },
         "counts": {
             "text": {split.value: len(text_parts[split]) for split in Split},
@@ -191,6 +278,16 @@ def parse_args() -> argparse.Namespace:
     designwins = subparsers.add_parser("designwins")
     designwins.add_argument("--source-root", required=True, type=Path)
     designwins.add_argument("--destination", required=True, type=Path)
+    designwins.add_argument(
+        "--audit-root",
+        type=Path,
+        help="directory containing gt_audit.json and gt_provenance_audit.json",
+    )
+    designwins.add_argument(
+        "--include-provenance-suspect",
+        action="store_true",
+        help="include quality-passing parts flagged by the provenance audit",
+    )
     return parser.parse_args()
 
 
@@ -198,7 +295,13 @@ def main() -> int:
     args = parse_args()
     try:
         if args.command == "designwins":
-            manifest = build_designwins(args.source_root, args.destination)
+            audit_root = args.audit_root or args.source_root.parent
+            manifest = build_designwins(
+                args.source_root,
+                args.destination,
+                audit_root=audit_root,
+                include_provenance_suspect=args.include_provenance_suspect,
+            )
             print(json.dumps(manifest["counts"], sort_keys=True))
         return 0
     except Exception as error:

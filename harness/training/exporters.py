@@ -357,12 +357,27 @@ def load_native_designwins_text_pairs(
     destination: Path | None = None,
     strict: bool = True,
     rejections: list[dict[str, Any]] | None = None,
+    eligible_parts: set[str] | None = None,
+    exclusion_reasons: Mapping[str, str] | None = None,
 ) -> list[TextPair]:
     """Load the existing ``part/prompt/target`` MCU text-pair corpus."""
 
     source = Path(source).resolve(strict=True)
     pairs: list[TextPair] = []
     for line_number, row in enumerate(_records(source), 1):
+        part = str(row.get("part") or "").strip()
+        if eligible_parts is not None and part not in eligible_parts:
+            if rejections is not None:
+                rejections.append(
+                    {
+                        "line": line_number,
+                        "part": part or "unknown",
+                        "reason": (exclusion_reasons or {}).get(
+                            part, "part is absent from the approved audit cohort"
+                        ),
+                    }
+                )
+            continue
         try:
             pairs.append(_native_designwins_text_pair(row, source, license_name))
         except (OSError, ValueError) as exc:
@@ -417,6 +432,8 @@ def load_native_designwins_vision_pairs(
     destination: Path | None = None,
     strict: bool = True,
     rejections: list[dict[str, Any]] | None = None,
+    eligible_parts: set[str] | None = None,
+    exclusion_reasons: Mapping[str, str] | None = None,
 ) -> list[VisionPair]:
     """Load MCU vision pairs and compute image hashes from the source files."""
 
@@ -424,6 +441,19 @@ def load_native_designwins_vision_pairs(
     source_root = source.parent
     pairs: list[VisionPair] = []
     for line_number, row in enumerate(_records(source), 1):
+        part = str(row.get("part") or "").strip()
+        if eligible_parts is not None and part not in eligible_parts:
+            if rejections is not None:
+                rejections.append(
+                    {
+                        "line": line_number,
+                        "part": part or "unknown",
+                        "reason": (exclusion_reasons or {}).get(
+                            part, "part is absent from the approved audit cohort"
+                        ),
+                    }
+                )
+            continue
         try:
             pairs.append(
                 _native_designwins_vision_pair(

@@ -10,7 +10,7 @@ finetuning_type: lora
 lora_target: all
 
 dataset: designwins_text_train
-dataset_dir: /training/datasets/designwins-v1-20260829/llamafactory
+dataset_dir: /training/datasets/designwins-v2-20260829/llamafactory
 template: qwen3_nothink
 cutoff_len: 4096
 max_samples: 64
