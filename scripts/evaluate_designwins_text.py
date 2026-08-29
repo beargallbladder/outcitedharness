@@ -70,6 +70,18 @@ def score_json(expected: Any, predicted: Any | None) -> dict[str, float | bool]:
     }
 
 
+def target_token_lengths(tokenizer: Any, records: list[dict[str, Any]]) -> list[int]:
+    return [
+        len(
+            tokenizer(
+                str(record["output"]),
+                add_special_tokens=False,
+            )["input_ids"]
+        )
+        for record in records
+    ]
+
+
 def _write_json(path: Path, value: Any) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     descriptor, temporary_name = tempfile.mkstemp(
@@ -101,6 +113,13 @@ def evaluate(args: argparse.Namespace) -> dict[str, Any]:
         local_files_only=True,
         trust_remote_code=True,
     )
+    expected_lengths = target_token_lengths(tokenizer, records)
+    required_generation_budget = max(expected_lengths) + 32
+    if args.max_new_tokens < required_generation_budget:
+        raise ValueError(
+            f"max_new_tokens={args.max_new_tokens} cannot cover the longest "
+            f"held-out target; require at least {required_generation_budget}"
+        )
     model = AutoModelForCausalLM.from_pretrained(
         args.model,
         local_files_only=True,
@@ -148,10 +167,16 @@ def evaluate(args: argparse.Namespace) -> dict[str, Any]:
             generated[0, inputs["input_ids"].shape[1] :],
             skip_special_tokens=True,
         )
+        generated_tokens = int(
+            generated.shape[1] - inputs["input_ids"].shape[1]
+        )
         predicted = extract_json(response)
         details.append(
             {
                 "index": index,
+                "expected_tokens": expected_lengths[index],
+                "generated_tokens": generated_tokens,
+                "hit_generation_limit": generated_tokens >= args.max_new_tokens,
                 "score": score_json(expected, predicted),
                 "response": response,
             }
@@ -173,6 +198,9 @@ def evaluate(args: argparse.Namespace) -> dict[str, Any]:
         "samples": len(details),
         "valid_json_rate": sum(row["score"]["valid_json"] for row in details)
         / len(details),
+        "generation_limit_hits": sum(
+            row["hit_generation_limit"] for row in details
+        ),
         "exact_rate": sum(row["score"]["exact"] for row in details) / len(details),
         **{
             f"mean_{name}": sum(float(row["score"][name]) for row in details)

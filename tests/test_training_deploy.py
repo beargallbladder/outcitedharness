@@ -28,6 +28,7 @@ def test_shell_assets_parse():
         "training_launch_single.sh",
         "training_launch_two_node.sh",
         "training_launch_lora.sh",
+        "run_tapes_offline_repro.sh",
     ):
         result = run("bash", "-n", str(SCRIPTS / name))
         assert result.returncode == 0, result.stderr
@@ -207,6 +208,7 @@ def test_templates_pin_caches_floor_and_non_destructive_controls():
     prepare = (SCRIPTS / "training_prepare_storage.sh").read_text()
     scratch = (SCRIPTS / "training_check_scratch.py").read_text()
     doctor = (SCRIPTS / "training_link_doctor.sh").read_text()
+    tapes_repro = (SCRIPTS / "run_tapes_offline_repro.sh").read_text()
     two_node = (SCRIPTS / "training_launch_two_node.sh").read_text()
     lora = (SCRIPTS / "training_launch_lora.sh").read_text()
     combined = "\n".join((prepare, scratch, doctor, two_node, lora))
@@ -216,6 +218,10 @@ def test_templates_pin_caches_floor_and_non_destructive_controls():
     assert "rdma link show" in doctor
     assert "expected_mtu" in doctor
     assert "torch.distributed.is_nccl_available()" in doctor
+    assert "ConnectTimeout=10" in doctor
+    assert "--network none" in tapes_repro
+    assert "127.0.0.1:18881" in tapes_repro
+    assert ":8800" not in tapes_repro
     assert "NCCL_SOCKET_IFNAME" in two_node
     assert "training_check_scratch.py" in two_node
     assert '"$specforge" train' in two_node

@@ -43,3 +43,15 @@ def test_score_json_rejects_unparseable_output() -> None:
         "leaf_recall": 0.0,
         "leaf_f1": 0.0,
     }
+
+
+def test_target_token_lengths_measure_each_expected_response() -> None:
+    class Tokenizer:
+        def __call__(self, text: str, *, add_special_tokens: bool):
+            assert add_special_tokens is False
+            return {"input_ids": text.split()}
+
+    assert evaluation.target_token_lengths(
+        Tokenizer(),
+        [{"output": "one two"}, {"output": "one two three"}],
+    ) == [2, 3]

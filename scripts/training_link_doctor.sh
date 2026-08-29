@@ -159,7 +159,8 @@ done
   die "--host must be dgx2 or asus1"
 
 if [[ -n "$host" ]]; then
-  ssh -- "$host" bash -s -- __doctor "$interface" "$expected_mtu" "$peer" "$require_ready" < "$0"
+  ssh -o BatchMode=yes -o ConnectTimeout=10 -- "$host" \
+    bash -s -- __doctor "$interface" "$expected_mtu" "$peer" "$require_ready" < "$0"
 else
   doctor_local "$interface" "$expected_mtu" "$peer" "$require_ready"
 fi
