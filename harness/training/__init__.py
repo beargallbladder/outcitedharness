@@ -1,10 +1,15 @@
 """Offline, provenance-first training data control plane.
 
-This package has no production database integration. Raw mutable sources remain
-retrieval-only, and generic git material remains quarantined until separately
-reviewed.
+Raw mutable sources remain retrieval-only. Harness model outputs require an
+explicit model-key approval, and git material remains quarantined until its
+recorded acceptance commands are independently re-verified.
 """
 
+from harness.training.adapters import (
+    AdapterValidationError,
+    load_greenfield_git_candidates,
+    load_harness_pass_candidates,
+)
 from harness.training.categoryrank import (
     CATEGORY_MENTIONS_SCHEMA,
     CATEGORY_SENTINELS,
@@ -64,6 +69,7 @@ from harness.training.split import (
 )
 
 __all__ = [
+    "AdapterValidationError",
     "Artifact",
     "CATEGORY_MENTIONS_SCHEMA",
     "CATEGORY_SENTINELS",
@@ -101,6 +107,8 @@ __all__ = [
     "grouped_temporal_split",
     "is_category_sentinel",
     "known_labels",
+    "load_greenfield_git_candidates",
+    "load_harness_pass_candidates",
     "load_designwins_text_pairs",
     "load_designwins_vision_pairs",
     "load_native_designwins_text_pairs",
