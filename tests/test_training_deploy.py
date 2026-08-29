@@ -221,6 +221,8 @@ def test_templates_pin_caches_floor_and_non_destructive_controls():
     assert '"$specforge" train' in two_node
     assert "torchrun" not in two_node
     assert "--network none" in lora
+    assert '--user "$(id -u):$(id -g)"' in lora
+    assert "--env HOME=/tmp" in lora
     for forbidden in (
         "systemctl stop",
         "systemctl restart",

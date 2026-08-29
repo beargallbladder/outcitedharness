@@ -17,7 +17,7 @@ from harness.training.models import (
 
 
 CATEGORY_MENTIONS_SCHEMA = "category_mentions_v2"
-CATEGORY_SENTINELS = frozenset({"__unknown__", "n"})
+CATEGORY_SENTINELS = frozenset({"__unknown__", "n", "-unknown-", "unknown"})
 _ISO_WEEK = re.compile(r"^\d{4}-W(?:0[1-9]|[1-4]\d|5[0-3])$")
 
 

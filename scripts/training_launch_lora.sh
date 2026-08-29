@@ -65,6 +65,8 @@ container_config="/training/configs/${config_real#"$root_real/configs/"}"
 exec docker run --rm \
   --name harness-lora-designwins-pilot \
   --gpus all \
+  --user "$(id -u):$(id -g)" \
+  --env HOME=/tmp \
   --network none \
   --ipc host \
   --ulimit memlock=-1 \

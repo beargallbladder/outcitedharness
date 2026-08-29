@@ -41,9 +41,15 @@ def _mention(category: str, **overrides) -> CategoryMentionV2:
 
 
 def test_sentinels_are_explicitly_filtered_and_stay_unknown():
-    mentions = [_mention("__unknown__"), _mention(" n "), _mention("Laptops")]
+    mentions = [
+        _mention("__unknown__"),
+        _mention(" n "),
+        _mention("-UNKNOWN-"),
+        _mention("unknown"),
+        _mention("Laptops"),
+    ]
     assert [row.category for row in filter_category_mentions(mentions)] == ["Laptops"]
-    assert all(row.fact is FactValue.UNKNOWN for row in mentions[:2])
+    assert all(row.fact is FactValue.UNKNOWN for row in mentions[:4])
     with pytest.raises(ValidationError, match="must stay UNKNOWN"):
         _mention("__unknown__", fact="negative")
 
