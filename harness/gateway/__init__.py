@@ -1,4 +1,4 @@
-"""OpenAI-compatible gateway for Cline / VS Code."""
+"""OpenAI-compatible internal orchestration gateway."""
 
 from harness.gateway.server import create_app, serve
 

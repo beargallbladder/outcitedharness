@@ -1,73 +1,145 @@
-# Model Harness v0.1
+# Harness Architecture
 
-Measurement harness plus a Cline gateway. Not a Cursor clone. Hardware today is one M5 control host and one DGX Spark. Extra workers are config only until the boxes exist.
+## Runtime path
 
-## Live boxes
+```mermaid
+flowchart LR
+  Client["Cursor native agent"] -->|optional model API :7410| LiteLLM
+  Client --> Native["Cursor native tools"]
+  LiteLLM -->|harness-orch| Harness["Harness :8787"]
+  LiteLLM -->|local-coder| Coder["DGX3 Qwen Coder"]
+  LiteLLM -->|local-qwen38| Foreman["ASUS2 + ASUS4 Qwen3.8 TP2"]
+  LiteLLM -->|local-critic| Critic["ASUS3 Nemotron"]
+  LiteLLM -->|manual only| Claude["Claude"]
+  Harness --> Coder
+  Harness --> Foreman
+  Harness --> Critic
+  Harness --> Protected["BGE / GCI"]
+  Native --> Workspace["Workspace mutation boundary"]
+```
 
-| Role | Where | Model | Cline id | Worker id |
-|---|---|---|---|---|
-| Worker | ASUS gx10-33af (asus4) `:8900` | `qwen3-coder-next` | `harness-local` | `primary_coder` |
-| Worker | Spark 49af `:8900` | `qwen3-coder-next` | `harness-dgx2` | `dgx2_coder` |
-| Worker | ASUS gx10-fc2e `:8900` | `qwen3-coder-next` | `harness-asus` | `asus_coder` |
-| Worker | Spark 69c8 `:8900` | `qwen3-coder-next` | `harness-dgx3` | `dgx3_coder` |
-| Orchestrator | M5 `:8082` | Qwen3.8-27B-8bit + MTP | `harness-m5` | `fallback_reasoner` |
-| Senior | Anthropic | Claude Sonnet 4.6 | `harness-frontier` | `frontier_senior` |
-| Critic | ASUS gx10-0309 `:8900` | Nemotron 3.5 Lightning 30B-A3B NVFP4 | internal | `researcher` |
-| Peer foreman | ASUS gx10-26b6 `:8900` | Qwen3-Coder-Next NVFP4 | — (auto, chain only) | `asus2_foreman` |
-| Embedder | Spark e10b `:8800` | `bge-m3-cr-tapes-v1` (1024-dim) | — (not a chat model) | `spark_embedder` |
+LiteLLM is the client-facing model router. Harness remains the orchestrator:
+decomposition, gather, coder dispatch, critic grading, bounded repair, durable
+state, and verification still run in Harness. SGLang serves inference only.
 
-The Spark `:8800` embedder is the CR team's weekly embedding service (`/v1/embeddings`, `/semantic-search`). spark-e10b (.38) is dedicated to embedding/search/training — its coder was retired 2026-08-27. **Never restart or repurpose the embedder.** asus4 is the interim primary coder until the DeepSeek two-Spark pair forms.
+## Live allocation
 
-Gateway: `http://127.0.0.1:8787/v1` (`com.samkim.harness-cline`). Cline must use this URL, not `:8900` or `:8082`.
+- `DGX3 :8900`: Qwen3-Coder-Next SGLang with DFlash. This is the only
+  dedicated coder and supports two to three concurrent agent requests.
+- `ASUS2 + ASUS4 :8888`: Qwen3.8 Flash Next NVFP4 SGLang TP=2 with MTP2.
+  This is the peer foreman and overflow lane.
+- `ASUS3 :8900`: Nemotron 3.5 Lightning NVFP4 SGLang with EAGLE. This is the
+  independent local critic and researcher, never the foreman.
+- `M5 :8082`: Qwen3.8-27B-8bit fallback foreman.
+- `Spark e10b :8800` and GCI `:8810`: protected embedding/search services.
+  Do not restart or repurpose them.
+- ASUS1 and DGX2 are not active coder routes. Their launchers and model
+  artifacts remain available for future experiments.
 
-`secondary` / `fast` / `monster` are in `config/workers.yaml` with `enabled: false`. Arrival day is flip `enabled: true`, not a rewrite.
+The old vLLM launchers are retained as rollback assets. Do not delete model
+weights or rollback scripts during routine cleanup.
 
-## Two ladders (do not mix)
+## Gateway boundaries
 
-**Cline `harness-auto`** (dead box only): asus4 → M5 → Claude. Next hop only on connect / 5xx / empty. HTTP 200 with a bad answer stays on asus4. `harness-local` does not fail over.
+LiteLLM binds only `127.0.0.1:7410`. Its explicit model IDs are:
 
-**Cline `harness-orch`**: you type; the harness decides. If the repo is needed, the foreman returns Cline tool calls (Cline is the hands). After those results are in the thread, the foreman slices packets, idle GB10s write answers, and local Nemotron grades factual grounding. Failed packets receive one bounded repair on a different local worker. Only after local QA is exhausted does the harness construct a bounded evidence packet and make at most one frontier rescue call. The frontier answer must pass the local critic before it is returned. Accepted concrete patches can be converted into one real Cline edit call; Cline tool results return for verification.
+- `harness-orch`: Harness orchestration through `127.0.0.1:8787`
+- `local-coder`: direct DGX3 coder
+- `local-qwen38`: direct Qwen3.8 TP2
+- `local-critic`: direct Nemotron
+- `frontier-claude`: explicit paid route
 
-**Foreman chain**: M5 (`m5_qwen`) orchestrates when reachable; if the M5 is off-network or its LLM is down, asus2 (`asus2_qwen`, gx10-26b6, Qwen3-Coder-Next) takes over as a peer — same prompts, same authority. Health-checked per turn (20s cache), automatic, no user action. If both are down, orch fails closed. Nemotron (asus3) is deliberately NOT in the chain: the grader must stay independent of the planner. Nemotron is the synchronous first critic after a 2026-08-27 retest found and removed an obsolete thinking retry: it scored 7/7 in 3.78s alone and 7/7 in 5.47s or less across four concurrent grades. GLM 5.2 remains the hosted fallback.
+There is no automatic paid-cloud fallback. `frontier-claude` must be selected
+by name. Provider credentials and `LITELLM_MASTER_KEY` are read from `.env`;
+the real values must never be committed.
 
-MiniMax-M2.5 REAP 139B is **parked** on gx10-26b6 (weights on disk, container stopped, restart=no): this vLLM build has no native FP4 on GB10, and the Marlin repack needs ~2× the 75GB weights — OOM crash-loop on one 121GB box. Revisit with a newer NGC image or a two-Spark pair.
+Harness `:8787` now exposes only `harness-orch`. Direct model forwarding,
+provider translation, and gateway failover were removed after LiteLLM passed
+tool, JSON, streaming, usage, auth, routing, concurrency, and latency gates.
+Harness still keeps its internal worker ladder for orchestration.
 
-**Dispatch CLI** is the same graph without Cline: `harness dispatch "intent"`.
+## Operations
 
-**Learning loop**: dispatch stages, local attempts, critic grades, frontier cost, and rescue verification are linked to a task in `results/harness.db`. `harness promote TASK_ID --pack cases/learned` turns a locally verified frontier rescue into a human-reviewed regression case. Frontier output is never treated as training truth merely because it came from a frontier model.
+Install or repair LiteLLM:
 
-**Model rotation**: models and physical workers remain explicit in `config/models.yaml` and `config/workers.yaml`. Role order comes from each worker's `priority`; no foreman or critic chain is hardcoded. Change the YAML, run `harness fleet validate`, then manually restart the gateway. There is no automatic network discovery or hot reload.
+```shell
+scripts/install_litellm.sh install
+scripts/install_litellm.sh status
+scripts/install_litellm.sh restart
+```
 
-**Client boundary**: remote callers see only `harness-orch`, generic readiness, and harness-owned model identifiers. Detailed workers, endpoints, upstream model names, and critic attribution remain in loopback health output, dispatch artifacts, and the internal database.
+Install or repair the internal Harness orchestration service:
 
-**Tournament** (`config/models.yaml` tiers) is a separate measurement list (DeepSeek, MiniMax, etc.). It is not what Cline `harness-auto` calls.
+```shell
+scripts/install_harness_orch.sh install
+scripts/install_harness_orch.sh status
+scripts/install_harness_orch.sh restart
+```
 
-Quality escalate is `harness rescue PACKET.md` or `dispatch --senior`. It is not `harness-auto`.
+Cursor remains the agent and owns IDE tools. Local models are Harness workers
+and explicit API routes; they do not replace Cursor's built-in model. No Cline
+extension or Cline-specific configuration is required.
 
-**Fleet optimize** is `harness optimize`: same packet to every enabled coder (A/B the boxes). `dispatch` splits work so the pool stays busy.
+Service checks:
 
-`supportsPromptCache: false` because these local endpoints do not speak Cline's cache protocol. Cline already resends the full thread. The flag stays off so Cline does not report fake `cacheReads`.
+```shell
+curl http://127.0.0.1:8787/healthz
+scripts/qwen_coder_sglang.sh status
+scripts/nemotron_sglang.sh status
+uv run harness fleet validate
+```
 
-## Task / evidence
+The Qwen3.8 TP2 deployment settings are pinned in
+`scripts/qwen38_sglang.env`. Preserve the working remote deployment and the
+vLLM rollback recipe when changing it.
 
-- `log_turn` writes `cline_turns` then an `Attempt` via `TaskService.session_task()`.
-- Session reuse: latest **open** task with intent `cline session` and a turn in the last 30 minutes. `harness task start "fix geocode"` is a different intent and is not reused.
-- HTTP 200 does not close a Cline session.
-- Alias map: `harness-local` / `harness-auto` → `primary_coder`; `harness-dgx2` → `dgx2_coder`; `harness-asus` → `asus_coder`; `harness-dgx3` → `dgx3_coder`; `harness-m5` → `fallback_reasoner`; `harness-frontier` → `frontier_senior`.
-- CLI: `harness dispatch|optimize|task start|list|show|current|packet|record|decide`
+## Qualification
 
-## Failover
+Run the local gateway and orchestration gates:
 
-`should_failover(status, error, has_next)` is true only when there is a next worker and (`status >= 500` or `error`).
+```shell
+uv run python scripts/litellm_qualification.py
+uv run pytest -q
+uv run harness fleet validate
+```
 
-## Measured (2026-08-24)
+`litellm_qualification.py` does not call the paid frontier route. It verifies:
 
-Spark vs M5 3.8: pong 70ms vs 369ms; ~66 vs 41 tok/s. Chair 15: both 2/15, no overlap. Spark median 5.6s, M5 7.2s. Prior Spark 27B on that pack was 4/15 at 29.7s.
+- model listing and rejected invalid authentication
+- chat, JSON object mode, native tools, and multi-turn tool results
+- streaming termination and finish reasons
+- usage fields and three-request coder concurrency
+- direct-versus-LiteLLM latency for all three SGLang services
+- the complete `harness-orch` path
+- absence of configured automatic fallback
 
-## Storage
+Results are written beneath `results/`. Harness run, packet, critic, and
+verification evidence remains in `results/harness.db` and task artifacts.
 
-`results/harness.db`: `runs`, `case_runs`, `model_results`, `cline_turns`, `tasks`, `attempts`, `evidence`, `decisions`.
+## Tools and MCP
 
-## Do not
+Cursor owns workspace mutation through its native file, search, terminal, Git,
+approval, and UI tools. No filesystem or Git MCP server is installed.
 
-Dashboard, Kubernetes, swarm, a second Cline, serve 122B as Cline, restart `:8800`–`:8803` or `:8902` from this Mac.
+An external MCP server may be added only when all of these are documented:
+
+1. Cursor cannot access the service natively.
+2. Allowed operations and canonical roots are explicit.
+3. Credentials are environment-backed and least privilege.
+4. Mutating operations retain an approval boundary.
+5. Failure cannot bypass Harness verification or trigger paid fallback.
+
+LangChain is not part of this stack. LiteLLM routes, SGLang serves, Harness
+orchestrates, and Cursor provides tools.
+
+## Configuration ownership
+
+- `config/litellm.yaml`: client-visible routes and billing boundary
+- `config/models.yaml`: physical/model endpoint definitions
+- `config/workers.yaml`: Harness role allocation and priorities
+- `config/gateway.yaml`: Harness orchestration identity and internal ladder
+- `scripts/*_sglang.sh`: SGLang service lifecycle where locally managed
+- `.env`: uncommitted credentials
+
+Change YAML, run the qualification commands, then restart only the affected
+service. There is no automatic discovery or hot reload.

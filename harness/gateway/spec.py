@@ -10,7 +10,7 @@ from harness.config import AppConfig, ModelConfig, find_project_root
 
 
 @dataclass
-class ClineSpec:
+class GatewaySpec:
     listen_host: str
     listen_port: int
     api_key: str
@@ -20,11 +20,11 @@ class ClineSpec:
     max_output_tokens: int
 
 
-def load_cline_spec(root: Path | None = None) -> ClineSpec:
+def load_gateway_spec(root: Path | None = None) -> GatewaySpec:
     root = find_project_root(root)
-    raw = yaml.safe_load((root / "config" / "cline.yaml").read_text()) or {}
+    raw = yaml.safe_load((root / "config" / "gateway.yaml").read_text()) or {}
     aliases = {str(k): str(v) for k, v in (raw.get("aliases") or {}).items()}
-    return ClineSpec(
+    return GatewaySpec(
         listen_host=str(raw.get("listen_host", "127.0.0.1")),
         listen_port=int(raw.get("listen_port", 8787)),
         api_key=str(raw.get("api_key") or "harness-local"),
@@ -35,7 +35,7 @@ def load_cline_spec(root: Path | None = None) -> ClineSpec:
     )
 
 
-def resolve_alias(spec: ClineSpec, requested: str) -> str:
+def resolve_alias(spec: GatewaySpec, requested: str) -> str:
     if requested in spec.aliases:
         return spec.aliases[requested]
     if requested in spec.aliases.values():
@@ -43,12 +43,12 @@ def resolve_alias(spec: ClineSpec, requested: str) -> str:
     return requested
 
 
-def is_orch_alias(spec: ClineSpec, requested: str) -> bool:
+def is_orch_alias(spec: GatewaySpec, requested: str) -> bool:
     return resolve_alias(spec, requested) == "orch"
 
 
 def ladder_for(
-    spec: ClineSpec,
+    spec: GatewaySpec,
     cfg: AppConfig,
     requested: str,
     registry: Any | None = None,
@@ -66,16 +66,18 @@ def ladder_for(
     for key in keys:
         model = cfg.models.get(key)
         if model is None:
-            raise KeyError(f"Unknown harness model '{key}' (from Cline model '{requested}')")
+            raise KeyError(
+                f"Unknown harness model '{key}' (from gateway model '{requested}')"
+            )
         if not model.enabled:
             continue
         out.append(model)
     if not out:
-        raise KeyError(f"No enabled models for Cline id '{requested}'")
+        raise KeyError(f"No enabled models for gateway id '{requested}'")
     return out
 
 
-def listed_models(spec: ClineSpec) -> list[dict[str, Any]]:
+def listed_models(spec: GatewaySpec) -> list[dict[str, Any]]:
     rows = []
     for alias, target in spec.aliases.items():
         row = {
@@ -88,7 +90,7 @@ def listed_models(spec: ClineSpec) -> list[dict[str, Any]]:
         }
         if target == "orch":
             # Orch answers plain chat in text, but when the client offers
-            # tools it may reply with gather tool_calls (Cline protocol).
+            # tools it may reply with native OpenAI-compatible tool calls.
             row["tool_protocol"] = "harness-v0"
         rows.append(row)
     return rows

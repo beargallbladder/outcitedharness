@@ -2,7 +2,7 @@
 # M5 Max serve: Qwen3.6-35B-A3B MLX 8-bit — interactive / critic / vision
 #
 # Role split:
-#   M5  :8082  Qwen3.6-35B-A3B  → Cline second look, critic, screenshots
+#   M5  :8082  Qwen3.6-35B-A3B  → fallback foreman, critic, screenshots
 #   DGX :8900  Qwen3.6-27B      → bulk extract/structure, thinking OFF
 #   M5  :8080  GLM-OCR          → scanned-page fallback (leave running)
 #

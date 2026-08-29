@@ -16,7 +16,7 @@ def test_load_packet_rejects_short_dump(tmp_path: Path):
         load_packet(p)
 
 
-def test_load_packet_rejects_cline_dump(tmp_path: Path):
+def test_load_packet_rejects_agent_thread_dump(tmp_path: Path):
     p = tmp_path / "huge.md"
     p.write_text(PACKET_TEMPLATE + ("x" * 20_001))
     with pytest.raises(PacketError, match="20k"):

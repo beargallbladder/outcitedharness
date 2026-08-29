@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import json
 import time
 from collections.abc import AsyncIterator
 from typing import Any
@@ -14,29 +13,23 @@ from starlette.responses import JSONResponse, Response, StreamingResponse
 from starlette.routing import Route
 
 from harness.config import AppConfig, load_config
-from harness.cost import estimate_cost
-from harness.gateway.proxy import (
-    complete_anthropic,
-    complete_openai,
-    log_turn,
-    stream_anthropic,
-    stream_openai,
+from harness.gateway.logging import log_turn
+from harness.gateway.spec import (
+    GatewaySpec,
+    is_orch_alias,
+    listed_models,
+    load_gateway_spec,
 )
-from harness.gateway.qwen_tools import (
-    collect_stream_text,
-    parse_qwen_tool_text,
-    stream_already_has_tool_calls,
-    synthesize_tool_call_sse,
-)
-from harness.gateway.spec import ClineSpec, is_orch_alias, ladder_for, listed_models, load_cline_spec
 from harness.storage.db import Store
 from harness.workers.registry import load_registry
-from harness.workers.router import should_failover
 
 
-def create_app(cfg: AppConfig | None = None, spec: ClineSpec | None = None) -> Starlette:
+def create_app(
+    cfg: AppConfig | None = None,
+    spec: GatewaySpec | None = None,
+) -> Starlette:
     cfg = cfg or load_config()
-    spec = spec or load_cline_spec(cfg.root)
+    spec = spec or load_gateway_spec(cfg.root)
     registry = load_registry(cfg.root)
     store = Store(cfg.settings.db_path)
 
@@ -45,7 +38,7 @@ def create_app(cfg: AppConfig | None = None, spec: ClineSpec | None = None) -> S
         workers = registry.summary()
         async with httpx.AsyncClient(timeout=2.5) as client:
             await asyncio.gather(*(_probe_worker(client, row) for row in workers))
-        if not _loopback(request, spec):
+        if not _fleet_visible(request, spec):
             return JSONResponse(
                 {
                     "ready": True,
@@ -56,7 +49,7 @@ def create_app(cfg: AppConfig | None = None, spec: ClineSpec | None = None) -> S
         return JSONResponse(
             {
                 "ready": True,
-                "service": "harness-cline-gateway",
+                "service": "harness-orch-gateway",
                 "listen": f"{spec.listen_host}:{spec.listen_port}",
                 "aliases": spec.aliases,
                 "auto_ladder": chain,
@@ -65,21 +58,23 @@ def create_app(cfg: AppConfig | None = None, spec: ClineSpec | None = None) -> S
         )
 
     async def index(request: Request) -> JSONResponse:
-        public = not _loopback(request, spec)
+        orchestration_models = sorted(
+            alias for alias, target in spec.aliases.items() if target == "orch"
+        )
         return JSONResponse(
             {
                 "service": "harness",
                 "auth": "send the provided API key as a Bearer token",
-                "models": ["harness-orch"] if public else sorted(spec.aliases),
+                "models": orchestration_models,
                 "chat": "POST /v1/chat/completions (OpenAI-compatible)",
                 "health": "GET /healthz",
             }
         )
 
     async def models(request: Request) -> JSONResponse:
-        rows = listed_models(spec)
-        if not _loopback(request, spec):
-            rows = [row for row in rows if row["id"] == "harness-orch"]
+        rows = [
+            row for row in listed_models(spec) if is_orch_alias(spec, row["id"])
+        ]
         return JSONResponse({"object": "list", "data": rows})
 
     async def chat(request: Request) -> Response:
@@ -92,11 +87,8 @@ def create_app(cfg: AppConfig | None = None, spec: ClineSpec | None = None) -> S
         if not isinstance(body, dict):
             return JSONResponse({"error": {"message": "body must be an object"}}, status_code=400)
 
-        requested = str(body.get("model") or "harness-local")
-        public_models = {
-            alias for alias, target in spec.aliases.items() if target == "orch"
-        }
-        if not _loopback(request, spec) and requested not in public_models:
+        requested = str(body.get("model") or "harness-orch")
+        if not is_orch_alias(spec, requested):
             return JSONResponse(
                 {
                     "error": {
@@ -106,28 +98,14 @@ def create_app(cfg: AppConfig | None = None, spec: ClineSpec | None = None) -> S
                 },
                 status_code=404,
             )
-        if is_orch_alias(spec, requested):
-            stream = bool(body.get("stream"))
-            if stream:
-                return StreamingResponse(
-                    _stream_orch(cfg, spec, store, requested, body),
-                    media_type="text/event-stream",
-                    headers={"Cache-Control": "no-cache", "Connection": "keep-alive"},
-                )
-            return await _complete_orch(cfg, spec, store, requested, body)
-        try:
-            models_to_try = ladder_for(spec, cfg, requested, registry)
-        except KeyError as exc:
-            return JSONResponse({"error": {"message": str(exc), "type": "model_not_found"}}, status_code=404)
-
         stream = bool(body.get("stream"))
         if stream:
             return StreamingResponse(
-                _stream_with_fallback(cfg, spec, store, requested, models_to_try, body),
+                _stream_orch(cfg, spec, store, requested, body),
                 media_type="text/event-stream",
                 headers={"Cache-Control": "no-cache", "Connection": "keep-alive"},
             )
-        return await _complete_with_fallback(cfg, spec, store, requested, models_to_try, body)
+        return await _complete_orch(cfg, spec, store, requested, body)
 
     return Starlette(
         routes=[
@@ -201,84 +179,21 @@ def _presented_keys(request: Request) -> list[str]:
     return keys
 
 
-def _loopback(request: Request, spec: ClineSpec) -> bool:
+def _loopback(request: Request, spec: GatewaySpec) -> bool:
     peer = request.client.host if request.client else ""
     return spec.listen_host in {"127.0.0.1", "localhost", "::1"} or peer in {"127.0.0.1", "::1", "localhost"}
 
 
-def _authorized(request: Request, spec: ClineSpec) -> bool:
-    # Dummy key is only so Cline's form is not empty. Cline 4 often sends
-    # api-key, an sk- prefix, or a leftover secret on first verify.
+def _fleet_visible(request: Request, spec: GatewaySpec) -> bool:
+    """Allow internal fleet detail only to loopback or authenticated callers."""
+    return _loopback(request, spec) or _authorized(request, spec)
+
+
+def _authorized(request: Request, spec: GatewaySpec) -> bool:
     if not spec.api_key or _loopback(request, spec):
         return True
     allowed = {spec.api_key, f"sk-{spec.api_key}"}
     return any(token in allowed for token in _presented_keys(request))
-
-
-async def _complete_with_fallback(
-    cfg: AppConfig,
-    spec: ClineSpec,
-    store: Store,
-    requested: str,
-    models_to_try,
-    body: dict[str, Any],
-) -> Response:
-    last = None
-    errors: list[str] = []
-    for model in models_to_try:
-        started = time.perf_counter()
-        if model.provider == "anthropic":
-            result = await complete_anthropic(
-                model, body, model.timeout_s or cfg.settings.default_timeout_s, requested, spec.max_output_tokens
-            )
-        else:
-            result = await complete_openai(
-                model,
-                body,
-                model.timeout_s or cfg.settings.default_timeout_s,
-            )
-            if result.status < 400:
-                try:
-                    data = json.loads(result.body)
-                    data["model"] = requested
-                    result.body = json.dumps(data).encode()
-                except (TypeError, json.JSONDecodeError):
-                    pass
-        result.latency_ms = result.latency_ms or (time.perf_counter() - started) * 1000
-        last = result
-        retryable = should_failover(
-            result.status, result.error, model is not models_to_try[-1]
-        )
-        if retryable and model is not models_to_try[-1]:
-            errors.append(f"{model.key}:{result.error or result.status}")
-            continue
-        log_turn(
-            store,
-            alias=requested,
-            model_key=result.model_key,
-            upstream_model=result.upstream_model,
-            stream=False,
-            status=result.status,
-            latency_ms=result.latency_ms,
-            input_tokens=result.input_tokens,
-            output_tokens=result.output_tokens,
-            cost=estimate_cost(cfg.pricing_for(result.model_key), result.input_tokens, result.output_tokens),
-            error=("; ".join(errors + ([result.error] if result.error else [])) or None),
-            body=body,
-        )
-        content = result.body
-        if result.status >= 400:
-            content = json.dumps(
-                {
-                    "error": {
-                        "message": "the harness could not complete this request",
-                        "type": "harness_error",
-                    }
-                }
-            ).encode()
-        return Response(content=content, status_code=result.status, media_type="application/json")
-    assert last is not None
-    return Response(content=last.body, status_code=last.status, media_type="application/json")
 
 
 async def _complete_orch(cfg, spec, store, requested, body):
@@ -395,99 +310,11 @@ async def _stream_orch(cfg, spec, store, requested, body):
     )
 
 
-async def _stream_with_fallback(
-    cfg: AppConfig,
-    spec: ClineSpec,
-    store: Store,
-    requested: str,
-    models_to_try,
-    body: dict[str, Any],
-) -> AsyncIterator[bytes]:
-    errors: list[str] = []
-    for index, model in enumerate(models_to_try):
-        started = time.perf_counter()
-        try:
-            if model.provider == "anthropic":
-                agen = stream_anthropic(
-                    model,
-                    body,
-                    model.timeout_s or cfg.settings.default_timeout_s,
-                    requested,
-                    spec.max_output_tokens,
-                )
-            else:
-                agen = stream_openai(
-                    model,
-                    body,
-                    model.timeout_s or cfg.settings.default_timeout_s,
-                    requested,
-                )
-            if body.get("tools") and model.provider != "anthropic":
-                buffered: list[bytes] = []
-                async for chunk in agen:
-                    buffered.append(chunk)
-                if stream_already_has_tool_calls(buffered):
-                    for chunk in buffered:
-                        yield chunk
-                else:
-                    calls = parse_qwen_tool_text(collect_stream_text(buffered))
-                    if calls:
-                        for chunk in synthesize_tool_call_sse(requested, calls):
-                            yield chunk
-                    else:
-                        for chunk in buffered:
-                            yield chunk
-            else:
-                async for chunk in agen:
-                    yield chunk
-            log_turn(
-                store,
-                alias=requested,
-                model_key=model.key,
-                upstream_model=model.model,
-                stream=True,
-                status=200,
-                latency_ms=(time.perf_counter() - started) * 1000,
-                input_tokens=None,
-                output_tokens=None,
-                cost=None,
-                error="; ".join(errors) or None,
-                body=body,
-            )
-            return
-        except Exception as exc:
-            errors.append(f"{model.key}:{exc}")
-            if index == len(models_to_try) - 1:
-                log_turn(
-                    store,
-                    alias=requested,
-                    model_key=model.key,
-                    upstream_model=model.model,
-                    stream=True,
-                    status=502,
-                    latency_ms=(time.perf_counter() - started) * 1000,
-                    input_tokens=None,
-                    output_tokens=None,
-                    cost=None,
-                    error="; ".join(errors),
-                    body=body,
-                )
-                payload = {
-                    "error": {
-                        "message": "the harness could not complete this request",
-                        "type": "harness_error",
-                    }
-                }
-                yield f"data: {json.dumps(payload)}\n\n".encode()
-                yield b"data: [DONE]\n\n"
-                return
-
-
 def serve(host: str | None = None, port: int | None = None) -> None:
     import uvicorn
 
     cfg = load_config()
-    spec = load_cline_spec(cfg.root)
+    spec = load_gateway_spec(cfg.root)
     app = create_app(cfg, spec)
     uvicorn.run(
         app,

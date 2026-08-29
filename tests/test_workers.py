@@ -12,31 +12,31 @@ from harness.workers.router import should_failover
 def test_repo_registry_preserves_auto_ladder():
     root = find_project_root()
     registry = load_registry(root)
-    cline = yaml.safe_load((root / "config" / "cline.yaml").read_text())
-    assert registry.failover_keys() == list(cline["auto_ladder"])
-    assert registry.failover_keys() == ["asus4_qwen", "m5_qwen", "frontier"]
+    gateway = yaml.safe_load((root / "config" / "gateway.yaml").read_text())
+    assert registry.failover_keys() == list(gateway["auto_ladder"])
+    assert registry.failover_keys() == ["dgx3_qwen", "m5_qwen", "frontier"]
 
 
 def test_primary_and_fallback_are_the_live_boxes():
     registry = load_registry(find_project_root())
     primary = registry.get("primary_coder")
     fallback = registry.get("fallback_reasoner")
-    assert primary is not None and primary.enabled and primary.model_key == "asus4_qwen"
+    assert primary is not None and primary.enabled and primary.model_key == "dgx3_qwen"
     assert fallback is not None and fallback.enabled and fallback.model_key == "m5_qwen"
     assert "coding" in primary.capabilities
     assert "tool_calling" in primary.capabilities
     assert "long_context" in primary.capabilities
     dgx2 = registry.get("dgx2_coder")
-    assert dgx2 is not None and dgx2.enabled and dgx2.model_key == "dgx2_qwen"
+    assert dgx2 is not None and not dgx2.enabled and dgx2.model_key == "dgx2_qwen"
     assert "dgx2_qwen" not in registry.failover_keys()
     asus = registry.get("asus_coder")
-    assert asus is not None and asus.enabled and asus.model_key == "asus_qwen"
+    assert asus is not None and not asus.enabled and asus.model_key == "asus_qwen"
     assert "asus_qwen" not in registry.failover_keys()
     dgx3 = registry.get("dgx3_coder")
-    assert dgx3 is not None and dgx3.enabled and dgx3.model_key == "dgx3_qwen"
-    assert "dgx3_qwen" not in registry.failover_keys()
+    assert dgx3 is not None and not dgx3.enabled and dgx3.model_key == "dgx3_qwen"
+    assert "dgx3_qwen" in registry.failover_keys()
     pool = {w.id for w in registry.pool("coder")}
-    assert pool == {"primary_coder", "dgx2_coder", "asus_coder", "dgx3_coder"}
+    assert pool == {"primary_coder"}
     assert registry.get("fallback_reasoner") not in registry.pool("coder")
     assert {w.id for w in registry.pool("foreman")} == {"fallback_reasoner", "asus2_foreman"}
     assert [w.id for w in registry.pool("senior")] == ["frontier_senior"]
@@ -130,7 +130,7 @@ def test_healthz_exposes_registry(tmp_path: Path):
 
     from harness.config import AppConfig, ModelConfig, Settings
     from harness.gateway.server import create_app
-    from harness.gateway.spec import ClineSpec
+    from harness.gateway.spec import GatewaySpec
 
     def model(key: str, provider: str, url: str) -> ModelConfig:
         return ModelConfig(
@@ -153,7 +153,7 @@ def test_healthz_exposes_registry(tmp_path: Path):
         },
         pricing={},
     )
-    spec = ClineSpec(
+    spec = GatewaySpec(
         listen_host="127.0.0.1",
         listen_port=8787,
         api_key="harness-local",
@@ -163,7 +163,7 @@ def test_healthz_exposes_registry(tmp_path: Path):
         max_output_tokens=8192,
     )
     body = TestClient(create_app(cfg, spec)).get("/healthz").json()
-    assert body["auto_ladder"] == ["asus4_qwen", "m5_qwen", "frontier"]
+    assert body["auto_ladder"] == ["dgx3_qwen", "m5_qwen", "frontier"]
     by_id = {w["id"]: w for w in body["workers"]}
     assert by_id["primary_coder"]["status"] == "healthy"
     assert by_id["secondary"]["detail"] == "secondary unavailable"

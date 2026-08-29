@@ -68,9 +68,46 @@ def test_default_gather_only_uses_explicitly_bound_gci_paths(monkeypatch, tmp_pa
     assert all("/foreign/" not in value for value in arguments)
 
 
+def test_greenfield_discovery_paths_never_become_execution_reads(monkeypatch, tmp_path: Path):
+    monkeypatch.setattr(
+        "harness.task.code_index.gather_paths_for_intent",
+        lambda *_args, **_kwargs: [],
+    )
+    monkeypatch.setattr(
+        "harness.gci.integration.workspace_paths",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("GCI must not run during Greenfield execution")
+        ),
+    )
+    calls = default_gather_calls(
+        merge_tool_catalog({"read_file": ("path",)}),
+        (
+            "GREENFIELD RUN gf_test\n"
+            "Implement the approved API milestone.\n\n"
+            "GREENFIELD DISCOVERY (ADVISORY ONLY)\n"
+            "gci://other-host/foreign/src/foreign.py#1-4\n"
+            "/foreign/repo/services/api/main.py"
+        ),
+        workspace=tmp_path,
+        gci_settings=_settings(),
+    )
+    arguments = [call["function"]["arguments"] for call in calls]
+    assert all("foreign.py" not in value for value in arguments)
+    assert all("services/api/main.py" not in value for value in arguments)
+
+
 def test_gci_cli_surface():
     runner = CliRunner()
     result = runner.invoke(app, ["gci", "--help"])
     assert result.exit_code == 0
-    for command in ("scan", "refresh", "search", "status", "pause", "resume", "serve"):
+    for command in (
+        "scan",
+        "refresh",
+        "auto-run",
+        "search",
+        "status",
+        "pause",
+        "resume",
+        "serve",
+    ):
         assert command in result.stdout

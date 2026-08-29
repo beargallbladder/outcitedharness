@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import yaml
 from dotenv import load_dotenv
@@ -70,6 +70,23 @@ class Pricing(BaseModel):
     output_per_million: float | None = None
 
 
+class GCIRepositorySource(BaseModel):
+    type: Literal["local_git"] = "local_git"
+    path: str
+    owner: Literal["self"] = "self"
+    enabled: bool = True
+
+
+class GCIRefreshPolicy(BaseModel):
+    enabled: bool = False
+    active_interval_seconds: int = Field(default=300, ge=60, le=86_400)
+    stale_after_days: int = Field(default=30, ge=1, le=3_650)
+    stale_interval_seconds: int = Field(default=86_400, ge=300, le=604_800)
+    failure_retry_seconds: int = Field(default=900, ge=60, le=86_400)
+    jitter_seconds: int = Field(default=0, ge=0, le=3_600)
+    state_path: Path = Path("~/.harness/gci-refresh.sqlite")
+
+
 class Settings(BaseModel):
     results_dir: Path
     db_path: Path
@@ -96,6 +113,15 @@ class Settings(BaseModel):
     gci_url: str = "http://100.81.201.24:8810"
     gci_token_env: str = "HARNESS_GCI_TOKEN"
     gci_timeout_s: float = Field(default=8.0, ge=0.5, le=120.0)
+    gci_refresh: GCIRefreshPolicy = Field(default_factory=GCIRefreshPolicy)
+    greenfield_runs_root: Path = Path("~/.harness/runs")
+
+    @property
+    def gci_repository_sources(self) -> tuple[GCIRepositorySource, ...]:
+        return tuple(
+            GCIRepositorySource(path=path)
+            for path in self.code_index_repos
+        )
 
 
 class AppConfig(BaseModel):
@@ -156,6 +182,12 @@ def load_config(root: Path | None = None) -> AppConfig:
     if not db_path.is_absolute():
         db_path = (root / db_path).resolve()
 
+    refresh_raw = raw_settings.get("gci_refresh")
+    if not isinstance(refresh_raw, dict):
+        refresh_raw = {}
+    refresh_state_path = Path(
+        str(refresh_raw.get("state_path") or "~/.harness/gci-refresh.sqlite")
+    ).expanduser()
     settings = Settings(
         results_dir=results_dir,
         db_path=db_path,
@@ -180,6 +212,24 @@ def load_config(root: Path | None = None) -> AppConfig:
         gci_url=str(raw_settings.get("gci_url") or "http://100.81.201.24:8810"),
         gci_token_env=str(raw_settings.get("gci_token_env") or "HARNESS_GCI_TOKEN"),
         gci_timeout_s=float(raw_settings.get("gci_timeout_s", 8.0)),
+        gci_refresh=GCIRefreshPolicy(
+            enabled=bool(refresh_raw.get("enabled", False)),
+            active_interval_seconds=int(
+                refresh_raw.get("active_interval_seconds", 300)
+            ),
+            stale_after_days=int(refresh_raw.get("stale_after_days", 30)),
+            stale_interval_seconds=int(
+                refresh_raw.get("stale_interval_seconds", 86_400)
+            ),
+            failure_retry_seconds=int(
+                refresh_raw.get("failure_retry_seconds", 900)
+            ),
+            jitter_seconds=int(refresh_raw.get("jitter_seconds", 0)),
+            state_path=refresh_state_path,
+        ),
+        greenfield_runs_root=Path(
+            str(raw_settings.get("greenfield_runs_root") or "~/.harness/runs")
+        ).expanduser(),
     )
 
     raw_models = _read_yaml(root / "config" / "models.yaml").get("models") or {}

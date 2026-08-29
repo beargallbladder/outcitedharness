@@ -1,4 +1,4 @@
-"""Foreman (M5) + parallel GB10 workers. Not Cline. Not harness-auto."""
+"""Foreman plus parallel GB10 workers for model optimization."""
 
 from __future__ import annotations
 

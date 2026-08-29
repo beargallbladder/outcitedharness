@@ -1,22 +1,23 @@
-This workspace is the model harness. Cline must use the harness gateway, not raw Spark or M5 ports.
+This workspace uses Cline as a tool-executing client for the Harness orchestrator.
 
-Gateway: http://127.0.0.1:8787/v1
-API key: sk-harness-local  (or harness-local)
-Default model: harness-local
+Provider:
+- API type: OpenAI Compatible
+- Base URL: http://127.0.0.1:7410/v1
+- Model ID: harness-orch
+- API key: LITELLM_MASTER_KEY from this workspace's .env
 
-Roles:
-- harness-local  Spark e10b Qwen3-Coder-Next (worker — default)
-- harness-dgx2   Spark 49af Qwen3-Coder-Next (new DGX, :8900 on .45)
-- harness-asus   ASUS gx10-fc2e Qwen3-Coder-Next (:8900 on .46)
-- harness-dgx3   Spark 69c8 Qwen3-Coder-Next (new DGX, :8900 on .49)
-- harness-m5     M5 Qwen3.8-27B (orchestrator / screenshots, short packets only)
-- harness-frontier  Claude (senior). Do not paste the Cline thread. Use `harness rescue PACKET.md`.
-- harness-orch   Cline types here; gateway runs dispatch (M5 slice + coder pool + tester stitch). One reply. Not a Cline fan-out.
-- harness-auto   dead-box failover only (connect/5xx/empty). Not a quality ladder.
+Architecture:
+- Cline calls loopback LiteLLM on :7410.
+- LiteLLM routes harness-orch to the internal Harness gateway on :8787.
+- Harness owns gathering, packet construction, worker dispatch, verification,
+  bounded repair, and frontier rescue.
+- SGLang serves the NVIDIA models. It is not the IDE agent or tool executor.
 
-Work happens via Cline Model ID `harness-orch` (gateway runs dispatch) or `harness dispatch "intent"`. `harness optimize` A/Bs the same packet on every box. Do not pick four Cline Model IDs and hope.
-
-Do not call :8800–:8803 (embeddings) or :8902 (OCR).
-Do not restart, kill, or reconfigure inference services.
-Keep Cline tasks short. Do not feed 80k-token threads into a local model.
-Log is automatic — every turn is written to results/harness.db table cline_turns.
+Operating rules:
+- Use harness-orch by default; do not point Cline directly at fleet endpoints.
+- Gather repository evidence before edits and execute the requested tool calls.
+- Run the repository's allowlisted verification commands after mutations.
+- Keep exact command exits and file results available to the orchestration loop.
+- Never restart or reconfigure model services from an ordinary coding task.
+- Never call the protected embedding/GCI ports as chat models.
+- Paid frontier use is a bounded Harness escalation, not an automatic LiteLLM fallback.

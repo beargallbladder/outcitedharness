@@ -47,6 +47,8 @@ fleet_app = typer.Typer(help="Validate the manually configured model fleet")
 app.add_typer(fleet_app, name="fleet")
 gci_app = typer.Typer(help="Global Code Intelligence service and repository registry")
 app.add_typer(gci_app, name="gci")
+build_app = typer.Typer(help="Plan and run autonomous greenfield projects")
+app.add_typer(build_app, name="build")
 console = Console()
 
 
@@ -175,10 +177,13 @@ def rollback_task(
 
 @app.command()
 def serve(
-    host: Optional[str] = typer.Option(None, help="Bind host (default from config/cline.yaml)"),
+    host: Optional[str] = typer.Option(
+        None,
+        help="Bind host (default from config/gateway.yaml)",
+    ),
     port: Optional[int] = typer.Option(None, help="Bind port (default 8787)"),
 ) -> None:
-    """OpenAI-compatible gateway for Cline / VS Code. Does not start model servers."""
+    """OpenAI-compatible internal orchestration gateway."""
     from harness.gateway.server import serve as serve_gateway
 
     serve_gateway(host=host, port=port)
@@ -366,7 +371,7 @@ def rescue(
     model: str = typer.Option("frontier", help="Senior model key"),
     template: bool = typer.Option(False, "--template", help="Print the packet skeleton"),
 ) -> None:
-    """Send a constructed fail packet to frontier. Do not paste a Cline thread."""
+    """Send a constructed fail packet to frontier. Do not paste an agent thread."""
     if template or not packet:
         console.print(PACKET_TEMPLATE)
         raise typer.Exit(code=0)
@@ -635,12 +640,12 @@ def task_packet(
 
 @task_app.command("current")
 def task_current() -> None:
-    """Show the latest open Cline session and its last 5 attempts."""
+    """Show the latest open gateway session and its last 5 attempts."""
     cfg = _cfg()
     svc = TaskService(Store(cfg.settings.db_path))
     task = svc.latest_session()
     if not task:
-        console.print("no open cline session")
+        console.print("no open gateway session")
         raise typer.Exit(0)
 
     console.print(f"Task: {task.task_id}  {task.status}  {task.intent}")
@@ -799,8 +804,11 @@ def gci_serve(
 
 @gci_app.command("status")
 def gci_status() -> None:
-    """Show service health and registered repositories."""
-    client = _gci_client()
+    """Show service, repository, and local refresh-automation status."""
+    from harness.gci.automation import AutomationState
+
+    cfg = _cfg()
+    client = _gci_client(cfg)
     health = client.health()
     console.print(
         f"ready={health.get('ready')} paused={health.get('paused')} "
@@ -812,10 +820,28 @@ def gci_status() -> None:
             f"files={row['file_count']} state={str(row['state_hash'])[:12]}",
             markup=False,
         )
+    policy = cfg.settings.gci_refresh
+    console.print(
+        f"automation enabled={policy.enabled} "
+        f"active_interval={policy.active_interval_seconds}s "
+        f"stale_after={policy.stale_after_days}d "
+        f"stale_interval={policy.stale_interval_seconds}s",
+        markup=False,
+    )
+    state = AutomationState(policy.state_path)
+    for row in state.rows():
+        console.print(
+            f"  {row['last_status']} {row['repo_root']} "
+            f"last_checked={int(row['last_checked'])} "
+            f"next_due={int(row['next_due'])} "
+            f"failures={row['failure_count']}"
+            + (f" error={row['last_error']}" if row["last_error"] else ""),
+            markup=False,
+        )
 
 
 def _gci_scan(repos: list[str] | None, *, wait: bool) -> None:
-    from harness.gci.scanner import build_snapshot, repo_id
+    from harness.gci.automation import refresh_repository
 
     cfg = _cfg()
     approved = cfg.settings.code_index_repos
@@ -826,27 +852,21 @@ def _gci_scan(repos: list[str] | None, *, wait: bool) -> None:
     source_host = socket.gethostname()
     for value in selected:
         root = _path(value).resolve()
-        rid = repo_id(source_host, root)
-        previous = client.manifest(rid)
-        snapshot = build_snapshot(
+        outcome = refresh_repository(
+            client,
             root,
             approved_roots=approved,
-            previous_files=previous.get("files") or {},
             source_host=source_host,
+            wait=wait,
         )
-        if snapshot.state_hash == previous.get("state_hash"):
+        if outcome.status == "unchanged":
             console.print(f"{root}: unchanged")
             continue
-        job_id = client.submit(snapshot, refresh=bool(previous.get("state_hash")))
         console.print(
-            f"{root}: queued {job_id} changed={len(snapshot.documents)} "
-            f"deleted={len(snapshot.deleted)} files={len(snapshot.file_hashes)}"
+            f"{root}: {outcome.status} {outcome.job_id} "
+            f"changed={outcome.changed_documents} "
+            f"deleted={outcome.deleted_documents}"
         )
-        if wait:
-            row = client.wait_job(job_id)
-            console.print(f"{root}: {row['state']}")
-            if row["state"] != "complete":
-                raise typer.Exit(code=1)
 
 
 @gci_app.command("scan")
@@ -865,6 +885,53 @@ def gci_refresh(
 ) -> None:
     """Push only changed source documents and deletions."""
     _gci_scan(repo, wait=wait)
+
+
+@gci_app.command("auto-run")
+def gci_auto_run(
+    repo: Optional[list[str]] = typer.Option(
+        None,
+        "--repo",
+        help="Optional approved repo root",
+    ),
+    force: bool = typer.Option(
+        False,
+        "--force",
+        help="Ignore next-due timestamps",
+    ),
+) -> None:
+    """Run one locked, source-side refresh automation pass."""
+    from harness.gci.automation import AutomationBusyError, run_automation
+
+    cfg = _cfg()
+    if not cfg.settings.gci_refresh.enabled and not force:
+        console.print("GCI refresh automation is disabled")
+        return
+    try:
+        run = run_automation(
+            cfg.settings,
+            _gci_client(cfg),
+            roots=repo,
+            force=force,
+        )
+    except AutomationBusyError:
+        console.print("deferred: another GCI refresh pass is running")
+        return
+    failed = False
+    for row in run.outcomes:
+        failed = failed or row.status == "failed"
+        console.print(
+            f"{row.status} {row.root}"
+            + (
+                f" changed={row.changed_documents} deleted={row.deleted_documents}"
+                if row.job_id
+                else ""
+            )
+            + (f" error={row.error}" if row.error else ""),
+            markup=False,
+        )
+    if failed:
+        raise typer.Exit(code=1)
 
 
 @gci_app.command("search")
@@ -901,6 +968,244 @@ def gci_resume() -> None:
     """Resume background indexing."""
     _gci_client().pause(False)
     console.print("GCI indexing resumed")
+
+
+def _greenfield_controller():
+    from harness.greenfield.controller import GreenfieldController
+
+    return GreenfieldController(_cfg())
+
+
+def _print_greenfield(run) -> None:
+    console.print(
+        f"{run.run_id} status={run.status} project={run.project_name} stack={run.stack}",
+        markup=False,
+    )
+    console.print(f"destination={run.destination}", markup=False)
+    if run.workspace_root:
+        console.print(f"workspace={run.workspace_root}", markup=False)
+    if run.error:
+        console.print(f"reason={run.error}", markup=False)
+    for milestone in run.milestones:
+        console.print(
+            f"  {milestone.milestone.milestone_id} {milestone.state}: "
+            f"{milestone.milestone.title}"
+            + (f" commit={milestone.commit_sha[:12]}" if milestone.commit_sha else ""),
+            markup=False,
+        )
+
+
+@build_app.command("new")
+def build_new(
+    intent: str = typer.Option(..., "--intent", help="High-level approved product intent"),
+    name: str = typer.Option(..., "--name", help="Safe project slug"),
+    stack: str = typer.Option(..., "--stack", help="python|node-typescript"),
+    dest: str = typer.Option(..., "--dest", help="Reserved publication destination"),
+    dependency: Optional[list[str]] = typer.Option(
+        None,
+        "--dependency",
+        help="Additional dependency to freeze into the approval manifest",
+    ),
+) -> None:
+    """Discover patterns and prepare a plan without creating a workspace."""
+    run = _greenfield_controller().plan(
+        intent=intent,
+        name=name,
+        stack=stack,
+        destination=_path(dest),
+        dependencies=tuple(dependency or ()),
+    )
+    _print_greenfield(run)
+    console.print("\nEXISTING PATTERNS USED")
+    for pattern in run.discovery.selected_patterns[:8]:
+        console.print(
+            f"- [{pattern.category}] {pattern.summary}\n  {pattern.provenance}",
+            markup=False,
+        )
+    console.print(
+        f"\nApproved dependencies: {', '.join(run.spec.approved_dependencies) or '(none)'}",
+        markup=False,
+    )
+    console.print("Milestone acceptance:")
+    for command in run.plan.final_acceptance_commands:
+        console.print(f"- {command}", markup=False)
+    console.print(
+        f"\nNo workspace or package command has run. Approve once with:\n"
+        f"harness build approve {run.run_id}",
+        markup=False,
+    )
+
+
+@build_app.command("approve")
+def build_approve(
+    run_id: str,
+    yes: bool = typer.Option(
+        False,
+        "--yes",
+        "-y",
+        help="Confirm the displayed immutable plan without prompting",
+    ),
+) -> None:
+    """Freeze the plan, provision M0, and prepare autonomous execution."""
+    controller = _greenfield_controller()
+    run = controller.service.get(run_id)
+    if not yes:
+        _print_greenfield(run)
+        if not typer.confirm("Approve this immutable spec, dependencies, and milestone plan?"):
+            raise typer.Abort()
+    active = controller.approve_and_provision(run_id)
+    _print_greenfield(active)
+    console.print(
+        "\nRun the workspace-bound autonomous build with:\n"
+        f"harness build run {run_id}\n"
+        "No editor setup or additional edit/test/repair approvals are required.",
+        markup=False,
+    )
+
+
+@build_app.command("status")
+def build_status(run_id: Optional[str] = typer.Argument(None)) -> None:
+    """Show one greenfield run or recent runs."""
+    controller = _greenfield_controller()
+    if run_id:
+        _print_greenfield(controller.service.get(run_id))
+        return
+    for run in controller.service.list():
+        _print_greenfield(run)
+
+
+@build_app.command("resume")
+def build_resume(run_id: str) -> None:
+    """Resume from durable state without replaying committed milestones."""
+    run = _greenfield_controller().resume(run_id)
+    _print_greenfield(run)
+    if run.status == "running":
+        console.print(
+            f"Continue autonomously with: harness build run {run_id}",
+            markup=False,
+        )
+
+
+@build_app.command("run")
+def build_run(
+    run_id: str,
+    max_turns: int = typer.Option(80, min=1, max=200),
+) -> None:
+    """Execute an approved build headlessly in its isolated workspace."""
+    from harness.greenfield.runner import run_greenfield_headless
+
+    result = asyncio.run(
+        run_greenfield_headless(_cfg(), run_id, max_turns=max_turns)
+    )
+    console.print(
+        f"{result.run_id} status={result.status} turns={result.turns}",
+        markup=False,
+    )
+    if result.text:
+        console.print(result.text, markup=False)
+    if result.status != "complete":
+        raise typer.Exit(code=1)
+
+
+@build_app.command("retry")
+def build_retry(
+    run_id: str,
+    reason: str = typer.Option(
+        "operator-approved retry after a transient repair failure",
+        "--reason",
+    ),
+) -> None:
+    """Retry a failed checkpointed milestone without changing its plan."""
+    run = _greenfield_controller().retry_blocked_milestone(run_id, reason)
+    _print_greenfield(run)
+    console.print(
+        f"Continue autonomously with: harness build run {run_id}",
+        markup=False,
+    )
+
+
+@build_app.command("cancel")
+def build_cancel(run_id: str) -> None:
+    """Stop new work while preserving the workspace and checkpoints."""
+    _print_greenfield(_greenfield_controller().service.cancel(run_id))
+
+
+@build_app.command("rollback")
+def build_rollback(
+    run_id: str,
+    yes: bool = typer.Option(False, "--yes", "-y"),
+) -> None:
+    """Rollback the active uncommitted milestone to its task baseline."""
+    from harness.gateway.orch import _checkpoint_store
+    from harness.orch_loop import load_loop_state
+
+    controller = _greenfield_controller()
+    run = controller.service.get(run_id)
+    active = next(
+        (
+            row
+            for row in run.milestones
+            if row.ordinal > 0 and row.state != "complete"
+        ),
+        None,
+    )
+    if active is None or not active.task_id:
+        raise typer.BadParameter("No active uncommitted milestone can be rolled back")
+    state = load_loop_state(controller.tasks, active.task_id)
+    if (
+        state is None
+        or not state.checkpoint_available
+        or not state.checkpoint_task_id
+        or not state.checkpoint_run_id
+    ):
+        raise typer.BadParameter("Active milestone has no rollback checkpoint")
+    store = _checkpoint_store(controller.cfg)
+    preview = store.rollback_preview(
+        state.checkpoint_task_id,
+        state.checkpoint_run_id,
+    )
+    console.print(
+        f"rollback paths={len(preview.restore) + len(preview.remove)} "
+        f"conflicts={len(preview.conflicts)}",
+        markup=False,
+    )
+    if preview.conflicts:
+        raise typer.Exit(code=1)
+    if not yes and not typer.confirm("Rollback only this milestone's attributed files?"):
+        raise typer.Abort()
+    result = store.rollback(state.checkpoint_task_id, state.checkpoint_run_id)
+    controller.service.update_milestone(
+        run_id,
+        active.ordinal,
+        state="active",
+        error=None,
+    )
+    controller.service.set_status(run_id, "running")
+    console.print(
+        f"rollback restored={len(result.restored)} removed={len(result.removed)}",
+        markup=False,
+    )
+
+
+@build_app.command("publish")
+def build_publish(run_id: str) -> None:
+    """Publish a complete run if its reserved destination is unchanged."""
+    from harness.greenfield.publish import publish_verified_run
+
+    controller = _greenfield_controller()
+    run = controller.service.get(run_id)
+    if run.published_path:
+        console.print(run.published_path, markup=False)
+        return
+    destination = publish_verified_run(run)
+    controller.service.set_status(
+        run_id,
+        "complete",
+        final_state_hash=run.final_state_hash,
+        published_path=str(destination),
+    )
+    controller.notify_publication(destination)
+    console.print(str(destination), markup=False)
 
 
 app.add_typer(task_app, name="task")

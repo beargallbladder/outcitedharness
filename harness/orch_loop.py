@@ -1,4 +1,4 @@
-"""Persistent apply → verify → repair policy. Cline executes; run_orch ticks once."""
+"""Persistent apply → verify → repair policy; run_orch advances one turn."""
 
 from __future__ import annotations
 
@@ -207,6 +207,7 @@ class LoopState:
     active_diff_hash: str | None = None
     verification_results: list[VerificationRecord] = field(default_factory=list)
     last_cmd: str | None = None
+    result_cmd: str | None = None
     last_exit: int | None = None
     timed_out: bool = False
     stdout_tail: str = ""
@@ -279,6 +280,7 @@ class LoopState:
                 if isinstance(row, dict)
             ],
             last_cmd=data.get("last_cmd") or None,
+            result_cmd=data.get("result_cmd") or None,
             last_exit=data.get("last_exit") if data.get("last_exit") is not None else None,
             timed_out=bool(data.get("timed_out")),
             stdout_tail=str(data.get("stdout_tail") or ""),
@@ -643,6 +645,17 @@ def last_run_for_command_since_write(
     return latest
 
 
+def last_run_for_command(
+    messages: list[Any], command: str
+) -> tuple[str, dict[str, Any], str] | None:
+    """Latest result for COMMAND, including a reconstructed durable session."""
+    latest: tuple[str, dict[str, Any], str] | None = None
+    for name, args, text in last_tool_exchanges(messages):
+        if name.lower() in _RUN_TOOLS and command in _command_args(args):
+            latest = (name, args, text)
+    return latest
+
+
 def _coerce_exit(value: Any) -> int | None:
     if value is None or isinstance(value, bool):
         return None
@@ -662,7 +675,7 @@ def _exit_from_mapping(data: dict[str, Any]) -> int | None:
 
 
 def _flatten_command_blob(blob: str) -> tuple[str, int | None, bool]:
-    """Unwrap Cline JSON wrappers. Return (text, exit_from_json, timed_out)."""
+    """Unwrap client JSON wrappers. Return (text, exit_from_json, timed_out)."""
     raw = blob or ""
     timed_out = False
     exit_code: int | None = None
@@ -786,10 +799,24 @@ def _read_paths(args: dict[str, Any]) -> list[str]:
 
 
 def _read_result_files(paths: list[str], text: str) -> dict[str, str]:
-    """Map a successful Cline read result back to its requested paths."""
+    """Map a successful client read result back to its requested paths."""
     blob = text or ""
     if not paths or not blob.strip() or re.search(r"(?im)^\s*ERROR:", blob):
         return {}
+    try:
+        wrapped = json.loads(blob)
+    except json.JSONDecodeError:
+        wrapped = None
+    if isinstance(wrapped, dict):
+        if wrapped.get("success") is False:
+            return {}
+        result = wrapped.get("result")
+        wrapped_path = _normalized_workspace_path(wrapped.get("path"))
+        if isinstance(result, str):
+            if len(paths) == 1:
+                return {paths[0]: result}
+            if wrapped_path in paths:
+                return {wrapped_path: result}
     markers = list(re.finditer(r"(?im)^FILE\s+(.+?)\s*\r?\n", blob))
     if markers:
         out: dict[str, str] = {}
@@ -847,7 +874,13 @@ def _after_latest_verification(
     for index, (name, args, _text) in enumerate(exchanges):
         if name.lower() in _RUN_TOOLS and command in _command_args(args):
             verify_at = index
-    return exchanges[verify_at + 1 :] if verify_at >= 0 else []
+    if verify_at >= 0:
+        return exchanges[verify_at + 1 :]
+    write_at = -1
+    for index, (name, _args, _text) in enumerate(exchanges):
+        if name.lower() in WRITE_TOOLS:
+            write_at = index
+    return exchanges[write_at + 1 :] if write_at >= 0 else exchanges
 
 
 def complete_working_set_refresh(state: LoopState, messages: list[Any]) -> bool:

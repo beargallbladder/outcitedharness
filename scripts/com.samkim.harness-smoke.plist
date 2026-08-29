@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.samkim.harness-smoke</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Users/samkim/Harnessv1/.venv/bin/python</string>
+        <string>/Users/samkim/Harnessv1/scripts/harness_smoke.py</string>
+    </array>
+    <key>StartInterval</key>
+    <integer>21600</integer>
+    <key>RunAtLoad</key>
+    <false/>
+    <key>StandardOutPath</key>
+    <string>/tmp/harness-smoke.log</string>
+    <key>StandardErrorPath</key>
+    <string>/tmp/harness-smoke.err</string>
+</dict>
+</plist>

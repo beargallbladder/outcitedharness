@@ -9,7 +9,7 @@ from harness.storage.db import Store, utcnow
 from harness.task.context import ContextManager
 from harness.task.models import AttemptRecord, Decision, Evidence, Task, WorkPacket
 
-CLINE_INTENT = "cline session"
+GATEWAY_INTENT = "gateway session"
 SESSION_IDLE = timedelta(minutes=30)
 
 
@@ -98,24 +98,24 @@ class TaskService:
                 WHERE intent = ? AND status = 'open'
                 ORDER BY created_at DESC, rowid DESC LIMIT 1
                 """,
-                (CLINE_INTENT,),
+                (GATEWAY_INTENT,),
             ).fetchone()
         if not row:
             return None
         return self.get(row["task_id"])
 
     def session_task(self) -> Task:
-        """Reuse the open Cline session only if it had a turn in the last 30 minutes."""
+        """Reuse an open gateway session only if it was active in the last 30 minutes."""
         current = self.latest_session()
         if current:
             turns = self.attempts(current.task_id)
             last = turns[-1].finished_at if turns else current.created_at
             if last and datetime.now(timezone.utc) - _parse_ts(last) <= SESSION_IDLE:
                 return current
-        return self.start(CLINE_INTENT)
+        return self.start(GATEWAY_INTENT)
 
     def record_turn(self, rec: AttemptRecord) -> AttemptRecord:
-        """Append a Cline turn. Keep the session open; do not mark the job done."""
+        """Append a gateway turn without closing its session."""
         saved = self.record(rec, close=False)
         with self.store.connect() as conn:
             conn.execute(

@@ -1,4 +1,4 @@
-"""Quality-escalate to frontier with a constructed packet, not a Cline dump."""
+"""Quality-escalate to frontier with a constructed evidence packet."""
 
 from __future__ import annotations
 
@@ -122,7 +122,7 @@ def build_auto_rescue_packet(
     fixed = (
         f"# TASK\n{_clip(intent, 3000)}\n\n"
         "# RELEVANT ARCHITECTURE\n"
-        "Cursor/Cline has repository tools. Local foreman, coders, and critic attempted the task "
+        "Cursor has repository tools. Local foreman, coders, and critic attempted the task "
         "before this single frontier rescue.\n\n"
         "# FILES\nUse only file paths present in TEST EVIDENCE.\n\n"
         f"# OBSERVED FAILURE\n{_clip(critic_text, 2500) or 'Local QA rejected the attempted answer.'}\n\n"

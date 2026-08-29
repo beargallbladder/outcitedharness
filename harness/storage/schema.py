@@ -52,7 +52,7 @@ CREATE INDEX IF NOT EXISTS idx_model_results_case ON model_results(case_id);
 CREATE INDEX IF NOT EXISTS idx_case_runs_run ON case_runs(run_id);
 CREATE INDEX IF NOT EXISTS idx_case_runs_case ON case_runs(case_id);
 
-CREATE TABLE IF NOT EXISTS cline_turns (
+CREATE TABLE IF NOT EXISTS gateway_turns (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     task_id TEXT,
     started_at TEXT NOT NULL,
@@ -71,7 +71,7 @@ CREATE TABLE IF NOT EXISTS cline_turns (
     prompt_chars INTEGER,
     FOREIGN KEY (task_id) REFERENCES tasks(task_id)
 );
-CREATE INDEX IF NOT EXISTS idx_cline_turns_started ON cline_turns(started_at);
+CREATE INDEX IF NOT EXISTS idx_gateway_turns_started ON gateway_turns(started_at);
 
 CREATE TABLE IF NOT EXISTS tasks (
     task_id TEXT PRIMARY KEY,
@@ -133,4 +133,66 @@ CREATE TABLE IF NOT EXISTS decisions (
 CREATE INDEX IF NOT EXISTS idx_attempts_task ON attempts(task_id);
 CREATE INDEX IF NOT EXISTS idx_evidence_task ON evidence(task_id);
 CREATE INDEX IF NOT EXISTS idx_decisions_task ON decisions(task_id);
+
+CREATE TABLE IF NOT EXISTS greenfield_runs (
+    run_id TEXT PRIMARY KEY,
+    intent TEXT NOT NULL,
+    project_name TEXT NOT NULL,
+    stack TEXT NOT NULL,
+    destination TEXT NOT NULL,
+    destination_fingerprint TEXT NOT NULL,
+    workspace_root TEXT,
+    status TEXT NOT NULL,
+    discovery_json TEXT NOT NULL,
+    spec_json TEXT NOT NULL,
+    plan_json TEXT NOT NULL,
+    manifest_json TEXT,
+    spec_hash TEXT NOT NULL,
+    plan_hash TEXT NOT NULL,
+    manifest_hash TEXT,
+    approved_at TEXT,
+    current_milestone INTEGER NOT NULL DEFAULT 0,
+    final_state_hash TEXT,
+    published_path TEXT,
+    error TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS greenfield_milestones (
+    run_id TEXT NOT NULL,
+    ordinal INTEGER NOT NULL,
+    milestone_id TEXT NOT NULL,
+    title TEXT NOT NULL,
+    objective TEXT NOT NULL,
+    acceptance_json TEXT NOT NULL,
+    state TEXT NOT NULL,
+    task_id TEXT,
+    starting_commit TEXT,
+    verified_state_hash TEXT,
+    commit_sha TEXT,
+    attempts INTEGER NOT NULL DEFAULT 0,
+    error TEXT,
+    updated_at TEXT NOT NULL,
+    PRIMARY KEY (run_id, ordinal),
+    UNIQUE (run_id, milestone_id),
+    FOREIGN KEY (run_id) REFERENCES greenfield_runs(run_id) ON DELETE CASCADE,
+    FOREIGN KEY (task_id) REFERENCES tasks(task_id)
+);
+
+CREATE TABLE IF NOT EXISTS greenfield_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    run_id TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    payload_json TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    FOREIGN KEY (run_id) REFERENCES greenfield_runs(run_id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_greenfield_runs_status
+    ON greenfield_runs(status, updated_at);
+CREATE INDEX IF NOT EXISTS idx_greenfield_milestones_run
+    ON greenfield_milestones(run_id, ordinal);
+CREATE INDEX IF NOT EXISTS idx_greenfield_events_run
+    ON greenfield_events(run_id, id);
 """

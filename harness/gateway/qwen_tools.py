@@ -1,4 +1,4 @@
-"""Turn Qwen XML tool text into OpenAI tool_calls Cline will execute."""
+"""Turn Qwen XML tool text into standard OpenAI-compatible tool calls."""
 
 from __future__ import annotations
 

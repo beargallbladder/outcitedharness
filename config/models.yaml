@@ -19,9 +19,9 @@ models:
       vision: false
 
   asus4_qwen:
-    enabled: true
+    enabled: false
     tier: 0
-    display_name: "ASUS4 Qwen3-Coder-Next"
+    display_name: "ASUS4 Qwen3-Coder-Next (retired into TP2 pair)"
     short_name: "ASUS4_CODER"
     provider: openai_compatible
     base_url: http://100.100.116.82:8900/v1
@@ -33,7 +33,7 @@ models:
       vision: false
 
   dgx2_qwen:
-    enabled: true
+    enabled: false
     tier: 0
     display_name: "DGX2 Qwen3-Coder-Next"
     short_name: "DGX2_CODER"
@@ -47,7 +47,7 @@ models:
       vision: false
 
   asus_qwen:
-    enabled: true
+    enabled: false
     tier: 0
     display_name: "ASUS GX10 Qwen3-Coder-Next"
     short_name: "ASUS_CODER"
@@ -63,7 +63,7 @@ models:
   dgx3_qwen:
     enabled: true
     tier: 0
-    display_name: "DGX3 Qwen3-Coder-Next"
+    display_name: "DGX3 Qwen3-Coder-Next SGLang DFlash"
     short_name: "DGX3_CODER"
     provider: openai_compatible
     base_url: http://100.73.119.63:8900/v1
@@ -71,19 +71,28 @@ models:
     temperature: 0
     timeout_s: 180
     coder_context_tokens: 6000
+    extra_body:
+      chat_template_kwargs:
+        enable_thinking: false
+        preserve_thinking: false
     capabilities:
       vision: false
 
   asus2_qwen:
     enabled: true
     tier: 0
-    display_name: "ASUS2 Qwen3-Coder-Next (peer foreman)"
-    short_name: "ASUS2_FOREMAN"
+    display_name: "ASUS2+ASUS4 Qwen3.8 Flash Next TP2 SGLang"
+    short_name: "QWEN38_TP2"
     provider: openai_compatible
-    base_url: http://100.68.133.1:8900/v1
-    model: qwen3-coder-next
+    base_url: http://100.68.133.1:8888/v1
+    model: qwen38-flash-next-nvfp4-sglang
     temperature: 0
-    timeout_s: 180
+    timeout_s: 900
+    max_tokens: 8192
+    extra_body:
+      chat_template_kwargs:
+        enable_thinking: false
+        preserve_thinking: false
     capabilities:
       vision: false
 
@@ -119,7 +128,7 @@ models:
   asus3_nemotron:
     enabled: true
     tier: 0
-    display_name: "ASUS3 Nemotron 3.5 Lightning 30B-A3B"
+    display_name: "ASUS3 Nemotron 3.5 Lightning SGLang MTP"
     short_name: "ASUS3_RESEARCH"
     provider: openai_compatible
     base_url: http://100.89.118.36:8900/v1
@@ -130,6 +139,7 @@ models:
       enable_thinking: false
       chat_template_kwargs:
         enable_thinking: false
+        preserve_thinking: false
     capabilities:
       vision: false
 
@@ -160,6 +170,24 @@ models:
       enable_thinking: false
     capabilities:
       vision: true
+
+  # Shadow-only two-node reasoner on ASUS2 + ASUS4. Disabled prevents normal
+  # routing; controlled bakeoffs address this model key explicitly.
+  deepseek_flash_tp2_shadow:
+    enabled: false
+    tier: 1
+    display_name: "DeepSeek V4 Flash 0731 TP2 (shadow)"
+    short_name: "DS_FLASH_TP2_SHADOW"
+    provider: openai_compatible
+    base_url: http://100.68.133.1:9000/v1
+    model: deepseek-v4-flash-0731
+    temperature: 0
+    timeout_s: 900
+    max_tokens: 4096
+    extra_body:
+      reasoning_effort: high
+    capabilities:
+      vision: false
 
   deepseek_flash:
     enabled: true

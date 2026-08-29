@@ -1,4 +1,4 @@
-"""Cline Model ID harness-orch: Cline is the hands, the fleet is the workers."""
+"""Harness orchestration: the client owns tools and the fleet supplies workers."""
 
 from __future__ import annotations
 
@@ -45,6 +45,7 @@ from harness.orch_loop import (
     expansion_needs_semantic,
     expansion_tool_calls,
     failure_hash,
+    last_run_for_command,
     last_run_for_command_since_write,
     last_tool_exchanges,
     last_write_result,
@@ -70,7 +71,12 @@ log = logging.getLogger("harness.orch")
 
 _ENV_BLOCK = re.compile(r"<env>(.*?)</env>", re.IGNORECASE | re.DOTALL)
 _ENV_WORKDIR = re.compile(r"Working Directory:\s*([^\n<]+)", re.IGNORECASE)
+_SYSTEM_WORKDIR = re.compile(
+    r"(?m)^(?:Primary|Current) Working Directory:\s*([^\n<]+)\s*$",
+    re.IGNORECASE,
+)
 _BODY_WORKSPACE_KEYS = ("workspace_root", "workspace_path", "workspace", "cwd")
+_GREENFIELD_RUN_RE = re.compile(r"\b(?:continue|resume|run)\s+greenfield\s+(gf[a-z0-9_]+)\b", re.I)
 _PATCH_PATH_RE = re.compile(
     r"(?m)^(?:\*\*\* (?:Add|Update) File: |(?:\+\+\+|---) [ab]/)([^\n]+)$"
 )
@@ -86,11 +92,11 @@ def _add_workspace_candidate(found: list[str], raw: str) -> None:
     found.append(str(normalize_repo_root(path)))
 
 
-def cline_workspace_root(
+def client_workspace_root(
     messages: list[Any] | None = None,
     extra: dict[str, Any] | None = None,
 ) -> Path | None:
-    """Active Cline workspace. Fail closed if missing or if two roots disagree."""
+    """Active client workspace. Fail closed if roots are missing or disagree."""
     found: list[str] = []
     if extra:
         for key in _BODY_WORKSPACE_KEYS:
@@ -103,6 +109,9 @@ def cline_workspace_root(
         text = _content_text(item.get("content"))
         if not text:
             continue
+        if item.get("role") == "system":
+            for match in _SYSTEM_WORKDIR.finditer(text):
+                _add_workspace_candidate(found, match.group(1))
         for block in _ENV_BLOCK.findall(text):
             match = _ENV_WORKDIR.search(block)
             if match:
@@ -185,7 +194,7 @@ def _is_change_job(intent: str) -> bool:
     return is_change_job(intent)
 
 
-def cline_tool_catalog(tools: list[Any] | None) -> dict[str, tuple[str, ...]]:
+def client_tool_catalog(tools: list[Any] | None) -> dict[str, tuple[str, ...]]:
     catalog: dict[str, tuple[str, ...]] = {}
     for item in tools or []:
         if not isinstance(item, dict):
@@ -314,7 +323,7 @@ def stitch_report(report: DispatchReport) -> str:
         if report.frontier_run_id or report.frontier_why:
             lines.append("- rescue: the additional answer did not pass harness verification")
         return "\n".join(lines).strip() + "\n"
-    # Do not append the results-json path here: Cline treats it as a file to read
+    # Do not append the results-json path here: the client treats it as a file
     # and drags harness internals into the next gather round.
     lines = answers + ["", "---", footer]
     return "\n".join(lines).strip() + "\n"
@@ -509,6 +518,44 @@ def _mutation_paths_from_calls(
     return paths, ""
 
 
+def _verification_gated_repair_reason(calls: list[dict[str, Any]]) -> str:
+    """Fail closed before letting machine verification judge a repair delta."""
+    dependency_files = {
+        "package.json",
+        "package-lock.json",
+        "pnpm-lock.yaml",
+        "pyproject.toml",
+        "requirements.txt",
+        "uv.lock",
+        "yarn.lock",
+    }
+    for call in calls:
+        name, args = _function_call(call)
+        if name.lower().replace("-", "_") not in {
+            "apply_patch",
+            "edit_file",
+            "editor",
+            "replace_in_file",
+            "str_replace",
+            "write_file",
+            "write_to_file",
+        }:
+            return "unreviewed repair contains a non-mutation tool"
+        path = str(args.get("path") or args.get("file_path") or "")
+        if Path(path).name.lower() in dependency_files:
+            return "unreviewed repair cannot modify dependency manifests"
+        replacement = str(
+            args.get("new_string")
+            or args.get("replacement")
+            or args.get("new")
+            or args.get("content")
+            or ""
+        )
+        if re.search(r"\b(?:eval|exec)\s*\(", replacement):
+            return "unreviewed repair contains prohibited dynamic execution"
+    return ""
+
+
 def _latest_write_exchanges(
     messages: list[Any],
 ) -> list[tuple[str, dict[str, Any], str]]:
@@ -623,14 +670,14 @@ def _prepare_verification_contract(
         return
     explicit = commands_named_in_intent(intent)
     contract = build_repo_contract(workspace)
-    if explicit:
-        state.commands = explicit
-        state.command_timeouts = {command: 60 for command in explicit}
-    elif contract and contract.commands:
+    if contract and contract.commands:
         state.commands = [spec.command for spec in contract.commands]
         state.command_timeouts = {
             spec.command: spec.timeout_s for spec in contract.commands
         }
+    elif explicit:
+        state.commands = explicit
+        state.command_timeouts = {command: 60 for command in explicit}
     else:
         state.commands = []
         state.command_timeouts = {}
@@ -663,6 +710,8 @@ async def _emit_apply(
     *,
     picked,
     workspace: Path | None = None,
+    prefer_replacements: bool = False,
+    verification_gated_repair: bool = False,
 ) -> OrchResult | None:
     if state.iteration >= MAX_CYCLES:
         state.phase = "exhausted"
@@ -675,9 +724,19 @@ async def _emit_apply(
         state.phase = "blocked"
         state.blocked_reason = reason
         return _terminal(svc, task_id, state)
-    texts = shot_texts(report, require_qa=True)
+    if report.critic_verdict == "degraded" and not verification_gated_repair:
+        state.phase = "blocked"
+        state.blocked_reason = (
+            "code mutation withheld because no critic produced a valid grade"
+        )
+        return _terminal(svc, task_id, state)
+    texts = shot_texts(report, require_qa=not verification_gated_repair)
     if not texts or picked is None:
-        return None
+        state.phase = "blocked"
+        state.blocked_reason = (
+            "no independently accepted coder output was available for mutation"
+        )
+        return _terminal(svc, task_id, state)
     _key, foreman = picked
     compiled = compile_context(
         state,
@@ -691,9 +750,20 @@ async def _emit_apply(
         catalog,
         list(tools or []),
         working_set=compiled.text,
+        prefer_replacements=prefer_replacements,
     )
     if not calls:
-        return None
+        state.phase = "blocked"
+        state.blocked_reason = (
+            "accepted coder output produced no executable client mutation calls"
+        )
+        return _terminal(svc, task_id, state)
+    if verification_gated_repair:
+        reason = _verification_gated_repair_reason(calls)
+        if reason:
+            state.phase = "blocked"
+            state.blocked_reason = reason
+            return _terminal(svc, task_id, state)
     next_iteration = state.iteration + 1
     if not _capture_apply_baseline(
         cfg,
@@ -726,7 +796,7 @@ async def _advance_after_apply(
 ) -> OrchResult:
     writes = _latest_write_exchanges(messages)
     if not writes:
-        return _waiting(state, "Cline mutation result")
+        return _waiting(state, "client mutation result")
 
     observed: list[str] = []
     workspace = (
@@ -758,7 +828,7 @@ async def _advance_after_apply(
         )
         return _terminal(svc, task_id, state)
     if missing:
-        return _waiting(state, "remaining Cline mutation results")
+        return _waiting(state, "remaining client mutation results")
 
     for _name, args, text in writes:
         remember_write(state, args, text)
@@ -799,7 +869,7 @@ async def _advance_after_apply(
         )
         if not calls:
             state.phase = "blocked"
-            state.blocked_reason = "no Cline run tool available"
+            state.blocked_reason = "no client run tool available"
             return _terminal(svc, task_id, state)
     save_loop_state(svc, task_id, state)
     return _with_loop(OrchResult(tool_calls=calls), state)
@@ -818,6 +888,15 @@ async def _advance_after_verify(
     picked,
 ) -> OrchResult:
     if not complete_working_set_refresh(state, messages):
+        calls = refresh_working_set_calls(
+            state,
+            catalog,
+            paths=state.working_set.refresh_pending
+            or state.working_set.files_changed,
+        )
+        if calls:
+            save_loop_state(svc, task_id, state)
+            return _with_loop(OrchResult(tool_calls=calls), state)
         return _waiting(state, "post-mutation working-set snapshot")
     commands, reason = select_verify_commands(state.commands)
     if not commands:
@@ -840,6 +919,12 @@ async def _advance_after_verify(
     command = commands[state.verify_index]
     state.last_cmd = command
     run = last_run_for_command_since_write(messages, command)
+    if (
+        run is None
+        and state.checkpoint_available
+        and state.checkpoint_count == state.iteration
+    ):
+        run = last_run_for_command(messages, command)
     if run is None:
         calls = verify_tool_calls(
             command,
@@ -848,11 +933,12 @@ async def _advance_after_verify(
         )
         if not calls:
             state.phase = "blocked"
-            state.blocked_reason = "no Cline run tool available"
+            state.blocked_reason = "no client run tool available"
             return _terminal(svc, task_id, state)
         save_loop_state(svc, task_id, state)
         return _with_loop(OrchResult(tool_calls=calls), state)
     exit_code, timed_out, stdout, stderr = parse_command_outcome(run[2])
+    state.result_cmd = command
     state.last_exit = exit_code
     state.timed_out = timed_out
     state.stdout_tail = stdout
@@ -872,6 +958,7 @@ async def _advance_after_verify(
                 (record.diff_hash, record.command)
                 for record in state.verification_results
                 if record.exit_code == 0
+                and record.diff_hash == state.active_diff_hash
             }
             if observed == expected:
                 state.phase = "verified"
@@ -887,7 +974,7 @@ async def _advance_after_verify(
         )
         if not calls:
             state.phase = "blocked"
-            state.blocked_reason = "no Cline run tool available"
+            state.blocked_reason = "no client run tool available"
             return _terminal(svc, task_id, state)
         save_loop_state(svc, task_id, state)
         return _with_loop(OrchResult(tool_calls=calls), state)
@@ -985,6 +1072,15 @@ async def _advance_expansion(
     picked,
 ) -> OrchResult:
     if not complete_working_set_refresh(state, messages):
+        calls = refresh_working_set_calls(
+            state,
+            catalog,
+            paths=state.working_set.refresh_pending
+            or state.working_set.files_changed,
+        )
+        if calls:
+            save_loop_state(svc, task_id, state)
+            return _with_loop(OrchResult(tool_calls=calls), state)
         return _waiting(state, "changed-file refresh results")
     if not consume_expansion_results(state, messages):
         return _waiting(state, "causal expansion results")
@@ -1023,6 +1119,15 @@ async def _run_repair_apply(
         state.phase = "exhausted"
         return _terminal(svc, task_id, state)
     if not complete_working_set_refresh(state, messages=[]):
+        calls = refresh_working_set_calls(
+            state,
+            catalog,
+            paths=state.working_set.refresh_pending
+            or state.working_set.files_changed,
+        )
+        if calls:
+            save_loop_state(svc, task_id, state)
+            return _with_loop(OrchResult(tool_calls=calls), state)
         return _waiting(state, "changed-file refresh results")
     if picked is None:
         picked = await pick_foreman(cfg)
@@ -1035,7 +1140,9 @@ async def _run_repair_apply(
         budget_tokens=_coder_context_tokens(cfg),
         instruction=(
             "Repair the observed current failure from this state. Preserve correct "
-            "existing behavior. Do not restart investigation or broad gather."
+            "existing behavior. Do not restart investigation or broad gather. Never "
+            "install or add a dependency that is not listed in APPROVED DEPENDENCIES; "
+            "rewrite the implementation or tests to avoid an unavailable dependency."
         ),
     )
     packets = repair_packets(
@@ -1046,13 +1153,160 @@ async def _run_repair_apply(
     )
     report = await run_dispatch(cfg, intent, thread="", packets=packets)
     applied = await _emit_apply(
-        cfg, intent, thread, catalog, tools, report, svc, task_id, state, picked=picked
+        cfg,
+        intent,
+        thread,
+        catalog,
+        tools,
+        report,
+        svc,
+        task_id,
+        state,
+        picked=picked,
+        prefer_replacements=True,
+        verification_gated_repair=True,
     )
     if applied is not None:
         return applied
     state.phase = "exhausted"
     state.blocked_reason = state.blocked_reason or "repair produced no mutation"
     return _terminal(svc, task_id, state)
+
+
+def _greenfield_run_id(intent: str) -> str | None:
+    match = _GREENFIELD_RUN_RE.search(intent or "")
+    return match.group(1).lower() if match else None
+
+
+async def _run_greenfield_orch(
+    cfg,
+    run_id: str,
+    *,
+    thread: str,
+    messages: list[Any],
+    tools: list[Any],
+    extra: dict[str, Any] | None,
+) -> OrchResult:
+    from harness.greenfield.controller import GreenfieldController
+
+    controller = GreenfieldController(cfg)
+    run = controller.resume(run_id)
+    if run.status == "awaiting_approval":
+        return OrchResult(
+            text=(
+                f"Greenfield {run_id} is awaiting its one approval. "
+                f"Run: harness build approve {run_id}"
+            )
+        )
+    if run.status in {"blocked", "exhausted", "cancelled"}:
+        return OrchResult(
+            text=f"Greenfield {run_id} status: {run.status}\nreason: {run.error or '(none)'}"
+        )
+    if run.status == "complete":
+        return OrchResult(
+            text=(
+                f"Greenfield {run_id} COMPLETE\n"
+                f"verified repository: {run.workspace_root}\n"
+                f"published repository: {run.published_path or '(not published)'}\n"
+                f"state hash: {run.final_state_hash}"
+            )
+        )
+    if not run.workspace_root:
+        return OrchResult(text=f"Greenfield {run_id} has no provisioned workspace.", error="no workspace")
+    actual_workspace = client_workspace_root(messages, extra)
+    required_workspace = Path(run.workspace_root).resolve()
+    if actual_workspace is None or actual_workspace.resolve() != required_workspace:
+        return OrchResult(
+            text=(
+                "Greenfield execution is isolated and cannot run in this checkout.\n"
+                f"Open this folder as the Cursor workspace: {required_workspace}\n"
+                f"Then send: Continue greenfield {run_id}"
+            ),
+            error="greenfield workspace mismatch",
+        )
+    active = next(
+        (
+            row
+            for row in run.milestones
+            if row.ordinal > 0 and row.state != "complete"
+        ),
+        None,
+    )
+    if active is None or not active.task_id:
+        run = controller.ensure_milestone_task(run_id)
+        active = next(
+            (
+                row
+                for row in run.milestones
+                if row.ordinal > 0 and row.state != "complete"
+            ),
+            None,
+        )
+    if active is None or not active.task_id:
+        finished = controller.finalize(run_id)
+        return OrchResult(
+            text=(
+                f"Greenfield {run_id} COMPLETE\n"
+                f"published repository: {finished.published_path}"
+            )
+        )
+    task = controller.tasks.get(active.task_id)
+    result = await run_orch(
+        cfg,
+        task.intent,
+        thread=thread,
+        messages=messages,
+        tools=tools,
+        extra=extra,
+        _greenfield_internal=True,
+        _task_id_override=active.task_id,
+        _workspace_override=required_workspace,
+    )
+    if result.loop_phase not in TERMINAL:
+        return result
+    advanced = controller.reconcile_milestone(run_id)
+    if advanced.status == "complete":
+        return OrchResult(
+            text=(
+                f"Greenfield {run_id} COMPLETE\n"
+                f"published repository: {advanced.published_path}\n"
+                f"state hash: {advanced.final_state_hash}"
+            ),
+            loop_phase="verified",
+            loop_iteration=result.loop_iteration,
+        )
+    if advanced.status in {"blocked", "exhausted", "cancelled"}:
+        return OrchResult(
+            text=(
+                f"Greenfield {run_id} status: {advanced.status}\n"
+                f"reason: {advanced.error or '(none)'}"
+            ),
+            error=advanced.error,
+            loop_phase=advanced.status,
+            loop_iteration=result.loop_iteration,
+        )
+    next_active = next(
+        (
+            row
+            for row in advanced.milestones
+            if row.ordinal > 0 and row.state != "complete"
+        ),
+        None,
+    )
+    if next_active is None or not next_active.task_id:
+        return OrchResult(text=f"Greenfield {run_id} is advancing to final verification.")
+    next_task = controller.tasks.get(next_active.task_id)
+    return await run_orch(
+        cfg,
+        next_task.intent,
+        thread="",
+        messages=[],
+        tools=tools,
+        extra={"workspace_root": str(required_workspace)},
+        _greenfield_internal=True,
+        _task_id_override=next_active.task_id,
+        _workspace_override=required_workspace,
+    )
 
 
 async def run_orch(
@@ -1063,13 +1317,27 @@ async def run_orch(
     messages: list[Any] | None = None,
     tools: list[Any] | None = None,
     extra: dict[str, Any] | None = None,
+    _greenfield_internal: bool = False,
+    _task_id_override: str | None = None,
+    _workspace_override: Path | None = None,
 ) -> OrchResult:
     intent = (intent or "").strip()
     if not intent:
         return OrchResult(text="Harness orch needs a user message.", error="no intent")
+    if not _greenfield_internal:
+        greenfield_id = _greenfield_run_id(intent)
+        if greenfield_id:
+            return await _run_greenfield_orch(
+                cfg,
+                greenfield_id,
+                thread=thread,
+                messages=list(messages or []),
+                tools=list(tools or []),
+                extra=extra,
+            )
     if not thread and messages:
         thread = compact_thread(messages)
-    workspace = cline_workspace_root(messages, extra)
+    workspace = _workspace_override or client_workspace_root(messages, extra)
     from harness.task.search import embedder_thread_block
 
     embedder_hits = embedder_thread_block(intent)
@@ -1082,7 +1350,7 @@ async def run_orch(
                 "Ask the actual question.\n"
             )
         )
-    catalog = merge_tool_catalog(cline_tool_catalog(tools))
+    catalog = merge_tool_catalog(client_tool_catalog(tools))
     rounds = gather_rounds(messages or [])
     evidence = has_repo_evidence(messages or [])
     acted = has_action_round(messages or [])
@@ -1091,12 +1359,16 @@ async def run_orch(
     task_id = ""
     state: LoopState | None = None
     if svc is not None:
-        task = svc.session_task()
+        task = svc.get(_task_id_override) if _task_id_override else svc.session_task()
         task_id = task.task_id
         state = load_loop_state(svc, task_id)
         if state and state.intent and state.intent != intent:
             state = None
-        if state is None and last_write_result(messages or []):
+        if (
+            state is None
+            and _task_id_override is None
+            and last_write_result(messages or [])
+        ):
             state = LoopState(phase="apply", intent=intent, iteration=1)
         if state is None:
             state = LoopState(phase="gather", intent=intent)
@@ -1160,7 +1432,7 @@ async def run_orch(
 
     # A client that sent no tools (plain curl, SDK chat) has no hands to run
     # gather calls; a tool_calls turn would render as an empty reply there.
-    # Go straight to dispatch so orch always answers in text. With Cline,
+    # Go straight to dispatch so orch always answers in text. With a tool client,
     # permit one targeted follow-up after the initial broad gather, then use
     # the evidence instead of spending four rounds asking for more context.
     # README/package.json is not enough for a frontend/UI assessment: keep
@@ -1237,20 +1509,23 @@ async def run_orch(
         ).text
         dispatch_thread = compiled_context
         save_loop_state(svc, task_id, state)
-    try:
-        from harness.gci.integration import global_discovery_context
+    if "GREENFIELD RUN " not in intent:
+        try:
+            from harness.gci.integration import global_discovery_context
 
-        global_context = global_discovery_context(
-            getattr(cfg, "settings", None),
-            intent,
-            limit=6,
-        )
-        if global_context:
-            dispatch_thread = f"{dispatch_thread}\n\n{global_context}".strip()
-            if compiled_context:
-                compiled_context = f"{compiled_context}\n\n{global_context}".strip()
-    except Exception:
-        log.exception("global code-intelligence discovery failed")
+            global_context = global_discovery_context(
+                getattr(cfg, "settings", None),
+                intent,
+                limit=6,
+            )
+            if global_context:
+                dispatch_thread = f"{dispatch_thread}\n\n{global_context}".strip()
+                if compiled_context:
+                    compiled_context = (
+                        f"{compiled_context}\n\n{global_context}".strip()
+                    )
+        except Exception:
+            log.exception("global code-intelligence discovery failed")
     report = await run_dispatch(
         cfg,
         intent,

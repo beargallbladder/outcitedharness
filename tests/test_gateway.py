@@ -3,14 +3,13 @@ from pathlib import Path
 import pytest
 from starlette.requests import Request
 
-from harness.gateway.anthropic_compat import openai_to_anthropic_payload
 from harness.gateway.qwen_tools import parse_qwen_tool_text, rewrite_openai_completion
 from harness.gateway.server import _authorized
-from harness.gateway.spec import ClineSpec, listed_models, resolve_alias
+from harness.gateway.spec import GatewaySpec, listed_models, resolve_alias
 
 
-def _spec() -> ClineSpec:
-    return ClineSpec(
+def _spec() -> GatewaySpec:
+    return GatewaySpec(
         listen_host="127.0.0.1",
         listen_port=8787,
         api_key="harness-local",
@@ -38,7 +37,7 @@ def _request(headers: list[tuple[bytes, bytes]], host: str = "127.0.0.1") -> Req
     )
 
 
-def test_loopback_accepts_any_cline_key():
+def test_loopback_accepts_any_client_key():
     spec = _spec()
     req = _request([(b"authorization", b"Bearer leftover-openrouter-key")])
     assert _authorized(req, spec)
@@ -47,7 +46,7 @@ def test_loopback_accepts_any_cline_key():
 
 
 def test_non_loopback_requires_configured_key():
-    spec = ClineSpec(
+    spec = GatewaySpec(
         listen_host="0.0.0.0",
         listen_port=8787,
         api_key="harness-local",
@@ -62,14 +61,14 @@ def test_non_loopback_requires_configured_key():
     assert not _authorized(_request([(b"authorization", b"Bearer other")], remote), spec)
 
 
-def test_alias_maps_cline_ids():
+def test_alias_maps_gateway_ids():
     spec = _spec()
     assert resolve_alias(spec, "harness-local") == "dgx_qwen"
     assert resolve_alias(spec, "harness-auto") == "auto"
     assert resolve_alias(spec, "dgx_qwen") == "dgx_qwen"
 
 
-def test_models_list_exposes_cline_ids():
+def test_models_list_exposes_gateway_ids():
     ids = {row["id"] for row in listed_models(_spec())}
     assert ids == {"harness-auto", "harness-local", "harness-m5", "harness-frontier"}
 
@@ -97,12 +96,43 @@ def test_remote_gateway_exposes_only_harness_identity(tmp_path: Path):
     index = client.get("/").json()
     assert index["models"] == ["harness-orch"]
     assert spec.api_key not in str(index)
-    blocked = client.post(
+    unauth = client.post(
         "/v1/chat/completions",
-        headers={"Authorization": f"Bearer {spec.api_key}"},
         json={"model": "harness-local", "messages": []},
     )
-    assert blocked.status_code == 404
+    assert unauth.status_code == 401
+
+
+def test_authenticated_remote_still_gets_only_orchestration_model(tmp_path: Path):
+    from harness.config import AppConfig, Settings
+    from harness.gateway.server import create_app
+    from starlette.testclient import TestClient
+
+    cfg = AppConfig(
+        root=tmp_path,
+        settings=Settings(results_dir=tmp_path / "results", db_path=tmp_path / "h.db"),
+        models={},
+        pricing={},
+    )
+    spec = _spec()
+    spec.listen_host = "0.0.0.0"
+    spec.aliases["harness-orch"] = "orch"
+    client = TestClient(create_app(cfg, spec))
+    auth = {"Authorization": f"Bearer {spec.api_key}"}
+
+    ids = {row["id"] for row in client.get("/v1/models", headers=auth).json()["data"]}
+    assert ids == {"harness-orch"}
+    health = client.get("/healthz", headers=auth).json()
+    assert health["service"] == "harness-orch-gateway"
+    index = client.get("/", headers=auth).json()
+    assert index["models"] == ["harness-orch"]
+    rejected = client.post(
+        "/v1/chat/completions",
+        headers=auth,
+        json={"model": "harness-local", "messages": []},
+    )
+    assert rejected.status_code == 404
+    assert rejected.json()["error"]["message"] == "unknown harness model"
 
 
 def test_qwen_xml_becomes_openai_tool_calls():
@@ -132,33 +162,6 @@ git clone https://github.com/octocat/Hello-World.git /tmp/hello-world
     assert rewritten["choices"][0]["message"]["tool_calls"][0]["function"]["name"] == "execute_command"
 
 
-def test_openai_tools_become_anthropic_tools():
-    body = {
-        "model": "harness-frontier",
-        "messages": [
-            {"role": "system", "content": "Be brief."},
-            {"role": "user", "content": "read foo"},
-        ],
-        "tools": [
-            {
-                "type": "function",
-                "function": {
-                    "name": "read_file",
-                    "description": "Read a file",
-                    "parameters": {"type": "object", "properties": {"path": {"type": "string"}}},
-                },
-            }
-        ],
-        "max_tokens": 99,
-    }
-    payload = openai_to_anthropic_payload(body, "claude-sonnet-4-6", 8192)
-    assert payload["model"] == "claude-sonnet-4-6"
-    assert payload["system"] == "Be brief."
-    assert payload["max_tokens"] == 99
-    assert payload["tools"][0]["name"] == "read_file"
-    assert payload["tools"][0]["input_schema"]["properties"]["path"]["type"] == "string"
-
-
 def test_last_user_text_and_orch_alias():
     from harness.gateway.orch import last_user_text
     from harness.gateway.spec import is_orch_alias
@@ -181,8 +184,8 @@ def test_last_user_text_and_orch_alias():
     assert "split this" in thread
 
 
-def test_cline_workspace_root_from_env_block(tmp_path: Path):
-    from harness.gateway.orch import cline_workspace_root
+def test_client_workspace_root_from_env_block(tmp_path: Path):
+    from harness.gateway.orch import client_workspace_root
 
     root = tmp_path / "locationlocationlocation"
     root.mkdir()
@@ -190,7 +193,7 @@ def test_cline_workspace_root_from_env_block(tmp_path: Path):
         {
             "role": "system",
             "content": (
-                "You are Cline.\n"
+                "You are Cursor.\n"
                 "<env>\n"
                 "1. Platform: darwin\n"
                 "3. IDE: VS Code\n"
@@ -200,11 +203,32 @@ def test_cline_workspace_root_from_env_block(tmp_path: Path):
         },
         {"role": "user", "content": "review the score"},
     ]
-    assert cline_workspace_root(messages) == root.resolve()
+    assert client_workspace_root(messages) == root.resolve()
 
 
-def test_cline_workspace_root_disagreement_fails_closed(tmp_path: Path):
-    from harness.gateway.orch import cline_workspace_root
+def test_client_workspace_root_from_current_system_information(tmp_path: Path):
+    from harness.gateway.orch import client_workspace_root
+
+    root = tmp_path / "greenfield"
+    root.mkdir()
+    messages = [
+        {
+            "role": "system",
+            "content": (
+                "You are Cursor.\n\n"
+                "SYSTEM INFORMATION\n"
+                "Operating System: macOS\n"
+                "IDE: Visual Studio Code\n"
+                f"Primary Working Directory: {root}\n"
+            ),
+        },
+        {"role": "user", "content": "Continue greenfield gf-example"},
+    ]
+    assert client_workspace_root(messages) == root.resolve()
+
+
+def test_client_workspace_root_disagreement_fails_closed(tmp_path: Path):
+    from harness.gateway.orch import client_workspace_root
 
     a = tmp_path / "repoA"
     b = tmp_path / "repoB"
@@ -217,9 +241,9 @@ def test_cline_workspace_root_disagreement_fails_closed(tmp_path: Path):
         }
     ]
     extra = {"cwd": str(b)}
-    assert cline_workspace_root(messages, extra) is None
-    assert cline_workspace_root([{"role": "user", "content": "no env here"}]) is None
-    assert cline_workspace_root(messages, extra={"cwd": "relative/path"}) == a.resolve()
+    assert client_workspace_root(messages, extra) is None
+    assert client_workspace_root([{"role": "user", "content": "no env here"}]) is None
+    assert client_workspace_root(messages, extra={"cwd": "relative/path"}) == a.resolve()
 
 
 def test_orch_complete_stitches(tmp_path: Path, monkeypatch):
@@ -341,7 +365,7 @@ async def test_no_repo_evidence_gathers_immediately(monkeypatch):
     ) is True
 
     async def boom(*args, **kwargs):
-        raise AssertionError("dispatch must not run before Cline gathers")
+        raise AssertionError("dispatch must not run before the client gathers")
 
     monkeypatch.setattr("harness.gateway.orch.run_dispatch", boom)
     monkeypatch.setattr("harness.gateway.orch.plan_orch", boom)

@@ -61,7 +61,7 @@ def global_discovery_context(
         GLOBAL_CONTEXT_MARKER,
         "These hits are namespaced discovery evidence. They do not authorize reading or editing",
         "any path. Only paths separately rebound to the active source_host + repo_root may become",
-        "workspace-local Cline read_file calls.",
+        "workspace-local Cursor read calls.",
     ]
     for hit in hits:
         first = " ".join(hit.text.splitlines())[:240]

@@ -1,0 +1,17 @@
+# Internal OpenAI-compatible endpoint used only by LiteLLM's harness-orch route.
+# Cursor talks to loopback LiteLLM :7410, not directly to this service.
+listen_host: 127.0.0.1
+listen_port: 8787
+api_key: harness-local
+
+aliases:
+  harness-orch: orch
+
+# Internal orchestration failover order. This is not a client-visible route.
+auto_ladder:
+  - dgx3_qwen
+  - m5_qwen
+  - frontier
+
+context_window: 131072
+max_output_tokens: 8192

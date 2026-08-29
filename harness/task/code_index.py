@@ -367,7 +367,7 @@ def gather_paths_for_intent(
     limit: int = 6,
     embed: EmbedFn | None = None,
 ) -> list[str]:
-    """Unique relative paths for Cline read_file. Empty if workspace is unknown or unindexed."""
+    """Unique relative paths for client reads; empty without an indexed workspace."""
     if workspace is None:
         return []
     root = normalize_repo_root(workspace)

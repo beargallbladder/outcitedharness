@@ -22,6 +22,15 @@ gci_enabled: true
 gci_url: http://100.81.201.24:8810
 gci_token_env: HARNESS_GCI_TOKEN
 gci_timeout_s: 8
+gci_refresh:
+  enabled: true
+  active_interval_seconds: 300
+  stale_after_days: 30
+  stale_interval_seconds: 86400
+  failure_retry_seconds: 900
+  jitter_seconds: 0
+  state_path: ~/.harness/gci-refresh.sqlite
+greenfield_runs_root: ~/.harness/runs
 system_prompt: |
   You are completing a benchmark task.
   Follow the instructions exactly.

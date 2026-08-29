@@ -412,7 +412,7 @@ def test_allowlist_rejects_shell_and_unknowns():
     assert commands_named_in_intent("fix the failing unit test in tests/test_x.py") == []
 
 
-def test_parse_command_outcome_reads_cline_payloads_and_fails_closed():
+def test_parse_command_outcome_reads_client_payloads_and_fails_closed():
     code, timed, out, _err = parse_command_outcome("1 passed\nExit code: 0")
     assert code == 0 and not timed
     code, timed, out, _err = parse_command_outcome(
@@ -491,6 +491,28 @@ def test_deleted_task_file_changes_hash_and_completes_missing_refresh():
     ]
     assert complete_working_set_refresh(state, messages)
     assert state.working_set.refresh_pending == []
+
+
+def test_resumed_refresh_consumes_fresh_results_without_prior_exchange():
+    state = LoopState(last_cmd=".venv/bin/ruff check .")
+    state.working_set.refresh_pending = ["src/app.py"]
+    state.working_set.refresh_diff_pending = True
+
+    assert complete_working_set_refresh(state, _refresh_pair(0))
+    assert state.working_set.refresh_pending == []
+    assert state.working_set.refresh_diff_pending is False
+
+
+def test_headless_read_wrapper_hashes_file_content_not_json_envelope():
+    from harness.orch_loop import _read_result_files
+
+    content = "def endpoint():\n    return {'ok': True}\n"
+    wrapped = json.dumps(
+        {"path": "src/app.py", "result": content, "success": True}
+    )
+    assert _read_result_files(["src/app.py"], wrapped) == {
+        "src/app.py": content
+    }
 
 
 def test_failure_expansion_extracts_only_unseen_workspace_evidence():
@@ -1258,6 +1280,43 @@ async def test_same_failure_hash_after_repair_exhausts(tmp_path: Path, monkeypat
 
 
 @pytest.mark.asyncio
+async def test_repair_delta_can_run_before_semantic_critic_acceptance(
+    tmp_path: Path,
+    monkeypatch,
+):
+    from harness.gateway.orch import run_orch
+
+    cfg = _cfg(tmp_path)
+    report = _report()
+    captured = _patch_loop(monkeypatch, report=report)
+    tools = _tools()
+    failure = "AssertionError: expected 4\nExit code: 1"
+
+    await run_orch(cfg, FIX, messages=_ready_messages(), tools=tools)
+    extra = _edit_pair(0)
+    await run_orch(cfg, FIX, messages=_ready_messages(extra), tools=tools)
+    repair = await run_orch(
+        cfg,
+        FIX,
+        messages=_ready_messages(extra + _verify_pair(0, failure)),
+        tools=tools,
+    )
+    assert repair.loop_phase == "repair"
+
+    report.shots[0].qa_pass = False
+    report.critic_verdict = "reject"
+    repaired = await run_orch(
+        cfg,
+        FIX,
+        messages=_ready_messages(extra + _verify_pair(0, failure) + _refresh_pair(0)),
+        tools=tools,
+    )
+    assert repaired.loop_phase == "apply"
+    assert repaired.tool_calls
+    assert captured["planned"]
+
+
+@pytest.mark.asyncio
 async def test_missing_command_blocks_and_does_not_invent(tmp_path: Path, monkeypatch):
     from harness.gateway.orch import run_orch
 
@@ -1269,6 +1328,120 @@ async def test_missing_command_blocks_and_does_not_invent(tmp_path: Path, monkey
     assert "status: blocked" in result.text
     assert not result.tool_calls
     assert "pytest" not in result.text or "accept.commands" in result.text
+
+
+@pytest.mark.asyncio
+async def test_degraded_critic_blocks_code_mutation(tmp_path: Path, monkeypatch):
+    from harness.gateway.orch import run_orch
+
+    cfg = _cfg(tmp_path)
+    report = _report()
+    report.critic_verdict = "degraded"
+    _patch_loop(monkeypatch, report=report)
+    result = await run_orch(cfg, FIX, messages=_ready_messages(), tools=_tools())
+    assert result.loop_phase == "blocked"
+    assert "no critic produced a valid grade" in result.text
+    assert not result.tool_calls
+
+
+@pytest.mark.asyncio
+async def test_greenfield_execution_never_queries_global_discovery(
+    tmp_path: Path,
+    monkeypatch,
+):
+    from harness.gateway.orch import run_orch
+
+    cfg = _cfg(tmp_path)
+    _patch_loop(monkeypatch)
+    called = 0
+
+    def global_context(*_args, **_kwargs):
+        nonlocal called
+        called += 1
+        return "must not appear"
+
+    monkeypatch.setattr(
+        "harness.gci.integration.global_discovery_context",
+        global_context,
+    )
+    result = await run_orch(
+        cfg,
+        "GREENFIELD RUN gf_test\nImplement the approved API milestone.",
+        messages=_ready_messages(),
+        tools=_tools(),
+    )
+    assert result.loop_phase == "apply"
+    assert called == 0
+
+
+def test_verification_gated_repair_allows_only_safe_exact_delta():
+    from harness.gateway.orch import _verification_gated_repair_reason
+
+    exact = {
+        "function": {
+            "name": "replace_in_file",
+            "arguments": {
+                "path": "tests/test_api.py",
+                "old_string": "similarities, differences = result",
+                "new_string": "_similarities, differences = result",
+            },
+        }
+    }
+    assert _verification_gated_repair_reason([exact]) == ""
+
+    dynamic_execution = {
+        "function": {
+            "name": "write_to_file",
+            "arguments": {
+                "path": "tests/test_api.py",
+                "content": "result = eval(source)",
+            },
+        }
+    }
+    assert "dynamic execution" in _verification_gated_repair_reason(
+        [dynamic_execution]
+    )
+
+    dependency = {
+        "function": {
+            "name": "replace_in_file",
+            "arguments": {
+                "path": "pyproject.toml",
+                "old_string": "dependencies = []",
+                "new_string": 'dependencies = ["requests"]',
+            },
+        }
+    }
+    assert "dependency manifests" in _verification_gated_repair_reason([dependency])
+
+
+def test_reconstructed_command_result_is_available_without_write_exchange():
+    from harness.orch_loop import (
+        last_run_for_command,
+        last_run_for_command_since_write,
+    )
+
+    messages = _verify_pair(0, '{"exit_code":0,"stdout":"1 passed"}')
+    assert last_run_for_command_since_write(messages, "pytest tests/test_x.py") is None
+    recovered = last_run_for_command(messages, "pytest tests/test_x.py")
+    assert recovered is not None
+    assert "1 passed" in recovered[2]
+
+
+@pytest.mark.asyncio
+async def test_text_only_answer_blocks_when_no_mutation_can_be_planned(
+    tmp_path: Path,
+    monkeypatch,
+):
+    from harness.gateway.orch import run_orch
+
+    cfg = _cfg(tmp_path)
+    captured = {"planned_calls": [[]]}
+    _patch_loop(monkeypatch, captured=captured)
+    result = await run_orch(cfg, FIX, messages=_ready_messages(), tools=_tools())
+    assert result.loop_phase == "blocked"
+    assert "no executable client mutation calls" in result.text
+    assert not result.tool_calls
 
 
 @pytest.mark.asyncio
@@ -1330,7 +1503,23 @@ async def test_critic_rejected_output_cannot_drive_apply(tmp_path: Path, monkeyp
 
 
 @pytest.mark.asyncio
-async def test_cline_run_commands_json_exit_verifies(tmp_path: Path, monkeypatch):
+async def test_verified_frontier_rescue_can_drive_apply(tmp_path: Path, monkeypatch):
+    from harness.gateway.orch import run_orch
+
+    cfg = _cfg(tmp_path)
+    report = _report(qa_pass=False)
+    report.critic_verdict = "reject"
+    report.frontier_verified = True
+    report.frontier_text = "Exact independently verified implementation."
+    captured = _patch_loop(monkeypatch, report=report)
+    result = await run_orch(cfg, FIX, messages=_ready_messages(), tools=_tools())
+    assert result.loop_phase == "apply"
+    assert result.tool_calls
+    assert captured["planned"] is True
+
+
+@pytest.mark.asyncio
+async def test_client_run_commands_json_exit_verifies(tmp_path: Path, monkeypatch):
     from harness.gateway.orch import run_orch
 
     cfg = _cfg(tmp_path)
@@ -1373,7 +1562,7 @@ async def test_pytest_passed_without_exit_is_not_verified(tmp_path: Path, monkey
 
 
 @pytest.mark.asyncio
-async def test_verify_binds_to_cline_run_commands_catalog(tmp_path: Path, monkeypatch):
+async def test_verify_binds_to_client_run_commands_catalog(tmp_path: Path, monkeypatch):
     from harness.gateway.orch import run_orch
 
     cfg = _cfg(tmp_path)

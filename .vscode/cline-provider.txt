@@ -1,20 +1,12 @@
-Cline → Settings → API Provider: OpenAI Compatible
+Cline -> Settings -> API Provider: OpenAI Compatible
 
-Base URL:  http://127.0.0.1:8787/v1
-API Key:   sk-harness-local
+Base URL:  http://127.0.0.1:7410/v1
+API Key:   value of LITELLM_MASTER_KEY in the Harness .env
 Model ID:  harness-orch
 
 Context window: 131072
 Max output: 8192
-Computer Use / tools: on
+Tools: enabled
 
-Other Model IDs:
-  harness-local     DGX e10b Qwen3-Coder-Next (.38)
-  harness-dgx2      DGX 49af Qwen3-Coder-Next (.45)
-  harness-asus      ASUS gx10-fc2e Qwen3-Coder-Next (.46)
-  harness-dgx3      DGX 69c8 Qwen3-Coder-Next (.49)
-  harness-orch      you type; Cline is hands; pool writes the answer
-  harness-m5        M5 Qwen3.8-27B 8-bit
-  harness-frontier  Claude Sonnet
-  harness-researcher ASUS gx10-0309 Nemotron 3.5 Lightning (critic; not auto)
-  harness-auto      dead-box failover only (Spark → M5 → Claude)
+The public client boundary is LiteLLM :7410. Harness :8787 is an internal
+orchestration gateway and should not be configured directly in Cline.

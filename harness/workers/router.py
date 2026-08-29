@@ -6,7 +6,7 @@ from harness.config import AppConfig, ModelConfig
 from harness.workers.registry import WorkerRegistry
 
 if TYPE_CHECKING:
-    from harness.gateway.spec import ClineSpec
+    from harness.gateway.spec import GatewaySpec
 
 
 def should_failover(status: int, error: str | None, has_next: bool) -> bool:
@@ -17,12 +17,12 @@ def should_failover(status: int, error: str | None, has_next: bool) -> bool:
 
 
 def route_models(
-    spec: ClineSpec,
+    spec: GatewaySpec,
     cfg: AppConfig,
     requested: str,
     registry: WorkerRegistry | None = None,
 ) -> list[ModelConfig]:
-    """Resolve Cline model id → workers. auto uses the registry failover chain."""
+    """Resolve a gateway model id to workers."""
     from harness.gateway.spec import ladder_for
 
     return ladder_for(spec, cfg, requested, registry)

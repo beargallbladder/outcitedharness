@@ -1,7 +1,7 @@
 import json
 from pathlib import Path
 
-from harness.gateway.proxy import _worker_for_alias, log_turn
+from harness.gateway.logging import _worker_for_alias, log_turn
 from harness.orch_loop import LoopState, WorkingFile, save_loop_state
 from harness.rescue import missing_sections
 from harness.storage.db import Store
@@ -144,8 +144,8 @@ def test_log_turn_records_attempt(tmp_path: Path):
     with store.connect() as conn:
         task_row = conn.execute("SELECT * FROM tasks").fetchone()
         assert task_row is not None
-        assert task_row["intent"] == "cline session"
-        assert task_row["status"] == "open"  # Cline turns do not close the session
+        assert task_row["intent"] == "gateway session"
+        assert task_row["status"] == "open"  # Gateway turns do not close the session
         
         # Verify attempt was recorded
         attempt_row = conn.execute("SELECT * FROM attempts").fetchone()
@@ -157,7 +157,7 @@ def test_log_turn_records_attempt(tmp_path: Path):
         assert attempt_row["input_tokens"] == 100
         assert attempt_row["output_tokens"] == 50
         assert attempt_row["ttft_ms"] == 150.5
-        turn_row = conn.execute("SELECT * FROM cline_turns").fetchone()
+        turn_row = conn.execute("SELECT * FROM gateway_turns").fetchone()
         assert turn_row["task_id"] == task_row["task_id"]
 
 
@@ -225,7 +225,7 @@ def test_log_turn_does_not_attach_to_unrelated_task(tmp_path: Path):
         tasks = conn.execute("SELECT task_id, intent FROM tasks ORDER BY created_at").fetchall()
         assert len(tasks) == 2
         assert tasks[0]["task_id"] == other.task_id
-        assert tasks[1]["intent"] == "cline session"
+        assert tasks[1]["intent"] == "gateway session"
         stolen = conn.execute(
             "SELECT COUNT(*) FROM attempts WHERE task_id = ?", (other.task_id,)
         ).fetchone()[0]
@@ -306,27 +306,27 @@ def test_log_turn_records_failure(tmp_path: Path):
 
 
 def test_latest_session_returns_none_when_no_open_session(tmp_path: Path):
-    """Test that latest_session returns None when no open cline session exists."""
+    """Test that latest_session returns None when no gateway session exists."""
     store = Store(tmp_path / "no_session.db")
     svc = TaskService(store)
     assert svc.latest_session() is None
 
 
 def test_latest_session_returns_open_session(tmp_path: Path):
-    """Test that latest_session returns the most recent open cline session."""
+    """Test that latest_session returns the most recent open gateway session."""
     store = Store(tmp_path / "session.db")
     svc = TaskService(store)
     
-    # Create a non-cline session
+    # Create a non-gateway session
     svc.start("other task")
     
-    # Create cline sessions
-    svc.start("cline session")
-    later = svc.start("cline session")
+    # Create gateway sessions
+    svc.start("gateway session")
+    later = svc.start("gateway session")
 
     task = svc.latest_session()
     assert task is not None
-    assert task.intent == "cline session"
+    assert task.intent == "gateway session"
     assert task.task_id == later.task_id
 
 
@@ -350,4 +350,4 @@ def test_task_current_cli_no_session(tmp_path: Path, monkeypatch):
     monkeypatch.setattr("harness.cli._cfg", fake_cfg)
     result = CliRunner().invoke(app, ["task", "current"])
     assert result.exit_code == 0
-    assert "no open cline session" in result.stdout
+    assert "no open gateway session" in result.stdout

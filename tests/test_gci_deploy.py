@@ -25,3 +25,27 @@ def test_deploy_script_only_manages_gci_unit():
     assert "systemctl restart bge" not in script
     assert "systemctl stop bge" not in script
     assert "systemctl start bge" not in script
+
+
+def test_launchd_refresh_job_is_short_lived_and_source_side():
+    template = (
+        ROOT / "scripts" / "com.samkim.harness-gci-refresh.plist.template"
+    ).read_text()
+    assert "com.samkim.harness-gci-refresh" in template
+    assert "<string>gci</string>" in template
+    assert "<string>auto-run</string>" in template
+    assert "<key>StartInterval</key>" in template
+    assert "<integer>300</integer>" in template
+    assert "<key>KeepAlive</key>" not in template
+    assert "spark" not in template.lower()
+    assert "git pull" not in template
+
+
+def test_launchd_installer_is_idempotent_and_user_scoped():
+    script = (ROOT / "scripts" / "install_gci_refresh.sh").read_text()
+    assert "set -euo pipefail" in script
+    assert "Library/LaunchAgents" in script
+    assert 'bootout "$DOMAIN/$LABEL"' in script
+    assert 'bootstrap "$DOMAIN" "$PLIST"' in script
+    assert "sudo" not in script
+    assert "git pull" not in script

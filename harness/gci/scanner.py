@@ -103,7 +103,12 @@ def build_snapshot(
         path = candidate.resolve()
         if candidate.is_symlink() or (root != path and root not in path.parents):
             raise GCIStorageError(f"unsafe indexed path: {rel}")
-        stat = path.stat()
+        try:
+            stat = path.stat()
+        except FileNotFoundError:
+            # Deleted tracked files remain in `git ls-files`; the delta below
+            # records them from the previous manifest.
+            continue
         if stat.st_size > MAX_FILE_BYTES:
             continue
         content = path.read_text(errors="replace")

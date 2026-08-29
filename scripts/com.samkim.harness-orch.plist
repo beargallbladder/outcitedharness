@@ -3,7 +3,7 @@
 <plist version="1.0">
 <dict>
     <key>Label</key>
-    <string>com.samkim.harness-cline</string>
+    <string>com.samkim.harness-orch</string>
     <key>ProgramArguments</key>
     <array>
         <string>/Users/samkim/Harnessv1/.venv/bin/harness</string>
@@ -16,8 +16,8 @@
     <key>KeepAlive</key>
     <true/>
     <key>StandardOutPath</key>
-    <string>/tmp/harness-cline.out.log</string>
+    <string>/Users/samkim/.harness/logs/harness-orch.out.log</string>
     <key>StandardErrorPath</key>
-    <string>/tmp/harness-cline.err.log</string>
+    <string>/Users/samkim/.harness/logs/harness-orch.err.log</string>
 </dict>
 </plist>

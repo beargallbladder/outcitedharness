@@ -4,7 +4,10 @@ Experimental instrument for one question:
 
 > For real work, what is the cheapest model tier that reliably solves the task — and does the ladder save frontier spend, or only add latency?
 
-This is a client of existing local/cloud model endpoints. Cline / VS Code talks to `harness serve` (`http://127.0.0.1:8787/v1`), not to the raw model ports.
+This is a client of existing local/cloud model endpoints. Cursor remains the
+agent and owns IDE tools. Loopback LiteLLM (`http://127.0.0.1:7410/v1`)
+exposes the local models and sends `harness-orch` to the durable Harness
+orchestrator on `:8787`.
 
 ## What it measures
 
@@ -17,7 +20,7 @@ This is a client of existing local/cloud model endpoints. Cline / VS Code talks 
 
 ## Safety
 
-The harness never starts, stops, restarts, or reconfigures inference services.
+The Harness runtime never starts, stops, restarts, or reconfigures inference services.
 If a model is down, it reports that and continues. GCI may call only the
 existing `:8800/v1/embeddings` route through its bounded encoder client; all
 other live embedding/search and OCR routes remain out of scope.
@@ -38,6 +41,31 @@ Edit:
 - `config/settings.yaml` — timeouts, results path
 
 Cloud providers stay disabled until you fill `base_url`, `model`, and the matching API key env var.
+
+## Live stack
+
+The approved allocation is one dedicated coder plus independent planning and
+criticism:
+
+- `local-coder`: DGX3 Qwen3-Coder-Next SGLang
+- `local-qwen38`: ASUS2 + ASUS4 Qwen3.8 Flash Next SGLang TP2
+- `local-critic`: ASUS3 Nemotron 3.5 Lightning SGLang
+- `harness-orch`: decomposition, parallel dispatch, grading, repair, and verification
+- `frontier-claude`: manual paid route only; never an automatic fallback
+
+Install or repair the loopback LiteLLM service, then qualify the stack:
+
+```shell
+scripts/install_litellm.sh install
+uv run python scripts/litellm_qualification.py
+```
+
+No Cline extension is required. Use Cursor's native agent and tools; invoke
+local orchestration through `harness dispatch`, the `harness-orch` API route,
+or project automation.
+
+For service ownership, ports, SGLang rollback rules, billing controls, and the
+MCP allowlist, see `ARCHITECTURE.md`.
 
 ## Commands
 
@@ -130,6 +158,7 @@ batches capped at 16.
 harness gci status
 harness gci scan
 harness gci refresh
+harness gci auto-run
 harness gci search "repository verification contract"
 harness gci search --mode symbol RepoContract
 harness gci pause
@@ -138,14 +167,74 @@ harness gci resume
 
 Approved roots come from `code_index_repos`. Scans include dirty and untracked
 source files but exclude ignored/vendor files and reject symlink escapes.
-Global results are discovery evidence only. A hit becomes a Cline `read_file`
+Global results are discovery evidence only. A hit becomes a workspace read
 path only when its source host and canonical repository root exactly match the
 active workspace.
+
+### Refresh automation
+
+Refresh automation runs on the machine that owns the configured working
+copies. It never asks the Spark to clone or pull repositories. Active
+repositories are checked every five minutes; after 30 days without observed
+Git or working-tree activity, they remain searchable but are checked only
+daily. Any detected activity returns a repository to the active cadence.
+
+The cheap activity probe uses Git HEAD, status, and dirty/untracked path
+metadata. If its fingerprint is unchanged, the pass does not contact GCI and
+performs no embedding work. Changed repositories reuse the manifest protocol
+and send only changed source files and deletions. Scheduling and failure state
+live in the separate local SQLite database configured by
+`gci_refresh.state_path`.
+
+Add an owned local repository by adding its absolute path to
+`code_index_repos`, then run `harness gci auto-run --force`. Paths are never
+discovered automatically.
+
+```shell
+scripts/install_gci_refresh.sh install
+scripts/install_gci_refresh.sh status
+scripts/install_gci_refresh.sh uninstall
+```
+
+The launchd job runs one short-lived, locked pass every five minutes. One
+repository failure does not block the others; bounded retry state is shown by
+`harness gci status`, and logs are written under `~/.harness/logs`.
 
 Deployment uses `scripts/deploy_gci.sh spark`. It installs only
 `harness-gci.service`, with a separate virtual environment, bearer-token
 environment file, resource controls, and restart lifecycle. It does not change
 or restart `bge-m3-embed.service`.
+
+## Autonomous greenfield builds
+
+Greenfield planning runs bounded GCI queries for architecture, domain, testing,
+and tooling analogues. The resulting excerpts retain `gci://` provenance and
+are advisory only: they cannot authorize source-repository reads, edits,
+copying, or runtime coupling.
+
+```shell
+harness build new \
+  --name electronics-family-api \
+  --stack python \
+  --dest ~/Projects/electronics-family-api \
+  --intent "Build a FastAPI service for managing electronics-family comparisons"
+
+harness build approve GREENFIELD_RUN_ID
+harness build status GREENFIELD_RUN_ID
+harness build resume GREENFIELD_RUN_ID
+```
+
+`build new` creates only durable planning state. It runs no package command and
+creates neither the destination nor an execution workspace. The single
+approval freezes the discovery, product specification, dependency list, and
+milestone plan; material drift blocks execution.
+
+After approval, M0 is bootstrapped and mechanically verified in
+`~/.harness/runs/<run-id>/repo`. Open that isolated folder in Cursor and send
+`Continue greenfield <run-id>`. The Cursor agent executes later
+milestones, while the controller verifies and commits each milestone, survives
+restarts, performs a final same-state repository gate, and publishes only if
+the reserved destination fingerprint is unchanged.
 
 ## Case format
 

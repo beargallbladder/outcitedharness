@@ -39,14 +39,14 @@ class Store:
     def _init(self) -> None:
         with self.connect() as conn:
             conn.executescript(SCHEMA_SQL)
-            self._ensure_column(conn, "cline_turns", "task_id", "TEXT")
+            self._ensure_column(conn, "gateway_turns", "task_id", "TEXT")
             self._ensure_column(conn, "tasks", "stage", "TEXT NOT NULL DEFAULT 'new'")
             self._ensure_column(conn, "tasks", "frontier_calls", "INTEGER NOT NULL DEFAULT 0")
             self._ensure_column(conn, "tasks", "updated_at", "TEXT")
             self._ensure_column(conn, "tasks", "final_outcome", "TEXT")
             self._ensure_column(conn, "attempts", "estimated_cost", "REAL")
             conn.execute(
-                "CREATE INDEX IF NOT EXISTS idx_cline_turns_task ON cline_turns(task_id)"
+                "CREATE INDEX IF NOT EXISTS idx_gateway_turns_task ON gateway_turns(task_id)"
             )
 
     @staticmethod
@@ -103,7 +103,7 @@ class Store:
                 values,
             )
 
-    def insert_cline_turn(self, payload: dict[str, Any]) -> None:
+    def insert_gateway_turn(self, payload: dict[str, Any]) -> None:
         columns = [
             "task_id",
             "started_at",
@@ -124,7 +124,7 @@ class Store:
         values = [payload.get(col) for col in columns]
         with self.connect() as conn:
             conn.execute(
-                f"INSERT INTO cline_turns ({', '.join(columns)}) VALUES ({', '.join('?' * len(columns))})",
+                f"INSERT INTO gateway_turns ({', '.join(columns)}) VALUES ({', '.join('?' * len(columns))})",
                 values,
             )
 

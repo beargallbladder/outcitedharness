@@ -169,7 +169,119 @@ def test_action_binding_allows_five_distinct_files():
         ],
         {"editor": ("path", "content")},
     )
-    assert len(dup) == 2
+    assert len(dup) == 3
+
+
+@pytest.mark.asyncio
+async def test_plan_actions_prefers_provider_native_tool_calls(monkeypatch):
+    from harness.dispatch import plan_actions
+
+    seen = {}
+
+    async def native(_model, _messages, extra=None, max_tokens=None):
+        seen["extra"] = extra
+        seen["max_tokens"] = max_tokens
+        return ChatResult(
+            provider="test",
+            model="test",
+            tool_calls=[
+                {
+                    "id": "call_native",
+                    "type": "function",
+                    "function": {
+                        "name": "write_to_file",
+                        "arguments": '{"path":"src/app.py","content":"print(1)"}',
+                    },
+                }
+            ],
+        )
+
+    monkeypatch.setattr("harness.dispatch._chat", native)
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "write_to_file",
+                "parameters": {"type": "object"},
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "run_commands",
+                "parameters": {"type": "object"},
+            },
+        },
+    ]
+    calls = await plan_actions(
+        _model("m5_qwen"),
+        "implement",
+        "",
+        "exact implementation",
+        {"write_to_file": ("path", "content"), "run_commands": ("commands",)},
+        tools,
+    )
+    assert calls[0]["function"]["name"] == "write_to_file"
+    assert "src/app.py" in calls[0]["function"]["arguments"]
+    assert seen["extra"]["tool_choice"] == "required"
+    assert len(seen["extra"]["tools"]) == 1
+    assert seen["max_tokens"] == 6000
+
+
+@pytest.mark.asyncio
+async def test_repair_action_planning_exposes_only_exact_replacement(monkeypatch):
+    from harness.dispatch import plan_actions
+
+    seen = {}
+
+    async def native(_model, _messages, extra=None, max_tokens=None):
+        seen["tools"] = extra["tools"]
+        return ChatResult(
+            provider="test",
+            model="test",
+            tool_calls=[
+                {
+                    "id": "call_replace",
+                    "type": "function",
+                    "function": {
+                        "name": "replace_in_file",
+                        "arguments": (
+                            '{"path":"tests/test_api.py",'
+                            '"old_string":"execute(sql)",'
+                            '"new_string":"execute(sql, (pid,))"}'
+                        ),
+                    },
+                }
+            ],
+        )
+
+    monkeypatch.setattr("harness.dispatch._chat", native)
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": name,
+                "parameters": {"type": "object"},
+            },
+        }
+        for name in ("write_to_file", "replace_in_file")
+    ]
+    calls = await plan_actions(
+        _model("m5_qwen"),
+        "repair SQL binding",
+        "",
+        "replace execute(sql) with execute(sql, (pid,))",
+        {
+            "write_to_file": ("path", "content"),
+            "replace_in_file": ("path", "old_string", "new_string"),
+        },
+        tools,
+        prefer_replacements=True,
+    )
+    assert [tool["function"]["name"] for tool in seen["tools"]] == [
+        "replace_in_file"
+    ]
+    assert calls[0]["function"]["name"] == "replace_in_file"
 
 
 def test_change_job_strips_prose_invariants():
@@ -243,7 +355,7 @@ def test_review_grounding_rejects_unseen_paths_and_allows_honest_limits():
         id="fallback-1",
         title="review",
         prompt=(
-            "WORKSPACE EVIDENCE GATHERED BY CLINE:\n"
+            "WORKSPACE EVIDENCE GATHERED BY CLIENT:\n"
             "tool(read_files): FILE src/real.py\n"
             "1 | def work(): return 1"
         ),
@@ -300,6 +412,7 @@ def test_critic_rejects_internally_contradictory_scores():
     mixed = {"p1": (True, "yes"), "p2": (False, "no")}
     assert _critic_scores_consistent("proceed", all_fail, shots) is False
     assert _critic_scores_consistent("reject", all_fail, shots) is True
+    assert _critic_scores_consistent("revise", all_fail, shots) is True
     assert _critic_scores_consistent("revise", mixed, shots) is True
     assert _critic_scores_consistent("proceed", {"p1": (True, "yes")}, shots) is False
 
@@ -336,7 +449,7 @@ def test_evidence_fallback_fans_out_review_work():
     )
     assert len(packets) == 4
     assert len({packet.id for packet in packets}) == 4
-    assert all("WORKSPACE EVIDENCE GATHERED BY CLINE" in packet.prompt for packet in packets)
+    assert all("WORKSPACE EVIDENCE GATHERED BY CLIENT" in packet.prompt for packet in packets)
     assert all("tool(read_files): src/app.py" in packet.prompt for packet in packets)
     assert all(
         packet.accept.invariants == ("min_chars 120", "review_grounded")
@@ -357,7 +470,7 @@ def test_evidence_fallback_fans_out_review_work():
         planned,
         "tool(read_files): FILE src/app.py\n" + ("def work(): pass\n" * 100),
     )
-    assert "WORKSPACE EVIDENCE GATHERED BY CLINE" in hydrated[0].prompt
+    assert "WORKSPACE EVIDENCE GATHERED BY CLIENT" in hydrated[0].prompt
     assert "def work()" in hydrated[0].prompt
 
 
@@ -761,7 +874,7 @@ async def test_critic_semantic_rejection_does_not_trigger_thinking_retry(monkeyp
     packet = Packet(
         id="p1",
         title="review",
-        prompt="WORKSPACE EVIDENCE GATHERED BY CLINE:\nreturn status >= 500",
+        prompt="WORKSPACE EVIDENCE GATHERED BY CLIENT:\nreturn status >= 500",
         accept=AcceptSpec(invariants=("min_chars 12",)),
     )
     shot = Shot(
@@ -780,9 +893,11 @@ async def test_critic_semantic_rejection_does_not_trigger_thinking_retry(monkeyp
         preview="The code fails over on every 4xx response.",
     )
     calls = []
+    extras = []
 
     async def grade(*args, **kwargs):
         calls.append(kwargs)
+        extras.append(args[2])
         return ChatResult(
             provider="x",
             model="x",
@@ -797,7 +912,49 @@ async def test_critic_semantic_rejection_does_not_trigger_thinking_retry(monkeyp
     assert verdict == "reject"
     assert scores == {"p1": (False, "claim contradicts evidence")}
     assert len(calls) == 1
-    assert calls[0]["max_tokens"] == 200
+    assert calls[0]["max_tokens"] == 400
+    assert extras[0]["response_format"] == {"type": "json_object"}
+
+
+@pytest.mark.asyncio
+async def test_implementation_critic_allows_grounded_new_code(monkeypatch):
+    from harness.dispatch import AcceptSpec, Packet, Shot, _run_critic
+
+    packet = Packet(
+        id="p1",
+        title="implement",
+        prompt="Add src/new.py to implement the approved feature.",
+        accept=AcceptSpec(invariants=("min_chars 12",)),
+    )
+    shot = Shot(
+        packet=packet,
+        worker_id="coder",
+        model_key="dgx_qwen",
+        result=ChatResult(provider="x", model="x", text="src/new.py\nVALUE = 1"),
+        tokens_per_sec=None,
+        tool_names=[],
+        tool_hit=True,
+        qa_pass=True,
+        preview="src/new.py\nVALUE = 1",
+    )
+    systems = []
+
+    async def grade(_model, messages, *_args, **_kwargs):
+        systems.append(messages[0].content)
+        return ChatResult(
+            provider="x",
+            model="x",
+            text='{"verdict":"proceed","shots":[{"id":"p1","pass":true,'
+            '"why":"complete implementation"}]}',
+        )
+
+    monkeypatch.setattr("harness.dispatch._chat", grade)
+    verdict, _text, scores = await _run_critic(
+        None, _model("asus3_nemotron"), "implement the approved feature", [shot]
+    )
+    assert verdict == "proceed"
+    assert scores["p1"][0] is True
+    assert "New code, symbols, tests, and files are expected" in systems[0]
 
 
 def test_parse_critic_accepts_json_with_trailing_model_junk():
@@ -833,7 +990,7 @@ async def test_invalid_multi_shot_grade_recovers_with_per_shot_grading(monkeypat
             Packet(
                 f"p{index}",
                 "review",
-                "WORKSPACE EVIDENCE GATHERED BY CLINE:\nsrc/app.py",
+                "WORKSPACE EVIDENCE GATHERED BY CLIENT:\nsrc/app.py",
                 accept=AcceptSpec(invariants=("min_chars 1",)),
             ),
             "coder",
@@ -879,7 +1036,7 @@ async def test_degraded_review_fails_closed_and_is_not_stitched(monkeypatch):
     packet = Packet(
         "fallback-1",
         "review",
-        "WORKSPACE EVIDENCE GATHERED BY CLINE:\nsrc/real.py",
+        "WORKSPACE EVIDENCE GATHERED BY CLIENT:\nsrc/real.py",
         accept=AcceptSpec(invariants=("min_chars 20",)),
     )
     shot = Shot(
@@ -1312,12 +1469,12 @@ def test_parse_foreman_plan_gather_and_dispatch():
     assert "lib/modelReach.ts" in remapped[0]["function"]["arguments"]
 
 
-def test_gather_binds_to_real_cline_catalog():
+def test_gather_binds_to_real_client_catalog():
     import json as _json
 
     from harness.dispatch import bind_gather_calls, default_gather_calls, merge_tool_catalog
 
-    # The tool names this Cline actually exposes (from the AI_NoSuchToolError message).
+    # Tool names exposed by this client (from an AI_NoSuchToolError message).
     catalog = {
         "read_files": ("paths",),
         "search_codebase": ("query", "path"),
@@ -1327,7 +1484,7 @@ def test_gather_binds_to_real_cline_catalog():
         "fetch_web_content": ("url",),
     }
     merged = merge_tool_catalog(catalog)
-    assert "read_file" not in merged  # never invent tools Cline does not have
+    assert "read_file" not in merged  # never invent tools the client lacks
 
     bound = bind_gather_calls(
         [
@@ -1352,7 +1509,7 @@ def test_gather_binds_to_real_cline_catalog():
     assert defaults
     default_names = {c["function"]["name"] for c in defaults}
     assert default_names <= {"read_files", "search_codebase", "run_commands"}
-    # Empty catalog falls back to classic names so old Cline builds still work.
+    # Empty catalogs use the compatibility tool names.
     classic = merge_tool_catalog({})
     assert "read_file" in classic
 

@@ -72,6 +72,9 @@ class GCIClient:
     def repos(self) -> list[dict]:
         return list(self._request("GET", "/repos").get("repos") or [])
 
+    def metrics(self) -> dict[str, Any]:
+        return self._request("GET", "/metrics")
+
     def manifest(self, repo_id: str) -> dict:
         return self._request("POST", "/changed-since", {"repo_id": repo_id})
 

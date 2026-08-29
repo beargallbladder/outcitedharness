@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -15,13 +16,17 @@ from harness.providers.base import ChatResult
 from harness.workers.registry import Worker
 
 
-MODEL_KEYS = (
-    "asus3_nemotron",
-    "glm52",
-    "nemotron_super",
-    "m5_qwen",
-    "asus2_qwen",
-    "frontier",
+MODEL_KEYS = tuple(
+    key.strip()
+    for key in os.environ.get(
+        "CRITIC_BAKEOFF_MODEL_KEYS",
+        "asus3_nemotron,glm52,nemotron_super,m5_qwen,asus2_qwen,frontier",
+    ).split(",")
+    if key.strip()
+)
+REPEATS = int(os.environ.get("CRITIC_BAKEOFF_REPEATS", "1"))
+OUTPUT = Path(
+    os.environ.get("CRITIC_BAKEOFF_OUTPUT", "results/critic_bakeoff_20260827.json")
 )
 
 
@@ -114,7 +119,9 @@ def parse_row(row):
     return rows, expected
 
 
-async def grade_model(key: str, shots: list[Shot], expected: dict[str, bool]) -> dict:
+async def grade_model(
+    key: str, shots: list[Shot], expected: dict[str, bool], run: int = 1
+) -> dict:
     cfg = load_config()
     model = cfg.models[key]
     worker = Worker(
@@ -143,6 +150,7 @@ async def grade_model(key: str, shots: list[Shot], expected: dict[str, bool]) ->
         case_id for case_id, wanted in expected.items() if wanted and not predicted[case_id]
     ]
     return {
+        "run": run,
         "model_key": key,
         "display_name": model.display_name,
         "verdict": verdict,
@@ -161,15 +169,25 @@ async def grade_model(key: str, shots: list[Shot], expected: dict[str, bool]) ->
 
 async def main() -> None:
     shots, expected = fixtures()
-    rows = await asyncio.gather(*(grade_model(key, shots, expected) for key in MODEL_KEYS))
+    started = time.perf_counter()
+    rows = await asyncio.gather(
+        *(
+            grade_model(key, shots, expected, run)
+            for key in MODEL_KEYS
+            for run in range(1, REPEATS + 1)
+        )
+    )
+    wall_latency_ms = (time.perf_counter() - started) * 1000
     rows.sort(key=lambda row: (-row["accuracy"], row["latency_ms"]))
     payload = {
         "created_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "expected": expected,
+        "repeats": REPEATS,
+        "wall_latency_ms": round(wall_latency_ms, 2),
         "models": rows,
     }
-    output = Path("results/critic_bakeoff_20260827.json")
-    output.write_text(json.dumps(payload, indent=2))
+    OUTPUT.parent.mkdir(parents=True, exist_ok=True)
+    OUTPUT.write_text(json.dumps(payload, indent=2))
     print(
         json.dumps(
             [

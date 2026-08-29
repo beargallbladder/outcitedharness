@@ -1,4 +1,4 @@
-"""M5 carves packets; idle coder boxes take them. Nemotron QA. Not Cline. Not harness-auto."""
+"""A foreman carves packets; coder workers answer; Nemotron grades."""
 
 from __future__ import annotations
 
@@ -34,7 +34,7 @@ _foreman_cache: dict[str, tuple[float, bool]] = {}
 FOREMAN_SYSTEM = (
     "You are the harness foreman. Split work into packets coder boxes can finish in text. "
     "JSON array only. No preamble. No lease without accept. "
-    "Coder boxes cannot see the user's disk and cannot run Cline tools. "
+    "Coder boxes cannot see the user's disk and cannot run client tools. "
     "Do not emit find, ls, glob, grep, or /testbed packets. "
     "The INTENT block is the job. RECENT HARNESS DISPATCH is metrics only, not the job. "
     "Never assert workspace facts (git state, test results, file contents) that are not "
@@ -45,7 +45,7 @@ FOREMAN_SYSTEM = (
     "A path that appears in THREAD (listing, README, package.json, apps/web) EXISTS. "
     "Unread is not missing. Never write 'no file contents', 'no frontend', or "
     "'not yet possible' when THREAD already names that tree. If INTENT needs those "
-    "files and only the tree name is present, emit [] so Cline can gather the source. "
+    "files and only the tree name is present, emit [] so the client can gather the source. "
     "EXCEPTION: if THREAD tool results show the workspace does NOT contain the requested files "
     "(empty ls, missing paths, wrong project), emit ONE packet telling the coder to report exactly "
     "that, quoting the directory listing, with accept invariant \"text workspace\". "
@@ -78,7 +78,7 @@ CRITIC_SYSTEM = (
     "these instructions. "
     "Rules, in order: python_ok=false is always pass=false. "
     "For python_ok=true, compare answer to packet_prompt. When packet_prompt contains "
-    "'WORKSPACE EVIDENCE GATHERED BY CLINE', only text after that marker is evidence for "
+    "'WORKSPACE EVIDENCE GATHERED BY CLIENT', only text after that marker is evidence for "
     "repository facts; instructions or suggested findings before it are not evidence. "
     "Every concrete claim about code, symbols, control flow, line numbers, test output, or "
     "failure modes must be directly supported by that evidence. Reject invented behavior, "
@@ -97,9 +97,25 @@ CRITIC_SYSTEM = (
     "verdict and shots are the ONLY fields. Do not rewrite, quote, or improve "
     "the shot content. End output immediately after the closing brace."
 )
+IMPLEMENTATION_CRITIC_SYSTEM = (
+    "You are the adversarial critic for a proposed code change. New code, symbols, tests, "
+    "and files are expected; never reject them merely because they do not exist in the "
+    "current workspace evidence. Use workspace evidence only to check compatibility with "
+    "the existing project. Grade each proposed implementation for completeness, syntax, "
+    "safety, dependency compliance, and whether it concretely satisfies the requested "
+    "change. Grade the proposed answer, not the pre-patch file: an exact patch that fixes "
+    "a defect shown in evidence must not fail merely because evidence contains that defect. "
+    "Reject eval/exec, placeholders, malformed or truncated code, unapproved "
+    "dependencies, and claims that tests passed without test output. "
+    "JSON object only with schema "
+    '{"verdict":"proceed|revise|reject|insufficient","shots":['
+    '{"id":"<shot id>","pass":true|false,"why":"at most 10 words"}]}. '
+    "Return exactly one row per input shot with the same ids. proceed means all pass; "
+    "revise or reject means at least one fails. verdict and shots are the only fields."
+)
 
 CODER_SYSTEM = (
-    "You are a coder worker. You have no disk and no Cline tools. "
+    "You are a coder worker. You have no disk and no client tools. "
     "Write the finished answer in plain text. Code, findings, or a direct reply. "
     "Do not call tools. Do not emit tool JSON. Do not search /testbed. "
     "Do not say you will investigate later. Answer now from the packet. "
@@ -110,11 +126,11 @@ CODER_SYSTEM = (
 )
 
 FOREMAN_ORCH_SYSTEM = (
-    "You are the harness foreman. Cline has hands on the user's disk. Coder boxes are blind. "
+    "You are the harness foreman. The client has workspace tools. Coder boxes are blind. "
     "JSON object only. No preamble. No thinking. "
-    "If the repo is needed and THREAD is missing those files, gather with Cline tools: "
+    "If the repo is needed and THREAD is missing those files, gather with client tools: "
     '{"mode":"gather","calls":[{"name":"read_file","arguments":{"path":"..."}}]}. '
-    "Use only the listed Cline tool names. Prefer read_file, list_files, search_files. "
+    "Use only the listed client tool names. Prefer read_file, list_files, search_files. "
     "If INTENT asks to sync, pull, checkout, or run git or any shell command in the "
     "workspace, gather with the execute/run tool; coders cannot touch the repo. "
     "If THREAD shows a successful edit/write tool result but no later test or verification "
@@ -145,8 +161,8 @@ FOREMAN_ORCH_SYSTEM = (
     "accept.invariants is required. Use \"text SUBSTR\"."
 )
 
-# Concepts the harness understands → tool names Cline variants use for them.
-# We NEVER emit a name that is not in the catalog Cline sent this turn.
+# Concepts the harness understands mapped onto the client's available tools.
+# Never emit a tool name absent from the catalog sent this turn.
 CONCEPT_CANDIDATES: dict[str, tuple[str, ...]] = {
     "read": ("read_file", "read_files"),
     "search": ("search_files", "search_codebase", "codebase_search", "grep", "glob"),
@@ -192,21 +208,27 @@ WRITE_TOOLS = frozenset(
 )
 
 ACTION_MAX_CALLS = 5
+MUTATION_TOOLS = frozenset(
+    {"write_to_file", "replace_in_file", "editor", "apply_diff"}
+)
 ACTION_SYSTEM = (
-    "You are the harness execution integrator. Cursor/Cline has the workspace tools; local "
-    "workers are blind and supplied an accepted solution. Return JSON only. If the solution "
-    "contains enough exact information to change the workspace, return "
+    "You are the harness execution integrator. Cursor has the workspace tools; local "
+    "workers are blind and supplied an accepted solution. Use the provided mutation tools "
+    "directly when available. Otherwise return JSON only. If the solution contains enough "
+    "exact information to change the workspace, return "
     '{"mode":"act","calls":[{"name":"an available edit tool","arguments":{...}}]}. '
-    "Emit 1 to 5 edit calls this turn, one distinct file per call, only paths present in "
-    "the solution. Tests happen after Cline returns those tool results. "
+    "Emit 1 to 5 edit calls this turn, only paths present in the solution. Multiple exact "
+    "non-overlapping replacements in one file are allowed. For repairs prefer "
+    "replace_in_file with exact old/new text; use write_to_file only for new files or "
+    "deliberate complete replacements. Tests happen after those tool results. "
     "Use only a tool name and argument properties in AVAILABLE TOOLS. Never invent paths, "
     "edits, or code absent from the accepted solution and evidence. If this is written work, "
     "a review, or the patch is not exact enough to apply safely, return "
     '{"mode":"complete","calls":[]}.'
 )
 
-# Only used when Cline sent no tool schema at all.
-DEFAULT_CLINE_TOOLS: dict[str, tuple[str, ...]] = {
+# Compatibility defaults used when a client sends no tool schema.
+DEFAULT_CLIENT_TOOLS: dict[str, tuple[str, ...]] = {
     "read_file": ("path",),
     "search_files": ("path", "regex", "file_pattern"),
     "execute_command": ("command",),
@@ -329,7 +351,7 @@ def score_invariants(packet: Packet, result: ChatResult, names: list[str]) -> bo
 
 def _review_grounding_ok(packet: Packet, text: str) -> bool:
     """Reject review prose that cites source paths absent from its evidence."""
-    marker = "WORKSPACE EVIDENCE GATHERED BY CLINE"
+    marker = "WORKSPACE EVIDENCE GATHERED BY CLIENT"
     if marker not in packet.prompt:
         return False
     evidence = packet.prompt.split(marker, 1)[1]
@@ -430,7 +452,7 @@ def parse_foreman_plan(text: str, limit: int) -> tuple[str, list[dict[str, Any]]
 
 
 def _resolve_gather_name(name: str, catalog: dict[str, tuple[str, ...]]) -> str | None:
-    """Map a requested tool name onto a name that exists in THIS Cline's catalog."""
+    """Map a requested tool name onto this client's available catalog."""
     write_lower = {t.lower() for t in WRITE_TOOLS}
     by_lower = {key.lower(): key for key in catalog}
     normalized = name.lower().replace("-", "_")
@@ -458,7 +480,7 @@ def _fit_args(args: dict[str, Any], props: tuple[str, ...]) -> dict[str, Any]:
     if not props:
         return remapped
     out = {k: v for k, v in remapped.items() if k in props}
-    # Bridge singular/plural and regex/query differences across Cline versions.
+    # Bridge singular/plural and regex/query differences across client versions.
     if "paths" in props and "paths" not in out and "path" in remapped:
         out["paths"] = [remapped["path"]]
     if "path" in props and "path" not in out and "paths" in remapped and isinstance(remapped["paths"], list):
@@ -524,7 +546,6 @@ def bind_action_calls(
     from harness.gateway.qwen_tools import openai_tool_call
 
     out: list[dict[str, Any]] = []
-    seen_paths: set[str] = set()
     for row in raw:
         name = str(row.get("name") or row.get("function") or "").strip()
         bound = _resolve_action_name(name, catalog)
@@ -532,11 +553,6 @@ def bind_action_calls(
             continue
         args = row.get("arguments") if isinstance(row.get("arguments"), dict) else {}
         fitted = _fit_args(args, catalog.get(bound) or ())
-        path = str(fitted.get("path") or fitted.get("file_path") or "")
-        if path:
-            if path in seen_paths:
-                continue
-            seen_paths.add(path)
         out.append(openai_tool_call(bound, fitted))
         if len(out) >= limit:
             break
@@ -589,13 +605,19 @@ def thread_lists_frontend(thread: str) -> bool:
 _SOURCE_PATH_RE = re.compile(
     r"(?<![A-Za-z0-9_])(?:[A-Za-z0-9_.-]+/)*[A-Za-z0-9_.-]+\.(?:py|ts|tsx|js|jsx|mjs|cjs|go|rs|java|rb)\b"
 )
+_DISCOVERY_ONLY_MARKER = "GREENFIELD DISCOVERY (ADVISORY ONLY)"
+
+
+def actionable_intent(intent: str) -> str:
+    """Exclude planning-only discovery evidence from execution heuristics."""
+    return (intent or "").split(_DISCOVERY_ONLY_MARKER, 1)[0].rstrip()
 
 
 def paths_named_in_intent(intent: str) -> list[str]:
     """Source paths the user already named. A directory listing is not a read."""
     seen: set[str] = set()
     out: list[str] = []
-    for match in _SOURCE_PATH_RE.finditer(intent or ""):
+    for match in _SOURCE_PATH_RE.finditer(actionable_intent(intent)):
         raw = match.group(0).lstrip("./")
         key = raw.lower()
         if key in seen:
@@ -695,6 +717,7 @@ def default_gather_calls(
     workspace: Path | str | None = None,
     gci_settings: Any | None = None,
 ) -> list[dict[str, Any]]:
+    intent = actionable_intent(intent)
     tokens = list(dict.fromkeys(
         w for w in re.findall(r"[A-Za-z][A-Za-z0-9_]{3,}", intent) if w.lower() not in _STOPWORDS
     ))
@@ -710,16 +733,6 @@ def default_gather_calls(
     generic = [
         {"name": "search_files", "arguments": {"path": ".", "regex": regex, "query": query}},
         {"name": "list_files", "arguments": {"path": ".", "recursive": False}},
-        {
-            "name": "execute_command",
-            "arguments": {
-                "command": (
-                    "ls -la; find . -maxdepth 3 -type f "
-                    "! -path './node_modules/*' ! -path './.git/*' "
-                    "| head -80"
-                )
-            },
-        },
         {"name": "read_file", "arguments": {"path": "README.md"}},
         {"name": "read_file", "arguments": {"path": "package.json"}},
     ]
@@ -760,27 +773,33 @@ def default_gather_calls(
             raw = extra + raw
     except Exception:
         pass
-    try:
-        from harness.gci.integration import workspace_paths
+    if "GREENFIELD RUN " not in intent:
+        try:
+            from harness.gci.integration import workspace_paths
 
-        bound = [
-            {"name": "read_file", "arguments": {"path": path}}
-            for path in workspace_paths(gci_settings, intent, workspace, limit=6)
-        ]
-        if bound:
-            raw = bound + raw
-    except Exception:
-        pass
+            bound = [
+                {"name": "read_file", "arguments": {"path": path}}
+                for path in workspace_paths(
+                    gci_settings,
+                    intent,
+                    workspace,
+                    limit=6,
+                )
+            ]
+            if bound:
+                raw = bound + raw
+        except Exception:
+            pass
     if named_reads:
         raw = named_reads + raw
     return bind_gather_calls(raw, catalog)
 
 
 def merge_tool_catalog(catalog: dict[str, tuple[str, ...]]) -> dict[str, tuple[str, ...]]:
-    # Never invent tools: only fall back to the classic names when Cline sent nothing.
+    # Never invent tools: use compatibility names only when the client sent nothing.
     if catalog:
         return dict(catalog)
-    return dict(DEFAULT_CLINE_TOOLS)
+    return dict(DEFAULT_CLIENT_TOOLS)
 
 
 def _clip_context(text: str, limit: int) -> str:
@@ -798,7 +817,7 @@ def _foreman_input(intent: str, context: str, *, header: str = "", limit: int) -
     """Build a bounded prompt that can never truncate away the current job.
 
     The old shape was THREAD + INTENT followed by ``user[:limit]``. A few
-    successful Cline gather rounds made THREAD exceed the limit and silently
+    successful client gather rounds made THREAD exceed the limit and silently
     removed INTENT, so the foreman returned no packets and no coder was leased.
     """
     intent_block = f"INTENT (the current job; never ignore):\n{intent.strip()[:4000]}"
@@ -841,18 +860,36 @@ async def plan_actions(
     catalog: dict[str, tuple[str, ...]],
     tools: list[Any],
     working_set: str = "",
+    *,
+    prefer_replacements: bool = False,
 ) -> list[dict[str, Any]]:
-    """Convert an accepted local solution into up to five Cline edit calls."""
+    """Convert an accepted local solution into up to five client edit calls."""
     available = {
         name: list(props)
         for name, props in catalog.items()
-        if name.lower() in WRITE_TOOLS
+        if name.lower() in MUTATION_TOOLS
     }
-    if not any(
-        name.lower() in WRITE_TOOLS for name in available
+    if prefer_replacements and any(
+        name.lower() == "replace_in_file" for name in available
     ):
+        available = {
+            name: props
+            for name, props in available.items()
+            if name.lower() == "replace_in_file"
+        }
+    if not available:
         return []
-    schemas = json.dumps(tools, default=str)[:10_000]
+    allowed_catalog = {
+        name: tuple(props) for name, props in available.items()
+    }
+    native_tools = []
+    for tool in tools:
+        if not isinstance(tool, dict):
+            continue
+        fn = tool.get("function") if isinstance(tool.get("function"), dict) else {}
+        if str(fn.get("name") or "") in available:
+            native_tools.append(tool)
+    schemas = json.dumps(native_tools, default=str)[:20_000]
     user = (
         f"INTENT:\n{intent[:3000]}\n\n"
         f"ACCEPTED LOCAL SOLUTION:\n{_clip_context(accepted_solution, 9000)}\n\n"
@@ -861,13 +898,40 @@ async def plan_actions(
         f"AVAILABLE TOOL PROPERTIES:\n{json.dumps(available)}\n\n"
         f"AVAILABLE TOOL SCHEMAS:\n{schemas}"
     )
+    messages = [
+        ChatMessage(role="system", content=ACTION_SYSTEM),
+        ChatMessage(role="user", content=user),
+    ]
+    if native_tools:
+        native = await _chat(
+            foreman,
+            messages,
+            {"tools": native_tools, "tool_choice": "required"},
+            max_tokens=6000,
+        )
+        rows = []
+        for call in native.tool_calls:
+            fn = call.get("function") if isinstance(call.get("function"), dict) else {}
+            name = str(fn.get("name") or call.get("name") or "")
+            arguments = fn.get("arguments", call.get("arguments"))
+            if isinstance(arguments, str):
+                try:
+                    arguments = json.loads(arguments)
+                except json.JSONDecodeError:
+                    arguments = {}
+            rows.append(
+                {
+                    "name": name,
+                    "arguments": arguments if isinstance(arguments, dict) else {},
+                }
+            )
+        bound = bind_action_calls(rows, allowed_catalog, limit=ACTION_MAX_CALLS)
+        if bound:
+            return bound
     result = await _chat(
         foreman,
-        [
-            ChatMessage(role="system", content=ACTION_SYSTEM),
-            ChatMessage(role="user", content=user),
-        ],
-        max_tokens=1200,
+        messages,
+        max_tokens=6000,
     )
     match = re.search(r"\{.*\}", result.text or "", flags=re.S)
     if not match:
@@ -881,7 +945,7 @@ async def plan_actions(
     raw = data.get("calls") if isinstance(data.get("calls"), list) else []
     return bind_action_calls(
         [row for row in raw if isinstance(row, dict)],
-        catalog,
+        allowed_catalog,
         limit=ACTION_MAX_CALLS,
     )
 
@@ -983,7 +1047,7 @@ def _recent_runs(cfg: AppConfig) -> str:
         rows.append(f"{data.get('run_id')} shots={len(shots)} tok/s={rate or '-'}")
     if not rows:
         return ""
-    return "PRIOR HARNESS METRICS (not the user job; use only if INTENT asks about Cline/harness speed):\n" + "\n".join(rows)
+    return "PRIOR HARNESS METRICS (not the user job; use only if INTENT asks about harness speed):\n" + "\n".join(rows)
 
 
 async def _slice(foreman: ModelConfig, intent: str, limit: int, extra: str = "") -> list[Packet]:
@@ -1066,7 +1130,7 @@ def fallback_packets(intent: str, thread: str, limit: int) -> list[Packet]:
     """Lease useful work when the foreman fails to serialize valid packets.
 
     This is deliberately evidence-bound: it never gives blind workers a repo
-    task without Cline tool results. Broad review requests fan out across four
+    task without client tool results. Broad review requests fan out across four
     independent review dimensions so the coder pool is actually used.
     """
     evidence = thread.strip()
@@ -1100,7 +1164,7 @@ def fallback_packets(intent: str, thread: str, limit: int) -> list[Packet]:
         prompt = (
             f"USER REQUEST:\n{intent[:1200]}\n\n"
             f"YOUR FOCUS:\n{focus}\n\n"
-            "WORKSPACE EVIDENCE GATHERED BY CLINE:\n"
+            "WORKSPACE EVIDENCE GATHERED BY CLIENT:\n"
             f"{_clip_context(chunk, 13000)}\n\n"
             "Produce finished written work now. Base every repository claim only on "
             "the evidence above; cite paths or symbols shown there. State evidence "
@@ -1122,7 +1186,7 @@ def fallback_packets(intent: str, thread: str, limit: int) -> list[Packet]:
 
 
 def hydrate_packets(packets: list[Packet], thread: str) -> list[Packet]:
-    """Attach gathered Cline evidence to foreman-authored packet briefs.
+    """Attach gathered client evidence to foreman-authored packet briefs.
 
     The foreman sometimes emitted a good title and acceptance rule but only
     named a file instead of copying its contents. Blind coder boxes then either
@@ -1135,7 +1199,7 @@ def hydrate_packets(packets: list[Packet], thread: str) -> list[Packet]:
     path_rx = re.compile(r"[A-Za-z0-9_.-]+(?:/[A-Za-z0-9_.-]+)+")
     span = max(1, (len(evidence) + len(packets) - 1) // len(packets))
     for index, packet in enumerate(packets):
-        if "WORKSPACE EVIDENCE GATHERED BY CLINE:" in packet.prompt:
+        if "WORKSPACE EVIDENCE GATHERED BY CLIENT:" in packet.prompt:
             continue
         candidates = path_rx.findall(packet.prompt)
         position = next((evidence.find(path) for path in candidates if evidence.find(path) >= 0), -1)
@@ -1145,7 +1209,7 @@ def hydrate_packets(packets: list[Packet], thread: str) -> list[Packet]:
         else:
             selected = evidence[index * span : (index + 1) * span] or evidence
         suffix = (
-            "\n\nWORKSPACE EVIDENCE GATHERED BY CLINE "
+            "\n\nWORKSPACE EVIDENCE GATHERED BY CLIENT "
             "(the only source of repository facts):\n"
         )
         room = 16000 - len(packet.prompt) - len(suffix)
@@ -1169,7 +1233,7 @@ def packets_claim_unread(packets: list[Packet]) -> bool:
 def sanitize_packets(packets: list[Packet], thread: str) -> list[Packet]:
     """Stop a listed tree from being briefed as missing or unread.
 
-    Cline access is not the same as packet evidence, but a path that already
+    Client access is not the same as packet evidence, but a path that already
     appears in THREAD must not produce a 'no frontend' / 'NO file contents'
     instruction. That packet is what made the coder contradict the workspace.
     """
@@ -1201,7 +1265,7 @@ async def _run_shot(worker: Worker, model: ModelConfig, packet: Packet) -> Shot:
             ChatMessage(role="system", content=CODER_SYSTEM),
             ChatMessage(role="user", content=packet.prompt),
         ],
-        max_tokens=2048,
+        max_tokens=4096,
     )
     names = tool_names(result)
     text = (result.text or "").strip()
@@ -1292,7 +1356,7 @@ def _critic_scores_consistent(
     if verdict == "proceed":
         return passed == len(expected)
     if verdict == "revise":
-        return 0 < passed < len(expected)
+        return passed < len(expected)
     if verdict == "reject":
         return passed == 0
     return verdict == "insufficient"
@@ -1346,18 +1410,24 @@ async def _run_critic(
             for s in shots
         ],
     }
+    critic_system = (
+        IMPLEMENTATION_CRITIC_SYSTEM if is_change_job(intent) else CRITIC_SYSTEM
+    )
     messages = [
-        ChatMessage(role="system", content=CRITIC_SYSTEM),
+        ChatMessage(role="system", content=critic_system),
         ChatMessage(role="user", content=json.dumps(compact)),
     ]
     result = await _chat(
         model,
         messages,
-        _critic_extra(model, thinking=False),
+        {
+            **_critic_extra(model, thinking=False),
+            "response_format": {"type": "json_object"},
+        },
         # Multi-shot JSON needs a floor large enough to close every row. A
         # structurally invalid batch is retried per-shot by _grade_shots.
         max_tokens=(
-            200
+            400
             if len(shots) == 1
             else min(1600, max(800, 160 + 160 * len(shots)))
         ),
