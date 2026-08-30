@@ -142,3 +142,53 @@ bash scripts/training_launch_two_node.sh \
 
 Extra SpecForge arguments go after `--`. Keep tokens out of command-line
 arguments because process listings may expose them.
+
+## 5. Reproduce the owner-signed Tapes v1 gate
+
+Never evaluate v1 through live `:8800` or the `latest` symlink. The immutable
+checkpoint is
+`models/bge-m3-cr-tapes-v1/checkpoints_20260427T183216Z`; its
+`model.safetensors` SHA-256 is
+`f1e18565298c5f528b9c4aabb04b5460b9b5ec1cb5dd6f653ad0ea754e977ed8`.
+
+Build the isolated runtime and execute the no-network gate on DGX2:
+
+```shell
+docker build \
+  --file configs/BGERepro.GB10.Dockerfile \
+  --tag harness/bge-repro-gb10:prod-20260829 \
+  configs
+BGE_REPRO_IMAGE=harness/bge-repro-gb10:prod-20260829 \
+  bash scripts/run_tapes_offline_repro.sh
+```
+
+The owner contract pins FlagEmbedding fp16, `text[:512]`, Kim-tag batch 64,
+and retrieval batch 256. Acceptance permits at most one changed Kim-tag
+decision and one changed retrieval query; every category-alignment recall
+metric must match exactly. The script exits successfully only when that
+contract passes. It binds the checkpoint server to container loopback and
+runs the entire evaluation with `--network none`.
+
+## 6. Run the CR-owned language-geometry pilot
+
+The only approved CR training input is
+`datasets/cr-local-train-v0/cr_bge_m3_joint_corpus_v2_20260818T171746Z.flagembedding.jsonl`
+(11,990 rows, SHA-256
+`d822f07c7a0458424daa3cc18b88bb6b936f091acb6bc16cfa9c13c8ab66e61d`).
+It contains contrastive language geometry, not raw brand/category memory
+facts. Raw `category_mentions_v2`, FOUNDATION snapshots, successor/acquisition
+identity pairs, and the packaged eval files remain forbidden as training
+inputs.
+
+Review the validated plan and then launch on DGX2:
+
+```shell
+bash scripts/training_launch_bge_cr.sh
+bash scripts/training_launch_bge_cr.sh --launch
+```
+
+The launcher verifies the owner marker and corpus checksum, requires the
+sealed local stock BGE-M3 checkpoint, writes only below the DGX2 checkpoint
+root, and runs without network access. It never changes live `:8800`; any
+trained checkpoint remains non-production until the owner-defined frozen
+evaluations pass.

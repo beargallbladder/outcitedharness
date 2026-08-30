@@ -16,7 +16,10 @@ if [[ "${1:-}" == "__container" ]]; then
     --host 127.0.0.1 \
     --port 18881 \
     --device cuda \
-    --max-length 128 \
+    --backend flagembedding \
+    --dtype float16 \
+    --max-length 512 \
+    --max-characters 512 \
     --max-batch 256 \
     >/training/logs/tapes-offline-v1-server.log 2>&1 &
   server_pid=$!
@@ -46,15 +49,16 @@ PY
     --kim-baseline /training/evaluations/tapes-open-set-v1-repro/input/kim_tag_agreement_eval_v1_bge-m3-cr-tapes-v1.json \
     --retrieval-split /training/evaluations/tapes-open-set-v1-repro/input/bge-m3-eval-split-v1.1.jsonl \
     --retrieval-baseline /training/evaluations/tapes-open-set-v1-repro/input/tapes_bge_m3_retrieval_eval_2026-W34-v1-recheck.json \
-    --output /training/evaluations/tapes-open-set-v1-repro/offline-v1-reproduction.json \
-    --batch-size 128 \
+    --output /training/evaluations/tapes-open-set-v1-repro/offline-v1-owner-contract.json \
+    --kim-batch-size 64 \
+    --retrieval-batch-size 256 \
     --timeout 120
   exit $?
 fi
 
 root="${DGX2_TRAINING_ROOT:-$HOME/harness-training}"
-image="${LLAMAFACTORY_IMAGE:-harness/llamafactory-gb10:20260829}"
-output="$root/evaluations/tapes-open-set-v1-repro/offline-v1-reproduction.json"
+image="${BGE_REPRO_IMAGE:-harness/bge-repro-gb10:20260829}"
+output="$root/evaluations/tapes-open-set-v1-repro/offline-v1-owner-contract.json"
 
 [[ "$(hostname -s)" == "spark-49af" ]] ||
   { printf '%s\n' "offline reproduction must run on DGX2" >&2; exit 2; }

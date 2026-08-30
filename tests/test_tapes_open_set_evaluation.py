@@ -54,29 +54,78 @@ def test_load_jsonl_requires_one_metadata_row(tmp_path: Path) -> None:
 
 def test_comparison_requires_every_pinned_metric_to_match() -> None:
     expected = {
-        "kim_tag": {"top1_accuracy": 0.765, "top3_accuracy": 0.9726},
+        "kim_tag": {
+            "top1_accuracy": 0.765,
+            "top3_accuracy": 0.9726,
+            "decisions": [
+                {
+                    "keyword": "mcu",
+                    "slug_id": "microcontrollers",
+                    "top1_pred": "microcontrollers",
+                    "top1_hit": True,
+                    "top3_hit": True,
+                }
+            ],
+        },
         "retrieval": {
             "recall_at_1": 0.3103,
             "recall_at_3": 0.399,
             "recall_at_5": 0.5123,
             "recall_at_10": 0.6453,
             "category_alignment_recall_at_1": 0.7931,
+            "category_alignment_recall_at_3": 0.931,
+            "category_alignment_recall_at_5": 0.9655,
+            "category_alignment_recall_at_10": 1.0,
+            "decisions": [
+                {
+                    "query": "mcu",
+                    "domain": "category_alignment",
+                    "hit_at_1": 1,
+                    "hit_at_3": 1,
+                    "hit_at_5": 1,
+                    "hit_at_10": 1,
+                }
+            ],
         },
     }
     observed = {
-        "kim_tag": dict(expected["kim_tag"]),
+        "kim_tag": {
+            "top1_accuracy": 0.765,
+            "top3_accuracy": 0.9726,
+            "samples": 4417,
+            "decisions": [dict(expected["kim_tag"]["decisions"][0])],
+        },
         "retrieval": {
+            "samples": 203,
             "recall_at_1": 0.3103,
             "recall_at_3": 0.399,
             "recall_at_5": 0.5123,
             "recall_at_10": 0.6453,
             "by_domain": {
-                "category_alignment": {"recall_at_1": 0.7931},
+                "category_alignment": {
+                    "recall_at_1": 0.7931,
+                    "recall_at_3": 0.931,
+                    "recall_at_5": 0.9655,
+                    "recall_at_10": 1.0,
+                },
             },
+            "decisions": [dict(expected["retrieval"]["decisions"][0])],
         },
     }
 
-    assert evaluation._comparison(observed, expected)["exact_reproduction"] is True
+    exact = evaluation._comparison(observed, expected)
+    assert exact["exact_reproduction"] is True
+    assert exact["owner_tolerance_accepted"] is True
+    observed["retrieval"]["recall_at_1"] = 0.3153
+    tolerated = evaluation._comparison(observed, expected)
+    assert tolerated["exact_reproduction"] is False
+    assert tolerated["owner_tolerance_accepted"] is True
+    observed["retrieval"]["by_domain"]["category_alignment"]["recall_at_3"] = 0.9309
+    observed["retrieval"]["decisions"][0]["hit_at_3"] = 0
+    assert (
+        evaluation._comparison(observed, expected)["owner_tolerance_accepted"]
+        is False
+    )
     observed["retrieval"]["recall_at_1"] = 0.3
     comparison = evaluation._comparison(observed, expected)
     assert comparison["exact_reproduction"] is False

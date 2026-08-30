@@ -28,6 +28,7 @@ def test_shell_assets_parse():
         "training_launch_single.sh",
         "training_launch_two_node.sh",
         "training_launch_lora.sh",
+        "training_launch_bge_cr.sh",
         "run_tapes_offline_repro.sh",
     ):
         result = run("bash", "-n", str(SCRIPTS / name))
@@ -209,9 +210,10 @@ def test_templates_pin_caches_floor_and_non_destructive_controls():
     scratch = (SCRIPTS / "training_check_scratch.py").read_text()
     doctor = (SCRIPTS / "training_link_doctor.sh").read_text()
     tapes_repro = (SCRIPTS / "run_tapes_offline_repro.sh").read_text()
+    cr_bge = (SCRIPTS / "training_launch_bge_cr.sh").read_text()
     two_node = (SCRIPTS / "training_launch_two_node.sh").read_text()
     lora = (SCRIPTS / "training_launch_lora.sh").read_text()
-    combined = "\n".join((prepare, scratch, doctor, two_node, lora))
+    combined = "\n".join((prepare, scratch, doctor, two_node, lora, cr_bge))
     assert ".harness-training-owner-v1" in prepare
     assert "refusing to claim non-empty unowned directory" in prepare
     assert "250 * 1024**3" in scratch
@@ -222,6 +224,10 @@ def test_templates_pin_caches_floor_and_non_destructive_controls():
     assert "--network none" in tapes_repro
     assert "127.0.0.1:18881" in tapes_repro
     assert ":8800" not in tapes_repro
+    assert "d822f07c7a0458424daa3cc18b88bb6b936f091acb6bc16cfa9c13c8ab66e61d" in cr_bge
+    assert "--network none" in cr_bge
+    assert '--user "$(id -u):$(id -g)"' in cr_bge
+    assert "category_mentions_v2" not in cr_bge
     assert "NCCL_SOCKET_IFNAME" in two_node
     assert "training_check_scratch.py" in two_node
     assert '"$specforge" train' in two_node

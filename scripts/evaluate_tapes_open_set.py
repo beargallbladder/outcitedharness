@@ -127,6 +127,18 @@ def evaluate_kim_tag(
         "prototypes": len(prototypes),
         "top1_accuracy": round(sum(top1_hits) / len(top1_hits), 4),
         "top3_accuracy": round(sum(top3_hits) / len(top3_hits), 4),
+        "decisions": [
+            {
+                "keyword": str(row["keyword"]),
+                "slug_id": str(row["slug_id"]),
+                "top1_pred": slug_ids[indices[0]],
+                "top1_hit": top1_hit,
+                "top3_hit": top3_hit,
+            }
+            for row, indices, top1_hit, top3_hit in zip(
+                held_out, top3, top1_hits, top3_hits
+            )
+        ],
     }
 
 
@@ -195,6 +207,7 @@ def evaluate_retrieval(
     by_domain: dict[str, dict[str, int]] = defaultdict(
         lambda: {"n": 0, "hit_at_1": 0, "hit_at_3": 0, "hit_at_5": 0, "hit_at_10": 0}
     )
+    decisions: list[dict[str, Any]] = []
     for row, ranked in zip(queries, top10):
         positives = {
             normalize(str(text)) for text in (row.get("positive_doc_texts") or ())
@@ -213,6 +226,16 @@ def evaluate_retrieval(
             hit = int(rank is not None and rank <= cutoff)
             hits[cutoff] += hit
             by_domain[domain][f"hit_at_{cutoff}"] += hit
+        decisions.append(
+            {
+                "query": str(row["query"]),
+                "domain": domain,
+                **{
+                    f"hit_at_{cutoff}": int(rank is not None and rank <= cutoff)
+                    for cutoff in hits
+                },
+            }
+        )
 
     count = len(queries)
     return {
@@ -234,24 +257,87 @@ def evaluate_retrieval(
             }
             for domain, values in sorted(by_domain.items())
         },
+        "decisions": decisions,
     }
 
 
 def _expected_metrics(kim_result: Path, retrieval_result: Path) -> dict[str, Any]:
-    kim = json.loads(kim_result.read_text(encoding="utf-8"))["report"]
-    retrieval = json.loads(retrieval_result.read_text(encoding="utf-8"))["_meta"]
+    kim_payload = json.loads(kim_result.read_text(encoding="utf-8"))
+    retrieval_payload = json.loads(retrieval_result.read_text(encoding="utf-8"))
+    kim = kim_payload["report"]
+    retrieval = retrieval_payload["_meta"]
     return {
         "kim_tag": {
             "top1_accuracy": kim["top1_accuracy"],
             "top3_accuracy": kim["top3_accuracy"],
+            "decisions": [
+                {
+                    "keyword": row["keyword"],
+                    "slug_id": row["slug_id"],
+                    "top1_pred": row["top1_pred"],
+                    "top1_hit": row["top1_hit"],
+                    "top3_hit": row["top3_hit"],
+                }
+                for row in kim_payload["per_keyword"]
+            ],
         },
         "retrieval": {
             **retrieval["headline"],
-            "category_alignment_recall_at_1": retrieval["by_domain"][
-                "category_alignment"
-            ]["hit_at_1"],
+            **{
+                f"category_alignment_recall_at_{cutoff}": retrieval["by_domain"][
+                    "category_alignment"
+                ][f"hit_at_{cutoff}"]
+                for cutoff in (1, 3, 5, 10)
+            },
+            "decisions": [
+                {
+                    "query": row["query"],
+                    "domain": row["domain"],
+                    **{
+                        f"hit_at_{cutoff}": row[f"hit_at_{cutoff}"]
+                        for cutoff in (1, 3, 5, 10)
+                    },
+                }
+                for row in retrieval_payload["per_query"]
+            ],
         },
     }
+
+
+def _decision_changes(
+    observed: list[dict[str, Any]],
+    expected: list[dict[str, Any]],
+    *,
+    identity_fields: tuple[str, ...],
+    decision_fields: tuple[str, ...],
+) -> list[dict[str, Any]]:
+    def index(rows: list[dict[str, Any]]) -> dict[tuple[str, ...], dict[str, Any]]:
+        indexed: dict[tuple[str, ...], dict[str, Any]] = {}
+        for row in rows:
+            identity = tuple(str(row[field]) for field in identity_fields)
+            if identity in indexed:
+                raise ValueError(f"duplicate baseline decision identity: {identity}")
+            indexed[identity] = row
+        return indexed
+
+    observed_index = index(observed)
+    expected_index = index(expected)
+    if observed_index.keys() != expected_index.keys():
+        raise ValueError("observed and expected decision identities differ")
+    changes: list[dict[str, Any]] = []
+    for identity, expected_row in expected_index.items():
+        observed_row = observed_index[identity]
+        changed = {
+            field: {
+                "observed": observed_row[field],
+                "expected": expected_row[field],
+            }
+            for field in decision_fields
+            if observed_row[field] != expected_row[field]
+        }
+        if changed:
+            changes.append({"identity": identity, "changed": changed})
+    return changes
 
 
 def _comparison(
@@ -286,9 +372,62 @@ def _comparison(
             observed["retrieval"]["by_domain"]["category_alignment"]["recall_at_1"],
             expected["retrieval"]["category_alignment_recall_at_1"],
         ),
+        "category_alignment_r3": (
+            observed["retrieval"]["by_domain"]["category_alignment"]["recall_at_3"],
+            expected["retrieval"]["category_alignment_recall_at_3"],
+        ),
+        "category_alignment_r5": (
+            observed["retrieval"]["by_domain"]["category_alignment"]["recall_at_5"],
+            expected["retrieval"]["category_alignment_recall_at_5"],
+        ),
+        "category_alignment_r10": (
+            observed["retrieval"]["by_domain"]["category_alignment"]["recall_at_10"],
+            expected["retrieval"]["category_alignment_recall_at_10"],
+        ),
     }
+    kim_changes = _decision_changes(
+        observed["kim_tag"]["decisions"],
+        expected["kim_tag"]["decisions"],
+        identity_fields=("keyword", "slug_id"),
+        decision_fields=("top1_pred", "top1_hit", "top3_hit"),
+    )
+    retrieval_changes = _decision_changes(
+        observed["retrieval"]["decisions"],
+        expected["retrieval"]["decisions"],
+        identity_fields=("query", "domain"),
+        decision_fields=("hit_at_1", "hit_at_3", "hit_at_5", "hit_at_10"),
+    )
+    category_changes = [
+        change
+        for change in retrieval_changes
+        if change["identity"][1] == "category_alignment"
+    ]
+    exact_metrics = all(actual == wanted for actual, wanted in checks.values())
+    owner_accepted = (
+        len(kim_changes) <= 1
+        and len(retrieval_changes) <= 1
+        and not category_changes
+    )
     return {
-        "exact_reproduction": all(actual == wanted for actual, wanted in checks.values()),
+        "exact_reproduction": exact_metrics
+        and not kim_changes
+        and not retrieval_changes,
+        "owner_tolerance_accepted": owner_accepted,
+        "acceptance_contract": (
+            "cursor-tapes: <=1 kim-tag decision, <=1 retrieval query, "
+            "exact category-alignment"
+        ),
+        "decision_changes": {
+            "kim_tag": {"count": len(kim_changes), "rows": kim_changes[:10]},
+            "retrieval": {
+                "count": len(retrieval_changes),
+                "rows": retrieval_changes[:10],
+            },
+            "category_alignment": {
+                "count": len(category_changes),
+                "rows": category_changes[:10],
+            },
+        },
         "metrics": {
             name: {
                 "observed": actual,
@@ -327,6 +466,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--retrieval-baseline", required=True, type=Path)
     parser.add_argument("--output", required=True, type=Path)
     parser.add_argument("--batch-size", type=int, default=128)
+    parser.add_argument("--kim-batch-size", type=int)
+    parser.add_argument("--retrieval-batch-size", type=int)
     parser.add_argument("--timeout", type=float, default=120)
     parser.add_argument("--mask-sha16", default="040d362ec678aa13")
     parser.add_argument("--kim-split-sha16", default="cbd43e800c428e18")
@@ -334,7 +475,15 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--retrieval-split-sha16", default="c95f2a59a3acfca8")
     parser.add_argument("--retrieval-baseline-sha16", default="a6cc8dd9d94f3765")
     args = parser.parse_args()
-    if args.batch_size < 1 or not 1 <= args.timeout <= 600:
+    if (
+        args.batch_size < 1
+        or (args.kim_batch_size is not None and args.kim_batch_size < 1)
+        or (
+            args.retrieval_batch_size is not None
+            and args.retrieval_batch_size < 1
+        )
+        or not 1 <= args.timeout <= 600
+    ):
         parser.error("batch size and timeout must be positive and bounded")
     if not args.endpoint.startswith(("http://", "https://")):
         parser.error("endpoint must be HTTP(S)")
@@ -359,13 +508,13 @@ def main() -> int:
             args.endpoint,
             args.mask,
             args.kim_split,
-            batch_size=args.batch_size,
+            batch_size=args.kim_batch_size or args.batch_size,
             timeout=args.timeout,
         ),
         "retrieval": evaluate_retrieval(
             args.endpoint,
             args.retrieval_split,
-            batch_size=args.batch_size,
+            batch_size=args.retrieval_batch_size or args.batch_size,
             timeout=args.timeout,
         ),
     }
@@ -378,8 +527,30 @@ def main() -> int:
         "comparison": _comparison(observed, expected),
     }
     _write_json(args.output, payload)
-    print(json.dumps(payload, indent=2, sort_keys=True))
-    return 0 if payload["comparison"]["exact_reproduction"] else 1
+    print(
+        json.dumps(
+            {
+                "output": str(args.output),
+                "pins": payload["pins"],
+                "comparison": payload["comparison"],
+                "observed": {
+                    "kim_tag": {
+                        key: value
+                        for key, value in payload["observed"]["kim_tag"].items()
+                        if key != "decisions"
+                    },
+                    "retrieval": {
+                        key: value
+                        for key, value in payload["observed"]["retrieval"].items()
+                        if key != "decisions"
+                    },
+                },
+            },
+            indent=2,
+            sort_keys=True,
+        )
+    )
+    return 0 if payload["comparison"]["owner_tolerance_accepted"] else 1
 
 
 if __name__ == "__main__":

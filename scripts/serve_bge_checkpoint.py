@@ -41,6 +41,8 @@ class DenseBGEEncoder:
         *,
         device: str,
         maximum_length: int,
+        maximum_characters: int,
+        dtype: str,
     ) -> None:
         import torch
         from transformers import AutoModel, AutoTokenizer
@@ -48,7 +50,14 @@ class DenseBGEEncoder:
         self.torch = torch
         self.device = device
         self.maximum_length = maximum_length
+        self.maximum_characters = maximum_characters
         self._lock = threading.Lock()
+        dtypes = {
+            "float16": torch.float16,
+            "float32": torch.float32,
+            "bfloat16": torch.bfloat16,
+        }
+        model_dtype = dtypes[dtype]
         self.tokenizer = AutoTokenizer.from_pretrained(
             model_path,
             local_files_only=True,
@@ -56,7 +65,7 @@ class DenseBGEEncoder:
         self.model = AutoModel.from_pretrained(
             model_path,
             local_files_only=True,
-            torch_dtype=torch.float32,
+            dtype=model_dtype,
         ).to(device)
         self.model.eval()
 
@@ -64,7 +73,10 @@ class DenseBGEEncoder:
         vectors: list[list[float]] = []
         torch = self.torch
         for start in range(0, len(texts), batch_size):
-            chunk = texts[start : start + batch_size]
+            chunk = [
+                text[: self.maximum_characters]
+                for text in texts[start : start + batch_size]
+            ]
             tokens = self.tokenizer(
                 chunk,
                 padding=True,
@@ -75,12 +87,41 @@ class DenseBGEEncoder:
             tokens = {key: value.to(self.device) for key, value in tokens.items()}
             with self._lock, torch.inference_mode():
                 hidden = self.model(**tokens).last_hidden_state
-                dense = torch.nn.functional.normalize(hidden[:, 0], p=2, dim=1)
-            vectors.extend(dense.float().cpu().tolist())
+                dense = torch.nn.functional.normalize(
+                    hidden[:, 0].float(),
+                    p=2,
+                    dim=1,
+                )
+            vectors.extend(dense.cpu().tolist())
         return vectors
 
 
-def make_handler(encoder: DenseBGEEncoder, *, maximum_batch: int):
+class FlagEmbeddingEncoder:
+    """Exact adapter used by the production bge_m3_service.py contract."""
+
+    def __init__(self, model_path: Path, *, device: str, use_fp16: bool) -> None:
+        from FlagEmbedding import BGEM3FlagModel
+
+        self.model = BGEM3FlagModel(
+            str(model_path),
+            use_fp16=use_fp16,
+            device=device,
+        )
+        self._lock = threading.Lock()
+
+    def encode(self, texts: list[str], *, batch_size: int) -> list[list[float]]:
+        with self._lock:
+            output = self.model.encode(
+                [text[:512] for text in texts],
+                batch_size=batch_size,
+                return_dense=True,
+                return_sparse=False,
+                return_colbert_vecs=False,
+            )
+        return [vector.tolist() for vector in output["dense_vecs"]]
+
+
+def make_handler(encoder: Any, *, maximum_batch: int):
     class Handler(BaseHTTPRequestHandler):
         server_version = "HarnessOfflineBGE/1"
 
@@ -132,8 +173,19 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=18881)
     parser.add_argument("--device", default="cuda")
-    parser.add_argument("--max-length", type=int, default=128)
+    parser.add_argument(
+        "--backend",
+        choices=("transformers", "flagembedding"),
+        default="transformers",
+    )
+    parser.add_argument("--max-length", type=int, default=512)
+    parser.add_argument("--max-characters", type=int, default=512)
     parser.add_argument("--max-batch", type=int, default=256)
+    parser.add_argument(
+        "--dtype",
+        choices=("float16", "float32", "bfloat16"),
+        default="float16",
+    )
     args = parser.parse_args()
     if args.host not in {"127.0.0.1", "::1"}:
         parser.error("offline checkpoint server must bind to loopback")
@@ -141,18 +193,31 @@ def parse_args() -> argparse.Namespace:
         parser.error("model checkpoint directory does not exist")
     if not 1024 <= args.port <= 65535:
         parser.error("port is invalid")
-    if not 1 <= args.max_length <= 8192 or not 1 <= args.max_batch <= 1024:
+    if (
+        not 1 <= args.max_length <= 8192
+        or not 1 <= args.max_characters <= 100_000
+        or not 1 <= args.max_batch <= 1024
+    ):
         parser.error("encoder limits are invalid")
     return args
 
 
 def main() -> int:
     args = parse_args()
-    encoder = DenseBGEEncoder(
-        args.model,
-        device=args.device,
-        maximum_length=args.max_length,
-    )
+    if args.backend == "flagembedding":
+        encoder = FlagEmbeddingEncoder(
+            args.model,
+            device=args.device,
+            use_fp16=args.dtype == "float16",
+        )
+    else:
+        encoder = DenseBGEEncoder(
+            args.model,
+            device=args.device,
+            maximum_length=args.max_length,
+            maximum_characters=args.max_characters,
+            dtype=args.dtype,
+        )
     server = ThreadingHTTPServer(
         (args.host, args.port),
         make_handler(encoder, maximum_batch=args.max_batch),
@@ -164,7 +229,10 @@ def main() -> int:
                 "model": str(args.model.resolve()),
                 "endpoint": f"http://{args.host}:{args.port}/embed",
                 "pooling": "cls",
+                "backend": args.backend,
+                "dtype": args.dtype,
                 "max_length": args.max_length,
+                "max_characters": args.max_characters,
             },
             sort_keys=True,
         ),
