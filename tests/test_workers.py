@@ -41,6 +41,7 @@ def test_primary_and_fallback_are_the_live_boxes():
     assert {w.id for w in registry.pool("foreman")} == {"fallback_reasoner", "asus2_foreman"}
     assert [w.id for w in registry.pool("senior")] == ["frontier_senior"]
     assert [w.id for w in registry.pool("critic")] == [
+        "qwen38_critic",
         "researcher",
         "glm_critic",
         "nemotron_super_critic",

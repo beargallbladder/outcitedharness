@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+import shlex
 import time
 import uuid
 from dataclasses import dataclass, field
@@ -24,6 +25,7 @@ from harness.dispatch import (
     evidence_covers_intent,
     is_change_job,
     is_orch_echo,
+    is_relay_job,
     merge_tool_catalog,
     packets_claim_unread,
     pick_foreman,
@@ -192,6 +194,99 @@ def has_action_round(messages: list[Any]) -> bool:
 
 def _is_change_job(intent: str) -> bool:
     return is_change_job(intent)
+
+
+_GITHUB_CLONE_RE = re.compile(
+    r"git@github\.com:([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+)\.git"
+)
+_REPO_BOOTSTRAP_MARKER = "HARNESS_REPO_BOOTSTRAP"
+
+
+def is_repo_bootstrap_job(intent: str) -> bool:
+    """Recognize an explicit request to clone supplied GitHub repositories."""
+    urls = _GITHUB_CLONE_RE.findall(intent or "")
+    if not urls:
+        return False
+    return bool(
+        re.search(
+            r"\b(?:clone(?:\s+and\s+look)?|check\s*out|checkout)\b",
+            intent,
+            flags=re.IGNORECASE,
+        )
+    )
+
+
+def repo_bootstrap_attempted(messages: list[Any]) -> bool:
+    for item in messages or []:
+        if not isinstance(item, dict) or item.get("role") != "assistant":
+            continue
+        for call in item.get("tool_calls") or []:
+            if not isinstance(call, dict):
+                continue
+            fn = call.get("function") if isinstance(call.get("function"), dict) else {}
+            if _REPO_BOOTSTRAP_MARKER in str(fn.get("arguments") or ""):
+                return True
+    return False
+
+
+def repo_bootstrap_calls(
+    intent: str,
+    catalog: dict[str, tuple[str, ...]],
+) -> list[dict[str, Any]]:
+    """Build one idempotent, no-push bootstrap call from explicit repo URLs."""
+    repos = list(dict.fromkeys(_GITHUB_CLONE_RE.findall(intent or "")))
+    if not repos:
+        return []
+    work_branch_match = re.search(
+        r"\b(feat/[A-Za-z0-9._/-]+)\b",
+        intent,
+        flags=re.IGNORECASE,
+    )
+    commands = [
+        f"# {_REPO_BOOTSTRAP_MARKER}",
+        'mkdir -p "$HOME/Projects/beargallbladder"',
+    ]
+    for index, (org, repo) in enumerate(repos):
+        if org != "beargallbladder":
+            return []
+        branch = work_branch_match.group(1) if index == 0 and work_branch_match else "main"
+        url = f"git@github.com:{org}/{repo}.git"
+        destination = f"$HOME/Projects/beargallbladder/{repo}"
+        quoted_url = shlex.quote(url)
+        quoted_destination = f'"{destination}"'
+        commands.extend(
+            [
+                (
+                    f'test -d {quoted_destination}/.git || '
+                    f"git clone {quoted_url} {quoted_destination}"
+                ),
+                f"git -C {quoted_destination} fetch origin",
+                f"git -C {quoted_destination} checkout {shlex.quote(branch)}",
+                (
+                    f"git -C {quoted_destination} pull --ff-only origin "
+                    f"{shlex.quote(branch)}"
+                ),
+            ]
+        )
+    if work_branch_match:
+        first_repo = repos[0][1]
+        first_destination = f'"$HOME/Projects/beargallbladder/{first_repo}"'
+        for pin in (
+            "staging/w31-private",
+            "release/designwins-w46-guided-minima-v5",
+        ):
+            if pin in intent:
+                commands.append(
+                    f"git -C {first_destination} fetch origin {shlex.quote(pin)}"
+                )
+    for _org, repo in repos:
+        destination = f'"$HOME/Projects/beargallbladder/{repo}"'
+        commands.append(f"git -C {destination} status --short --branch")
+    return bind_gather_calls(
+        [{"name": "run", "arguments": {"commands": commands}}],
+        catalog,
+        limit=1,
+    )
 
 
 def client_tool_catalog(tools: list[Any] | None) -> dict[str, tuple[str, ...]]:
@@ -1340,7 +1435,11 @@ async def run_orch(
     workspace = _workspace_override or client_workspace_root(messages, extra)
     from harness.task.search import embedder_thread_block
 
-    embedder_hits = embedder_thread_block(intent)
+    bootstrap_job = is_repo_bootstrap_job(intent)
+    relay_job = is_relay_job(intent) and not bootstrap_job
+    embedder_hits = (
+        "" if relay_job or bootstrap_job else embedder_thread_block(intent)
+    )
     if embedder_hits:
         thread = f"{thread}\n\n{embedder_hits}".strip()
     if is_orch_echo(intent):
@@ -1351,6 +1450,18 @@ async def run_orch(
             )
         )
     catalog = merge_tool_catalog(client_tool_catalog(tools))
+    bootstrap_attempted = repo_bootstrap_attempted(messages or [])
+    if bootstrap_job and not bootstrap_attempted:
+        calls = repo_bootstrap_calls(intent, catalog)
+        if calls:
+            return OrchResult(tool_calls=calls)
+        return OrchResult(
+            text=(
+                "Repository setup requires the client's run_commands tool; "
+                "no compatible command tool was supplied."
+            ),
+            error="no repository setup command tool",
+        )
     rounds = gather_rounds(messages or [])
     evidence = has_repo_evidence(messages or [])
     acted = has_action_round(messages or [])
@@ -1438,7 +1549,11 @@ async def run_orch(
     # README/package.json is not enough for a frontend/UI assessment: keep
     # gathering the source rather than dispatching a 'no frontend' packet.
     force_dispatch = (
-        not tools or rounds >= 4 or (evidence and rounds >= 2 and not acted and covered)
+        relay_job
+        or (bootstrap_job and bootstrap_attempted)
+        or not tools
+        or rounds >= 4
+        or (evidence and rounds >= 2 and not acted and covered)
     )
     if not force_dispatch and (not evidence or not covered):
         calls = default_gather_calls(
@@ -1509,7 +1624,7 @@ async def run_orch(
         ).text
         dispatch_thread = compiled_context
         save_loop_state(svc, task_id, state)
-    if "GREENFIELD RUN " not in intent:
+    if "GREENFIELD RUN " not in intent and not relay_job and not bootstrap_job:
         try:
             from harness.gci.integration import global_discovery_context
 

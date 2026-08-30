@@ -1331,6 +1331,111 @@ async def test_missing_command_blocks_and_does_not_invent(tmp_path: Path, monkey
 
 
 @pytest.mark.asyncio
+async def test_written_relay_does_not_enter_verified_mutation_loop(
+    tmp_path: Path,
+    monkeypatch,
+):
+    from harness.gateway.orch import run_orch
+
+    cfg = _cfg(tmp_path)
+    captured = _patch_loop(
+        monkeypatch,
+        report=_report(command="", text="Here is the requested onboarding message."),
+    )
+    intent = (
+        "Paste this to them. They clone and look only. "
+        "If they find a fix, write it locally and show cursor-cr."
+    )
+    messages: list[dict] = [{"role": "user", "content": intent}]
+    for index in range(4):
+        messages.extend(_read_pair(index))
+
+    result = await run_orch(cfg, intent, messages=messages, tools=_tools())
+
+    assert result.loop_phase == ""
+    assert "status: blocked" not in result.text
+    assert "Here is the requested onboarding message." in result.text
+    assert not result.tool_calls
+    assert captured["dispatch_kwargs"][0]["compiled_context"] == ""
+    assert "GLOBAL CODE INTELLIGENCE" not in captured["dispatch_kwargs"][0]["thread"]
+
+
+@pytest.mark.asyncio
+async def test_repository_onboarding_executes_then_reports_command_evidence(
+    tmp_path: Path,
+    monkeypatch,
+):
+    from harness.gateway.orch import run_orch
+
+    cfg = _cfg(tmp_path)
+    captured = _patch_loop(
+        monkeypatch,
+        report=_report(
+            command="",
+            text="All three repositories are present on their requested branches.",
+        ),
+    )
+    intent = """
+Paste this to them. They clone and look.
+git clone git@github.com:beargallbladder/outcited.com.git
+git checkout feat/fae-evidence-compiler-knives-v0
+git fetch origin staging/w31-private
+git fetch origin release/designwins-w46-guided-minima-v5
+git clone git@github.com:beargallbladder/octopart-ai.git
+git clone git@github.com:beargallbladder/designwins.git
+No git commit, no git push, and no deploy.
+""".strip()
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "run_commands",
+                "parameters": {
+                    "type": "object",
+                    "properties": {"commands": {"type": "array"}},
+                },
+            },
+        }
+    ]
+
+    first = await run_orch(
+        cfg,
+        intent,
+        messages=[{"role": "user", "content": intent}],
+        tools=tools,
+    )
+    assert len(first.tool_calls) == 1
+    assert first.tool_calls[0]["function"]["name"] == "run_commands"
+    args = json.loads(first.tool_calls[0]["function"]["arguments"])
+    commands = "\n".join(args["commands"])
+    assert "HARNESS_REPO_BOOTSTRAP" in commands
+    assert commands.count("git clone") == 3
+    assert "feat/fae-evidence-compiler-knives-v0" in commands
+    assert "staging/w31-private" in commands
+    assert "release/designwins-w46-guided-minima-v5" in commands
+    assert "git commit" not in commands
+    assert "git push" not in commands
+
+    messages = [
+        {"role": "user", "content": intent},
+        {"role": "assistant", "tool_calls": first.tool_calls},
+        {
+            "role": "tool",
+            "tool_call_id": first.tool_calls[0]["id"],
+            "content": (
+                "outcited.com feat/fae-evidence-compiler-knives-v0 clean\n"
+                "octopart-ai main clean\ndesignwins main clean\nexit_code: 0"
+            ),
+        },
+    ]
+    second = await run_orch(cfg, intent, messages=messages, tools=tools)
+
+    assert not second.tool_calls
+    assert "All three repositories are present" in second.text
+    assert "exit_code: 0" in captured["dispatch_kwargs"][0]["thread"]
+
+
+@pytest.mark.asyncio
 async def test_degraded_critic_blocks_code_mutation(tmp_path: Path, monkeypatch):
     from harness.gateway.orch import run_orch
 

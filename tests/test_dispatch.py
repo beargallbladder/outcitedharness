@@ -290,10 +290,26 @@ def test_change_job_strips_prose_invariants():
         Packet,
         is_change_job,
         is_prose_invariant,
+        is_relay_job,
         strip_prose_invariants,
     )
 
     assert is_change_job("fix the failing unit test")
+    assert is_change_job("Can you update the worker configuration?")
+    assert is_change_job("Can you review this and fix the routing bug?")
+    assert not is_change_job("Explain how to fix the routing bug.")
+    assert not is_change_job(
+        "Paste this to them. They clone and look. "
+        "If they find a fix, write it locally and show cursor-cr."
+    )
+    assert not is_change_job(
+        "Hard rule: no commits or deploys. Do not fix production directly. "
+        "If they find a fix, discuss it first."
+    )
+    assert is_relay_job(
+        "Paste this to them. They clone and look. If they find a fix, show cursor-cr."
+    )
+    assert not is_relay_job("Paste this configuration into src/settings.py.")
     assert is_prose_invariant("text not yet")
     assert is_prose_invariant("text PONG")
     assert not is_prose_invariant("min_chars 40")
@@ -331,6 +347,62 @@ def test_score_invariants():
     assert score_invariants(pkt, ok, ["read_file", "execute_command"]) is False
     tool_only = ChatResult(provider="x", model="x", tool_calls=[{"function": {"name": "read_file"}}])
     assert score_invariants(pkt, tool_only, ["read_file"]) is False
+
+
+def test_machine_eligibility_leaves_prose_paraphrases_to_critic():
+    from harness.dispatch import (
+        AcceptSpec,
+        Packet,
+        score_invariants,
+        score_machine_eligibility,
+    )
+
+    packet = Packet(
+        id="p1",
+        title="Greeting reply",
+        prompt="Reply warmly to: Hey, how's it going?",
+        accept=AcceptSpec(invariants=("text going",)),
+    )
+    paraphrase = ChatResult(
+        provider="x",
+        model="x",
+        text="Hey! Doing well, thanks for asking.",
+    )
+
+    assert score_invariants(packet, paraphrase, []) is False
+    assert score_machine_eligibility(packet, paraphrase, []) is True
+
+
+def test_machine_eligibility_still_enforces_structural_invariants():
+    from harness.dispatch import (
+        AcceptSpec,
+        Packet,
+        score_machine_eligibility,
+    )
+
+    packet = Packet(
+        id="p1",
+        title="Answer",
+        prompt="Give a useful answer without tools.",
+        accept=AcceptSpec(invariants=("min_chars 20", "no execute_command")),
+    )
+
+    assert (
+        score_machine_eligibility(
+            packet,
+            ChatResult(provider="x", model="x", text="too short"),
+            [],
+        )
+        is False
+    )
+    assert (
+        score_machine_eligibility(
+            packet,
+            ChatResult(provider="x", model="x", text="This answer is long enough."),
+            ["execute_command"],
+        )
+        is False
+    )
 
 
 def test_min_chars_invariant():
@@ -412,7 +484,7 @@ def test_critic_rejects_internally_contradictory_scores():
     mixed = {"p1": (True, "yes"), "p2": (False, "no")}
     assert _critic_scores_consistent("proceed", all_fail, shots) is False
     assert _critic_scores_consistent("reject", all_fail, shots) is True
-    assert _critic_scores_consistent("revise", all_fail, shots) is True
+    assert _critic_scores_consistent("revise", all_fail, shots) is False
     assert _critic_scores_consistent("revise", mixed, shots) is True
     assert _critic_scores_consistent("proceed", {"p1": (True, "yes")}, shots) is False
 
@@ -917,6 +989,45 @@ async def test_critic_semantic_rejection_does_not_trigger_thinking_retry(monkeyp
 
 
 @pytest.mark.asyncio
+async def test_critic_summary_is_normalized_from_complete_shot_scores(monkeypatch):
+    from harness.dispatch import AcceptSpec, Packet, Shot, _run_critic
+
+    packet = Packet(
+        id="p1",
+        title="review",
+        prompt="Check every stated requirement.",
+        accept=AcceptSpec(invariants=("min_chars 12",)),
+    )
+    shot = Shot(
+        packet=packet,
+        worker_id="coder",
+        model_key="dgx_qwen",
+        result=ChatResult(provider="x", model="x", text="Incomplete answer."),
+        tokens_per_sec=None,
+        tool_names=[],
+        tool_hit=True,
+        qa_pass=True,
+        preview="Incomplete answer.",
+    )
+
+    async def grade(*_args, **_kwargs):
+        return ChatResult(
+            provider="x",
+            model="x",
+            text='{"verdict":"revise","shots":[{"id":"p1","pass":false,'
+            '"why":"missing required commands"}]}',
+        )
+
+    monkeypatch.setattr("harness.dispatch._chat", grade)
+    verdict, _text, scores = await _run_critic(
+        None, _model("asus2_qwen"), "review completeness", [shot]
+    )
+
+    assert verdict == "reject"
+    assert scores == {"p1": (False, "missing required commands")}
+
+
+@pytest.mark.asyncio
 async def test_implementation_critic_allows_grounded_new_code(monkeypatch):
     from harness.dispatch import AcceptSpec, Packet, Shot, _run_critic
 
@@ -955,6 +1066,152 @@ async def test_implementation_critic_allows_grounded_new_code(monkeypatch):
     assert verdict == "proceed"
     assert scores["p1"][0] is True
     assert "New code, symbols, tests, and files are expected" in systems[0]
+
+
+@pytest.mark.asyncio
+async def test_relay_qa_checks_explicit_requirements_before_critic(monkeypatch):
+    from harness.dispatch import AcceptSpec, Packet, Shot, _grade_shots
+
+    packet = Packet(
+        id="p1",
+        title="onboarding",
+        prompt="Preserve the supplied onboarding instructions.",
+        accept=AcceptSpec(
+            invariants=(
+                "min_chars 40",
+                "text cursor-cr",
+                "text feat/fae-evidence-compiler-knives-v0",
+                "text no git push",
+            )
+        ),
+    )
+    text = (
+        "Use feat/fae-evidence-compiler-knives-v0 for local inspection. "
+        "There is no git push; show cursor-cr before anything ships."
+    )
+    shot = Shot(
+        packet=packet,
+        worker_id="coder",
+        model_key="local",
+        result=ChatResult(provider="x", model="x", text=text),
+        tokens_per_sec=None,
+        tool_names=[],
+        tool_hit=True,
+        qa_pass=True,
+        preview=text,
+    )
+
+    calls = 0
+
+    async def critic(*_args, **_kwargs):
+        nonlocal calls
+        calls += 1
+        return "proceed", "complete", {"p1": (True, "complete")}
+
+    monkeypatch.setattr("harness.dispatch._run_critic", critic)
+    verdict, _detail, critic_key, failures = await _grade_shots(
+        [(None, _model("asus2_qwen"))],
+        "Paste this to them. If they find a fix, show cursor-cr.",
+        [shot],
+        allow_degraded=False,
+    )
+
+    assert verdict == "proceed"
+    assert critic_key == "asus2_qwen"
+    assert failures == []
+    assert calls == 1
+    assert shot.qa_pass is True
+
+
+@pytest.mark.asyncio
+async def test_relay_qa_rejects_missing_safety_requirement(monkeypatch):
+    from harness.dispatch import AcceptSpec, Packet, Shot, _grade_shots
+
+    packet = Packet(
+        id="p1",
+        title="onboarding",
+        prompt="Preserve the supplied onboarding instructions.",
+        accept=AcceptSpec(invariants=("min_chars 20", "text no git push")),
+    )
+    text = "Clone the repository and begin work immediately."
+    shot = Shot(
+        packet=packet,
+        worker_id="coder",
+        model_key="local",
+        result=ChatResult(provider="x", model="x", text=text),
+        tokens_per_sec=None,
+        tool_names=[],
+        tool_hit=True,
+        qa_pass=True,
+        preview=text,
+    )
+
+    async def critic(*_args, **_kwargs):
+        return "reject", "missing", {"p1": (False, "missing safety requirement")}
+
+    monkeypatch.setattr("harness.dispatch._run_critic", critic)
+    verdict, _detail, critic_key, _failures = await _grade_shots(
+        [(None, _model("asus2_qwen"))],
+        "Paste this to them. If they find a fix, show cursor-cr.",
+        [shot],
+        allow_degraded=False,
+    )
+
+    assert verdict == "reject"
+    assert critic_key == "asus2_qwen"
+    assert shot.qa_pass is False
+
+
+@pytest.mark.asyncio
+async def test_relay_qa_rejects_invented_execution_and_paths(monkeypatch):
+    from harness.dispatch import AcceptSpec, Packet, Shot, _grade_shots
+
+    packet = Packet(
+        id="p1",
+        title="onboarding",
+        prompt="Preserve the supplied onboarding instructions.",
+        accept=AcceptSpec(
+            invariants=(
+                "min_chars 20",
+                "text feat/fae-evidence-compiler-knives-v0",
+                "text services/fae-query",
+            )
+        ),
+    )
+    text = (
+        "The repository has been cloned at feat/fae-evidence-compiler-knives-v0. "
+        "I inspected services/fae-query/main.go."
+    )
+    shot = Shot(
+        packet=packet,
+        worker_id="coder",
+        model_key="local",
+        result=ChatResult(provider="x", model="x", text=text),
+        tokens_per_sec=None,
+        tool_names=[],
+        tool_hit=True,
+        qa_pass=True,
+        preview=text,
+    )
+    intent = (
+        "Paste this to them. Use feat/fae-evidence-compiler-knives-v0 and "
+        "look at services/fae-query."
+    )
+
+    async def critic(*_args, **_kwargs):
+        return "reject", "invented", {"p1": (False, "invented execution")}
+
+    monkeypatch.setattr("harness.dispatch._run_critic", critic)
+    verdict, _detail, critic_key, _failures = await _grade_shots(
+        [(None, _model("asus2_qwen"))],
+        intent,
+        [shot],
+        allow_degraded=False,
+    )
+
+    assert verdict == "reject"
+    assert critic_key == "asus2_qwen"
+    assert shot.qa_pass is False
 
 
 def test_parse_critic_accepts_json_with_trailing_model_junk():
