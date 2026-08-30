@@ -57,6 +57,8 @@ def test_primary_and_fallback_are_the_live_boxes():
     embedder = registry.get("spark_embedder")
     assert embedder is not None and embedder.enabled and embedder.role == "embedder"
     assert embedder.model_key == "spark_embed"
+    assert "FAE v4 weights" in embedder.notes
+    assert "Never use as the Tapes v1 baseline" in embedder.notes
     assert [w.id for w in registry.pool("embedder")] == ["spark_embedder"]
     assert "spark_embed" not in registry.failover_keys()
     assert embedder not in registry.pool("coder")

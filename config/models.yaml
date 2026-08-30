@@ -147,10 +147,13 @@ models:
   spark_embed:
     enabled: true
     tier: 0
-    display_name: "Spark BGE-M3 CR Embedder"
+    display_name: "Spark FAE v4 Embedder (legacy v1 API label)"
     short_name: "SPARK_EMBED"
     provider: openai_compatible
     base_url: http://100.81.201.24:8800/v1
+    # The unit still requires/advertises this legacy request label, but owners
+    # confirmed its immutable loaded weights are FAE v4 since 2026-08-22.
+    # Never use this route as the Tapes v1 baseline.
     model: bge-m3-cr-tapes-v1
     temperature: 0
     timeout_s: 60

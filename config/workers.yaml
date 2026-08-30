@@ -151,7 +151,7 @@ workers:
     capabilities:
       - embedding
       - semantic_search
-    notes: spark-e10b :8800; bge-m3-cr-tapes-v1 (1024-dim, cuda); CR team weekly embeddings; routes /v1/embeddings /embed /encode /semantic-search; DO NOT restart or repurpose. This box is dedicated to embedding/search/training; its coder was retired 2026-08-27.
+    notes: spark-e10b :8800; owners confirmed FAE v4 weights behind a legacy bge-m3-cr-tapes-v1 API label since 2026-08-22. Never use as the Tapes v1 baseline or retag CR foundation data. Routes /v1/embeddings /embed /encode /semantic-search; DO NOT restart, flip the symlink, or repurpose.
 
   asus2_foreman:
     enabled: true

@@ -34,7 +34,9 @@ state, and verification still run in Harness. SGLang serves inference only.
   secondary local critic and researcher, never the foreman.
 - `M5 :8082`: Qwen3.8-27B-8bit primary foreman.
 - `Spark e10b :8800` and GCI `:8810`: protected embedding/search services.
-  Do not restart or repurpose them.
+  Owners confirmed `:8800` loads FAE v4 weights while retaining a legacy v1
+  API label. Never use it as a Tapes v1 baseline, flip its symlink, restart,
+  or repurpose it.
 - ASUS1 and DGX2 are not active coder routes. Their launchers and model
   artifacts remain available for future experiments.
 

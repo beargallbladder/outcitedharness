@@ -73,7 +73,9 @@ Configure Cline as OpenAI Compatible with base URL
 through LiteLLM; it never targets physical SGLang workers directly.
 
 For service ownership, ports, SGLang rollback rules, billing controls, and the
-MCP allowlist, see `ARCHITECTURE.md`.
+MCP allowlist, see `ARCHITECTURE.md`. Current pass/fail evidence, pilot
+promotion decisions, and the remaining cable gate are recorded in
+`QUALIFICATION.md`.
 
 ## Commands
 
