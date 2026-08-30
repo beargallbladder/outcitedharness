@@ -8,6 +8,7 @@ usage() {
 Usage:
   training_launch_two_node.sh --node-rank 0|1 --store-root PATH
     --scratch-root PATH --config FILE --master-addr ADDRESS --interface IFACE
+    --hcas HCA[,HCA] [--gid-index N]
     [--master-port PORT] [--specforge PATH] [--launch]
     [-- SPECFORGE_ARGS...]
 
@@ -47,6 +48,8 @@ config=""
 master_addr=""
 master_port=29500
 interface=""
+hcas=""
+gid_index=3
 specforge=""
 launch=false
 declare -a job_args=()
@@ -60,6 +63,8 @@ while (( $# )); do
     --master-addr) [[ $# -ge 2 ]] || die "--master-addr needs a value"; master_addr="$2"; shift 2 ;;
     --master-port) [[ $# -ge 2 ]] || die "--master-port needs a value"; master_port="$2"; shift 2 ;;
     --interface) [[ $# -ge 2 ]] || die "--interface needs a value"; interface="$2"; shift 2 ;;
+    --hcas) [[ $# -ge 2 ]] || die "--hcas needs a value"; hcas="$2"; shift 2 ;;
+    --gid-index) [[ $# -ge 2 ]] || die "--gid-index needs a value"; gid_index="$2"; shift 2 ;;
     --specforge) [[ $# -ge 2 ]] || die "--specforge needs a value"; specforge="$2"; shift 2 ;;
     --launch) launch=true; shift ;;
     --) shift; job_args=("$@"); break ;;
@@ -78,6 +83,10 @@ done
 [[ "$master_port" =~ ^[0-9]+$ && "$master_port" -ge 1024 && "$master_port" -le 65535 ]] ||
   die "invalid --master-port"
 [[ "$interface" =~ ^[A-Za-z0-9_.:-]+$ ]] || die "invalid --interface"
+[[ "$hcas" =~ ^[A-Za-z0-9_.:-]+(,[A-Za-z0-9_.:-]+)*$ ]] ||
+  die "--hcas must be a comma-separated HCA allowlist"
+[[ "$gid_index" =~ ^[0-9]+$ && "$gid_index" -le 255 ]] ||
+  die "--gid-index must be between 0 and 255"
 specforge="${specforge:-$store_root/specforge-venv/bin/specforge}"
 [[ "$specforge" =~ ^/[A-Za-z0-9._/-]+$ ]] || die "--specforge must be a safe absolute path"
 
@@ -124,6 +133,9 @@ export XDG_CACHE_HOME="$cache_root/xdg"
 export NCCL_SOCKET_IFNAME="$interface"
 export GLOO_SOCKET_IFNAME="$interface"
 export NCCL_IB_DISABLE=0
+export NCCL_IB_HCA="$hcas"
+export NCCL_IB_GID_INDEX="$gid_index"
+export NCCL_IB_ROCE_VERSION_NUM=2
 export NCCL_ASYNC_ERROR_HANDLING=1
 export TORCH_NCCL_ASYNC_ERROR_HANDLING=1
 export NCCL_DEBUG="${NCCL_DEBUG:-WARN}"

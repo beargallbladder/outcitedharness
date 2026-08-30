@@ -79,21 +79,62 @@ python3 scripts/training_manifest.py verify \
 Run verification before and after any intentional artifact transfer. Use a new
 manifest path when artifact content changes.
 
-## 3. Check a future direct link
+## 3. Configure and qualify the direct link
 
 The doctor is read-only and defaults to warnings, so it is useful before a
-cable exists. Run it on both training nodes:
+cable exists. ConnectX devices hot-unplug when the cable is absent; boot logs
+on ASUS1 and DGX2 prove four ConnectX-7 functions and the `mlx5` drivers, while
+the working ASUS2/ASUS4 pair proves the expected dual-rail names. After
+installing the cable, confirm both rails on both training nodes:
 
 ```shell
 bash scripts/training_link_doctor.sh \
-  --host dgx2 --interface enp65s0f0 --mtu 9000 --peer 10.77.0.2
+  --host dgx2 --interface enp1s0f1np1 --mtu 9000
 bash scripts/training_link_doctor.sh \
-  --host asus1 --interface enp65s0f0 --mtu 9000 --peer 10.77.0.1
+  --host dgx2 --interface enP2p1s0f1np1 --mtu 9000
 ```
 
-It inspects interface state/address/routes, MTU, RDMA tools and mapping, GPU
-topology, the NCCL library, and PyTorch CUDA/NCCL support. Add
-`--require-ready` only once absence should fail automation.
+Run the equivalent commands on ASUS1 through its reachable SSH address. Do not
+trust an interface name until `ibdev2netdev` maps the rails to
+`rocep1s0f1` and `roceP2p1s0f1`.
+
+Review, then apply the isolated addresses locally on each host:
+
+```shell
+# DGX2
+sudo bash scripts/training_configure_link.sh \
+  --role dgx2 \
+  --primary-interface enp1s0f1np1 --primary-cidr 10.77.0.1/24 \
+  --secondary-interface enP2p1s0f1np1 --secondary-cidr 10.77.1.1/24 \
+  --apply
+
+# ASUS1
+sudo bash scripts/training_configure_link.sh \
+  --role asus1 \
+  --primary-interface enp1s0f1np1 --primary-cidr 10.77.0.2/24 \
+  --secondary-interface enP2p1s0f1np1 --secondary-cidr 10.77.1.2/24 \
+  --apply
+```
+
+Re-run both doctors with the opposite primary address as `--peer` and
+`--require-ready`. Then run the pinned two-rank NCCL correctness/bandwidth
+smoke, starting ASUS1 rank 1 before DGX2 rank 0:
+
+```shell
+bash scripts/training_launch_nccl_smoke.sh \
+  --node-rank 1 --root /home/samkimasus1/harness-training \
+  --master-addr 10.77.0.1 --interface enp1s0f1np1 \
+  --hcas rocep1s0f1,roceP2p1s0f1 --launch
+
+bash scripts/training_launch_nccl_smoke.sh \
+  --node-rank 0 --root /home/samkim2/harness-training \
+  --master-addr 10.77.0.1 --interface enp1s0f1np1 \
+  --hcas rocep1s0f1,roceP2p1s0f1 --launch
+```
+
+The smoke uses the same digest-pinned NVIDIA PyTorch image already staged on
+both hosts, verifies exact all-reduce results, and records median/P95 bandwidth
+at 1, 64, and 256 MiB. Seal rank 0's JSON before any distributed training.
 
 ## 4. Launch SpecForge
 
@@ -129,7 +170,8 @@ bash scripts/training_launch_two_node.sh \
   --scratch-root /home/samkimasus1/harness-training \
   --config /mnt/dgx2-training/configs/job.yaml \
   --master-addr 10.77.0.1 --master-port 29500 \
-  --interface enp65s0f0 --launch
+  --interface enp1s0f1np1 \
+  --hcas rocep1s0f1,roceP2p1s0f1 --gid-index 3 --launch
 
 # ASUS1
 bash scripts/training_launch_two_node.sh \
@@ -137,7 +179,8 @@ bash scripts/training_launch_two_node.sh \
   --scratch-root /home/samkimasus1/harness-training \
   --config /mnt/dgx2-training/configs/job.yaml \
   --master-addr 10.77.0.1 --master-port 29500 \
-  --interface enp65s0f0 --launch
+  --interface enp1s0f1np1 \
+  --hcas rocep1s0f1,roceP2p1s0f1 --gid-index 3 --launch
 ```
 
 Extra SpecForge arguments go after `--`. Keep tokens out of command-line

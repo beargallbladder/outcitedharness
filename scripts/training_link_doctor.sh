@@ -9,6 +9,7 @@ Options:
   --host dgx2|asus1   Inspect one explicit remote training host over SSH.
   --peer ADDRESS      Also test route and non-fatal reachability to the peer.
   --mtu BYTES         Expected MTU (default: 9000).
+  --container-image   Pinned PyTorch/NCCL image already staged on both hosts.
   --require-ready     Return nonzero when any readiness warning is found.
 
 The doctor is read-only. A missing cable, interface, RDMA utility, or NCCL
@@ -32,7 +33,9 @@ doctor_local() {
   local expected_mtu="$2"
   local peer="$3"
   local require_ready="$4"
+  local container_image="$5"
   local actual_mtu state
+  [[ "$peer" == "-" ]] && peer=""
 
   printf 'Direct-link readiness report for %s on %s\n' "$interface" "$(hostname -s)"
 
@@ -79,15 +82,9 @@ doctor_local() {
     warn "nvidia-smi is unavailable"
   fi
 
-  if command -v ldconfig >/dev/null 2>&1 &&
-    ldconfig -p 2>/dev/null | awk '/libnccl/ {found=1} END {exit !found}'; then
-    printf '%s\n' 'NCCL shared library: found'
-  else
-    warn "NCCL shared library was not found by ldconfig"
-  fi
-
-  if command -v python3 >/dev/null 2>&1; then
-    python3 - <<'PY' || warn "PyTorch NCCL probe failed"
+  if command -v docker >/dev/null 2>&1 &&
+    docker image inspect "$container_image" >/dev/null 2>&1; then
+    if ! docker run --rm --gpus all --network none "$container_image" python - <<'PY'
 try:
     import torch
 except ImportError:
@@ -99,8 +96,11 @@ print(f"torch.distributed NCCL available: {torch.distributed.is_nccl_available()
 if not torch.cuda.is_available() or not torch.distributed.is_nccl_available():
     raise SystemExit(1)
 PY
+    then
+      warn "containerized PyTorch NCCL probe failed"
+    fi
   else
-    warn "python3 is unavailable for the PyTorch NCCL probe"
+    warn "pinned PyTorch/NCCL qualification image is not staged"
   fi
 
   printf 'Recommended launch setting: NCCL_SOCKET_IFNAME=%s\n' "$interface"
@@ -128,7 +128,7 @@ PY
 
 if [[ "${1:-}" == "__doctor" ]]; then
   shift
-  [[ "$#" == 4 ]] || die "invalid internal invocation"
+  [[ "$#" == 5 ]] || die "invalid internal invocation"
   doctor_local "$@"
   exit $?
 fi
@@ -137,6 +137,7 @@ host=""
 interface=""
 peer=""
 expected_mtu=9000
+container_image="nvcr.io/nvidia/pytorch@sha256:43c018d6a12963f1a1bad85ef8574b5c2a978eec2be0ebcacfb87f69e0d210e1"
 require_ready=false
 
 while (( $# )); do
@@ -145,6 +146,7 @@ while (( $# )); do
     --interface) [[ $# -ge 2 ]] || die "--interface needs a value"; interface="$2"; shift 2 ;;
     --peer) [[ $# -ge 2 ]] || die "--peer needs a value"; peer="$2"; shift 2 ;;
     --mtu) [[ $# -ge 2 ]] || die "--mtu needs a value"; expected_mtu="$2"; shift 2 ;;
+    --container-image) [[ $# -ge 2 ]] || die "--container-image needs a value"; container_image="$2"; shift 2 ;;
     --require-ready) require_ready=true; shift ;;
     -h|--help) usage; exit 0 ;;
     *) die "unknown argument: $1" ;;
@@ -157,10 +159,13 @@ done
 [[ -z "$peer" || "$peer" =~ ^[A-Fa-f0-9:.]+$ ]] || die "invalid peer address"
 [[ -z "$host" || "$host" == "dgx2" || "$host" == "asus1" ]] ||
   die "--host must be dgx2 or asus1"
+[[ "$container_image" =~ ^nvcr\.io/nvidia/pytorch@sha256:[a-f0-9]{64}$ ]] ||
+  die "--container-image must be a pinned NVIDIA PyTorch digest"
 
 if [[ -n "$host" ]]; then
+  peer_arg="${peer:--}"
   ssh -o BatchMode=yes -o ConnectTimeout=10 -- "$host" \
-    bash -s -- __doctor "$interface" "$expected_mtu" "$peer" "$require_ready" < "$0"
+    bash -s -- __doctor "$interface" "$expected_mtu" "$peer_arg" "$require_ready" "$container_image" < "$0"
 else
-  doctor_local "$interface" "$expected_mtu" "$peer" "$require_ready"
+  doctor_local "$interface" "$expected_mtu" "$peer" "$require_ready" "$container_image"
 fi

@@ -105,10 +105,16 @@ or narrower per-family adapters.
 
 After the direct-link cable is installed between ASUS1 and DGX2:
 
-1. Run link, MTU, RDMA, NCCL correctness, bandwidth, and failure-recovery
-   qualification.
-2. Confirm DGX2 remains the only authoritative dataset/checkpoint writer and
+1. Confirm the hot-plugged ConnectX-7 functions expose the proven
+   `enp1s0f1np1`/`enP2p1s0f1np1` rails and
+   `rocep1s0f1`/`roceP2p1s0f1` HCAs.
+2. Apply the isolated 10.77.0.0/24 and 10.77.1.0/24 addresses with
+   `training_configure_link.sh`.
+3. Run link, MTU, route, RDMA, NCCL correctness, bandwidth, and
+   failure-recovery qualification. The digest-pinned two-rank smoke is staged
+   and checksum-verified on both hosts.
+4. Confirm DGX2 remains the only authoritative dataset/checkpoint writer and
    ASUS1 remains ephemeral scratch.
-3. Seal the qualification logs and manifest on DGX2.
+5. Seal the qualification logs and manifest on DGX2.
 
 Until those steps pass, do not advertise two-node training as production-ready.

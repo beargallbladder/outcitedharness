@@ -25,6 +25,8 @@ def test_shell_assets_parse():
     for name in (
         "training_prepare_storage.sh",
         "training_link_doctor.sh",
+        "training_configure_link.sh",
+        "training_launch_nccl_smoke.sh",
         "training_launch_single.sh",
         "training_launch_two_node.sh",
         "training_launch_lora.sh",
@@ -91,10 +93,46 @@ def test_launch_templates_default_to_plan_without_side_effects(tmp_path: Path):
         "--master-addr",
         "10.77.0.1",
         "--interface",
-        "enp65s0f0",
+        "enp1s0f1np1",
+        "--hcas",
+        "rocep1s0f1,roceP2p1s0f1",
     )
     assert two_node.returncode == 0, two_node.stderr
     assert "PLAN only" in two_node.stdout
+
+    link = run(
+        "bash",
+        str(SCRIPTS / "training_configure_link.sh"),
+        "--role",
+        "dgx2",
+        "--primary-interface",
+        "enp1s0f1np1",
+        "--primary-cidr",
+        "10.77.0.1/24",
+        "--secondary-interface",
+        "enP2p1s0f1np1",
+        "--secondary-cidr",
+        "10.77.1.1/24",
+    )
+    assert link.returncode == 0, link.stderr
+    assert "PLAN only" in link.stdout
+
+    nccl = run(
+        "bash",
+        str(SCRIPTS / "training_launch_nccl_smoke.sh"),
+        "--node-rank",
+        "0",
+        "--root",
+        str(tmp_path / "store"),
+        "--master-addr",
+        "10.77.0.1",
+        "--interface",
+        "enp1s0f1np1",
+        "--hcas",
+        "rocep1s0f1,roceP2p1s0f1",
+    )
+    assert nccl.returncode == 0, nccl.stderr
+    assert "PLAN only" in nccl.stdout
 
     lora = run(
         "bash",
@@ -209,18 +247,39 @@ def test_templates_pin_caches_floor_and_non_destructive_controls():
     prepare = (SCRIPTS / "training_prepare_storage.sh").read_text()
     scratch = (SCRIPTS / "training_check_scratch.py").read_text()
     doctor = (SCRIPTS / "training_link_doctor.sh").read_text()
+    configure_link = (SCRIPTS / "training_configure_link.sh").read_text()
+    nccl_smoke = (SCRIPTS / "training_launch_nccl_smoke.sh").read_text()
+    nccl_probe = (SCRIPTS / "training_nccl_smoke.py").read_text()
     tapes_repro = (SCRIPTS / "run_tapes_offline_repro.sh").read_text()
     cr_bge = (SCRIPTS / "training_launch_bge_cr.sh").read_text()
     two_node = (SCRIPTS / "training_launch_two_node.sh").read_text()
     lora = (SCRIPTS / "training_launch_lora.sh").read_text()
-    combined = "\n".join((prepare, scratch, doctor, two_node, lora, cr_bge))
+    combined = "\n".join(
+        (
+            prepare,
+            scratch,
+            doctor,
+            configure_link,
+            nccl_smoke,
+            two_node,
+            lora,
+            cr_bge,
+        )
+    )
     assert ".harness-training-owner-v1" in prepare
     assert "refusing to claim non-empty unowned directory" in prepare
     assert "250 * 1024**3" in scratch
     assert "rdma link show" in doctor
     assert "expected_mtu" in doctor
     assert "torch.distributed.is_nccl_available()" in doctor
+    assert "nvcr.io/nvidia/pytorch@sha256:" in doctor
     assert "ConnectTimeout=10" in doctor
+    assert "ip address replace" in configure_link
+    assert "default-route interface" in configure_link
+    assert "nvcr.io/nvidia/pytorch@sha256:" in nccl_smoke
+    assert "--device /dev/infiniband" in nccl_smoke
+    assert "dist.all_reduce" in nccl_probe
+    assert "incorrect all-reduce result" in nccl_probe
     assert "--network none" in tapes_repro
     assert "127.0.0.1:18881" in tapes_repro
     assert ":8800" not in tapes_repro
@@ -232,6 +291,8 @@ def test_templates_pin_caches_floor_and_non_destructive_controls():
     assert '--user "$(id -u):$(id -g)"' in cr_bge
     assert "category_mentions_v2" not in cr_bge
     assert "NCCL_SOCKET_IFNAME" in two_node
+    assert "NCCL_IB_HCA" in two_node
+    assert "NCCL_IB_GID_INDEX" in two_node
     assert "training_check_scratch.py" in two_node
     assert '"$specforge" train' in two_node
     assert "torchrun" not in two_node
