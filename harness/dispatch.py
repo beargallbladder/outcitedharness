@@ -84,6 +84,8 @@ CRITIC_SYSTEM = (
     "substring requirements, unless packet_prompt explicitly asks for exact output. A valid "
     "paraphrase passes. Ordinary greetings and social pleasantries are not unsupported "
     "repository or user-state claims. "
+    "When the user asks for top/list N findings, require N substantive supported findings; "
+    "unknown/not-visible/insufficient-evidence placeholders do not count. "
     "Every concrete claim about code, symbols, control flow, line numbers, test output, or "
     "failure modes must be directly supported by that evidence. Reject invented behavior, "
     "misquoted code, claims that contradict the evidence, empty answers, and bare tool dumps. "
@@ -315,6 +317,37 @@ def score_tool_hit(packet: Packet, result: ChatResult, names: list[str]) -> bool
     return bool((result.text or "").strip())
 
 
+_INSUFFICIENT_LIST_ITEM_RE = re.compile(
+    r"\b(?:not visible|not provided|unknown|n/?a|insufficient evidence|"
+    r"cannot (?:determine|assess)|unable to determine)\b",
+    flags=re.IGNORECASE,
+)
+
+
+def requested_list_count(intent: str) -> int | None:
+    """Return a bounded explicit result count requested by the user."""
+    for pattern in (
+        r"\btop\s+(\d{1,2})\b",
+        r"\b(?:list|give|identify|find|name|show)\s+(?:the\s+)?(\d{1,2})\b",
+    ):
+        match = re.search(pattern, intent or "", flags=re.IGNORECASE)
+        if match:
+            count = int(match.group(1))
+            return count if 1 <= count <= 20 else None
+    return None
+
+
+def substantive_list_item_count(text: str) -> int:
+    """Count top-level answer items, excluding evidence-gap placeholders."""
+    numbered = re.findall(r"(?m)^\s*\d{1,2}[.)]\s+(.+)$", text or "")
+    candidates = numbered or re.findall(r"(?m)^\s*[-*•]\s+(.+)$", text or "")
+    return sum(
+        1
+        for item in candidates
+        if item.strip() and not _INSUFFICIENT_LIST_ITEM_RE.search(item)
+    )
+
+
 def score_invariants(packet: Packet, result: ChatResult, names: list[str]) -> bool:
     text = (result.text or "").strip()
     if not text:
@@ -344,6 +377,14 @@ def score_invariants(packet: Packet, result: ChatResult, names: list[str]) -> bo
                 return False
             if len(text) < minimum:
                 return False
+        elif lower.startswith("list_items "):
+            parts = inv.split(None, 1)
+            try:
+                expected = int(parts[1])
+            except (IndexError, ValueError):
+                return False
+            if substantive_list_item_count(text) != expected:
+                return False
         elif lower == "review_grounded":
             if not _review_grounding_ok(packet, text):
                 return False
@@ -367,7 +408,7 @@ def score_machine_eligibility(
         inv
         for inv in packet.accept.invariants
         if inv.strip().lower().startswith(
-            ("tool ", "no ", "min_chars ", "review_grounded")
+            ("tool ", "no ", "min_chars ", "list_items ", "review_grounded")
         )
     )
     structural = Packet(
@@ -1356,6 +1397,49 @@ def sanitize_packets(packets: list[Packet], thread: str) -> list[Packet]:
     return packets
 
 
+def enforce_requested_list_contract(
+    packets: list[Packet],
+    intent: str,
+    thread: str,
+) -> list[Packet]:
+    """Prevent a top-N request from passing with padded evidence placeholders."""
+    expected = requested_list_count(intent)
+    if expected is None or len(packets) != 1:
+        return packets
+    packet = packets[0]
+    invariants = tuple(
+        inv
+        for inv in packet.accept.invariants
+        if not inv.strip().lower().startswith("list_items ")
+    ) + (f"list_items {expected}",)
+    packet.accept = AcceptSpec(
+        commands=packet.accept.commands,
+        invariants=invariants,
+    )
+
+    normalized = (thread or "").replace("\\n", "\n")
+    heading_ids = {
+        int(value)
+        for value in re.findall(
+            r"(?m)^\s*#{1,6}\s+(\d{1,2})[.)]\s+\S",
+            normalized,
+        )
+    }
+    if set(range(1, expected + 1)).issubset(heading_ids):
+        marker = "WORKSPACE EVIDENCE GATHERED BY CLIENT"
+        if marker in packet.prompt:
+            evidence = packet.prompt.split(marker, 1)[1]
+            packet.prompt = (
+                f"Answer the user's request: {intent}\n"
+                f"Return exactly {expected} substantive, prioritized findings. "
+                "Do not pad the list with unknown/not-visible placeholders. "
+                f"The supplied evidence contains numbered findings 1 through {expected}; "
+                "use all of them and preserve factual grounding.\n\n"
+                f"{marker}{evidence}"
+            )[:16000]
+    return packets
+
+
 async def _run_shot(worker: Worker, model: ModelConfig, packet: Packet) -> Shot:
     result = await _chat(
         model,
@@ -1790,6 +1874,11 @@ async def run_dispatch(
     if report.packets and thread.strip():
         report.packets = hydrate_packets(report.packets, thread)
         report.packets = sanitize_packets(report.packets, thread)
+        report.packets = enforce_requested_list_contract(
+            report.packets,
+            intent,
+            thread,
+        )
     if report.packets and compiled_context and is_change_job(intent):
         for packet in report.packets:
             packet.prompt = compiled_context

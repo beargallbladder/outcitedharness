@@ -420,6 +420,44 @@ def test_min_chars_invariant():
     assert score_invariants(pkt, enough, []) is True
 
 
+def test_top_n_invariant_rejects_evidence_placeholders():
+    from harness.dispatch import (
+        AcceptSpec,
+        Packet,
+        requested_list_count,
+        score_machine_eligibility,
+        substantive_list_item_count,
+    )
+
+    packet = Packet(
+        id="p1",
+        title="Top issues",
+        prompt="List the top 5 urgent issues.",
+        accept=AcceptSpec(invariants=("list_items 5",)),
+    )
+    padded = ChatResult(
+        provider="x",
+        model="x",
+        text=(
+            "1. Duplicate collector scripts\n"
+            "2. not visible in provided evidence\n"
+            "3. unknown\n"
+            "4. insufficient evidence\n"
+            "5. not provided"
+        ),
+    )
+    complete = ChatResult(
+        provider="x",
+        model="x",
+        text="\n".join(f"{index}. Supported issue {index}" for index in range(1, 6)),
+    )
+
+    assert requested_list_count("what are the top 5 urgent issues?") == 5
+    assert substantive_list_item_count(padded.text or "") == 1
+    assert score_machine_eligibility(packet, padded, []) is False
+    assert score_machine_eligibility(packet, complete, []) is True
+
+
 def test_review_grounding_rejects_unseen_paths_and_allows_honest_limits():
     from harness.dispatch import AcceptSpec, Packet, score_invariants
 
@@ -1825,6 +1863,37 @@ def test_frontend_job_gathers_apps_web_not_readme_only():
     assert "not yet possible" not in cleaned[0].prompt.lower()
     assert all("not yet possible" not in inv for inv in cleaned[0].accept.invariants)
     assert "text apps/web" in cleaned[0].accept.invariants
+
+
+def test_top_n_contract_overrides_false_truncation_instruction():
+    from harness.dispatch import (
+        AcceptSpec,
+        Packet,
+        enforce_requested_list_contract,
+    )
+
+    packet = Packet(
+        id="p1",
+        title="Top issues",
+        prompt=(
+            "The audit was clipped after the first item. Mark the rest not visible.\n\n"
+            "WORKSPACE EVIDENCE GATHERED BY CLIENT:\nvisible audit"
+        ),
+        accept=AcceptSpec(invariants=("text not visible",)),
+    )
+    thread = "tool(read_files): CLEANUP_AUDIT.md\\n" + "\\n".join(
+        f"### {index}. Supported issue {index}" for index in range(1, 6)
+    )
+
+    corrected = enforce_requested_list_contract(
+        [packet],
+        "what are the top 5 urgent issues we should fix?",
+        thread,
+    )[0]
+
+    assert "clipped after the first" not in corrected.prompt
+    assert "exactly 5 substantive" in corrected.prompt
+    assert "list_items 5" in corrected.accept.invariants
 
 
 def test_named_source_listing_is_not_coverage():
