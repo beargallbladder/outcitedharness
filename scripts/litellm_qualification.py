@@ -235,9 +235,28 @@ def _sync_checks() -> dict[str, Any]:
                 "max_tokens": 32,
             }
             started = time.perf_counter()
-            direct_response = client.post(direct_url, json=direct_payload)
-            direct_response.raise_for_status()
+            direct_response = None
+            for attempt in range(3):
+                direct_response = client.post(
+                    direct_url,
+                    headers={"Authorization": "Bearer none"},
+                    json=direct_payload,
+                )
+                if direct_response.status_code < 400:
+                    break
+                if attempt < 2:
+                    time.sleep(1)
+            assert direct_response is not None
             direct_seconds = time.perf_counter() - started
+            if direct_response.status_code >= 400:
+                latency[route] = {
+                    "direct_seconds": round(direct_seconds, 4),
+                    "proxy_seconds": 0.0,
+                    "overhead_seconds": 0.0,
+                    "direct_status": direct_response.status_code,
+                    "within_limit": False,
+                }
+                continue
             started = time.perf_counter()
             _post(
                 client,

@@ -192,3 +192,29 @@ sealed local stock BGE-M3 checkpoint, writes only below the DGX2 checkpoint
 root, and runs without network access. It never changes live `:8800`; any
 trained checkpoint remains non-production until the owner-defined frozen
 evaluations pass.
+
+Post-training qualification uses the checksum-pinned contrastive holdout and
+then the decision-level open-set gate:
+
+```shell
+docker run --rm --gpus all --network none --ipc host \
+  --user "$(id -u):$(id -g)" --env HOME=/tmp \
+  --mount "type=bind,src=$HOME/harness-training,dst=/training" \
+  --entrypoint python harness/bge-repro-gb10:prod-20260829 \
+  /training/scripts/evaluate_bge_holdout.py \
+  --holdout /training/datasets/tapes-holdout-v1/joint_corpus_v2_tapes_holdout_eval.jsonl \
+  --holdout-sha256 27d986bd1a9a6c8713c2c58400017cab1fd561ab191a2316d143fd2ed5adb7d0 \
+  --baseline /training/models/bge-m3 \
+  --candidate /training/checkpoints/cr-bge-m3-language-geometry-pilot \
+  --output /training/evaluations/cr-bge-m3-language-geometry-pilot-holdout.json
+
+BGE_MODEL_RELATIVE=checkpoints/cr-bge-m3-language-geometry-pilot \
+TAPES_REPRO_OUTPUT_RELATIVE=evaluations/cr-bge-m3-language-geometry-pilot-open-set.json \
+  bash scripts/run_tapes_offline_repro.sh
+```
+
+The first one-epoch pilot improved broad holdout pos@1 from 73.33% to 75.87%
+but regressed two task types and failed the open-set gate (Kim top1 76.50% to
+70.07%; retrieval R@1 31.03% to 26.60%). It is sealed as a no-promote
+experiment. Do not resume or alter its curriculum without a new CR owner
+ruling.

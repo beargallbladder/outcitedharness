@@ -224,6 +224,9 @@ def test_templates_pin_caches_floor_and_non_destructive_controls():
     assert "--network none" in tapes_repro
     assert "127.0.0.1:18881" in tapes_repro
     assert ":8800" not in tapes_repro
+    assert "harness/bge-repro-gb10:prod-20260829" in tapes_repro
+    assert "BGE_MODEL_RELATIVE" in tapes_repro
+    assert "TAPES_REPRO_OUTPUT_RELATIVE" in tapes_repro
     assert "d822f07c7a0458424daa3cc18b88bb6b936f091acb6bc16cfa9c13c8ab66e61d" in cr_bge
     assert "--network none" in cr_bge
     assert '--user "$(id -u):$(id -g)"' in cr_bge

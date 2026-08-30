@@ -4,12 +4,13 @@
 
 ```mermaid
 flowchart LR
-  Client["Cursor native agent"] -->|optional model API :7410| LiteLLM
-  Client --> Native["Cursor native tools"]
+  Cursor["Cursor native agent"] -->|optional model API :7410| LiteLLM
+  Cursor --> Native["Cursor native tools"]
+  Cline["Cline optional tool frontend"] -->|OpenAI compatible :7410| LiteLLM
   LiteLLM -->|harness-orch| Harness["Harness :8787"]
   LiteLLM -->|local-coder| Coder["DGX3 Qwen Coder"]
-  LiteLLM -->|local-qwen38| Foreman["ASUS2 + ASUS4 Qwen3.8 TP2"]
-  LiteLLM -->|local-critic| Critic["ASUS3 Nemotron"]
+  LiteLLM -->|local-qwen38| Foreman["ASUS2 + ASUS4 Qwen3.8 TP2 peer foreman / primary critic"]
+  LiteLLM -->|local-critic| Critic["ASUS3 Nemotron fallback critic"]
   LiteLLM -->|manual only| Claude["Claude"]
   Harness --> Coder
   Harness --> Foreman
@@ -27,10 +28,11 @@ state, and verification still run in Harness. SGLang serves inference only.
 - `DGX3 :8900`: Qwen3-Coder-Next SGLang with DFlash. This is the only
   dedicated coder and supports two to three concurrent agent requests.
 - `ASUS2 + ASUS4 :8888`: Qwen3.8 Flash Next NVFP4 SGLang TP=2 with MTP2.
-  This is the peer foreman and overflow lane.
+  This is the primary critic while M5 is foreman, plus the peer foreman and
+  overflow lane. It is skipped as critic whenever it is the active foreman.
 - `ASUS3 :8900`: Nemotron 3.5 Lightning NVFP4 SGLang with EAGLE. This is the
-  independent local critic and researcher, never the foreman.
-- `M5 :8082`: Qwen3.8-27B-8bit fallback foreman.
+  secondary local critic and researcher, never the foreman.
+- `M5 :8082`: Qwen3.8-27B-8bit primary foreman.
 - `Spark e10b :8800` and GCI `:8810`: protected embedding/search services.
   Do not restart or repurpose them.
 - ASUS1 and DGX2 are not active coder routes. Their launchers and model

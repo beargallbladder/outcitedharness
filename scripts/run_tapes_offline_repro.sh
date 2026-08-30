@@ -2,6 +2,16 @@
 set -euo pipefail
 
 if [[ "${1:-}" == "__container" ]]; then
+  model_path="${BGE_MODEL_PATH:-/training/models/bge-m3-cr-tapes-v1/checkpoints_20260427T183216Z}"
+  output_path="${TAPES_REPRO_OUTPUT:-/training/evaluations/tapes-open-set-v1-repro/offline-v1-owner-contract.json}"
+  case "$model_path" in
+    /training/models/*|/training/checkpoints/*) ;;
+    *) printf '%s\n' "offline model must be below /training/models or /training/checkpoints" >&2; exit 2 ;;
+  esac
+  case "$output_path" in
+    /training/evaluations/*) ;;
+    *) printf '%s\n' "offline output must be below /training/evaluations" >&2; exit 2 ;;
+  esac
   server_pid=""
   cleanup() {
     if [[ -n "$server_pid" ]]; then
@@ -12,7 +22,7 @@ if [[ "${1:-}" == "__container" ]]; then
   trap cleanup EXIT INT TERM
 
   python /training/scripts/serve_bge_checkpoint.py \
-    --model /training/models/bge-m3-cr-tapes-v1/checkpoints_20260427T183216Z \
+    --model "$model_path" \
     --host 127.0.0.1 \
     --port 18881 \
     --device cuda \
@@ -49,7 +59,7 @@ PY
     --kim-baseline /training/evaluations/tapes-open-set-v1-repro/input/kim_tag_agreement_eval_v1_bge-m3-cr-tapes-v1.json \
     --retrieval-split /training/evaluations/tapes-open-set-v1-repro/input/bge-m3-eval-split-v1.1.jsonl \
     --retrieval-baseline /training/evaluations/tapes-open-set-v1-repro/input/tapes_bge_m3_retrieval_eval_2026-W34-v1-recheck.json \
-    --output /training/evaluations/tapes-open-set-v1-repro/offline-v1-owner-contract.json \
+    --output "$output_path" \
     --kim-batch-size 64 \
     --retrieval-batch-size 256 \
     --timeout 120
@@ -57,13 +67,28 @@ PY
 fi
 
 root="${DGX2_TRAINING_ROOT:-$HOME/harness-training}"
-image="${BGE_REPRO_IMAGE:-harness/bge-repro-gb10:20260829}"
-output="$root/evaluations/tapes-open-set-v1-repro/offline-v1-owner-contract.json"
+image="${BGE_REPRO_IMAGE:-harness/bge-repro-gb10:prod-20260829}"
+model_relative="${BGE_MODEL_RELATIVE:-models/bge-m3-cr-tapes-v1/checkpoints_20260427T183216Z}"
+output_relative="${TAPES_REPRO_OUTPUT_RELATIVE:-evaluations/tapes-open-set-v1-repro/offline-v1-owner-contract.json}"
+case "$model_relative" in
+  models/*|checkpoints/*) ;;
+  *) printf '%s\n' "BGE_MODEL_RELATIVE must be below models or checkpoints" >&2; exit 2 ;;
+esac
+[[ "$model_relative" != *".."* ]] ||
+  { printf '%s\n' "BGE_MODEL_RELATIVE cannot contain traversal" >&2; exit 2; }
+case "$output_relative" in
+  evaluations/*) ;;
+  *) printf '%s\n' "TAPES_REPRO_OUTPUT_RELATIVE must be below evaluations" >&2; exit 2 ;;
+esac
+[[ "$output_relative" != *".."* ]] ||
+  { printf '%s\n' "TAPES_REPRO_OUTPUT_RELATIVE cannot contain traversal" >&2; exit 2; }
+model="$root/$model_relative"
+output="$root/$output_relative"
 
 [[ "$(hostname -s)" == "spark-49af" ]] ||
   { printf '%s\n' "offline reproduction must run on DGX2" >&2; exit 2; }
-[[ -s "$root/models/bge-m3-cr-tapes-v1/checkpoints_20260427T183216Z/model.safetensors" ]] ||
-  { printf '%s\n' "immutable v1 checkpoint is incomplete" >&2; exit 2; }
+[[ -f "$model/config.json" ]] ||
+  { printf '%s\n' "offline model checkpoint is incomplete" >&2; exit 2; }
 [[ -s "$root/evaluations/tapes-open-set-v1-repro/input/bge-m3-eval-split-v1.1.jsonl" ]] ||
   { printf '%s\n' "pinned evaluation inputs are incomplete" >&2; exit 2; }
 docker image inspect "$image" >/dev/null 2>&1 ||
@@ -78,6 +103,8 @@ docker run --rm \
   --ulimit stack=67108864 \
   --user "$(id -u):$(id -g)" \
   --env HOME=/tmp \
+  --env "BGE_MODEL_PATH=/training/$model_relative" \
+  --env "TAPES_REPRO_OUTPUT=/training/$output_relative" \
   --mount "type=bind,src=$root,dst=/training" \
   --entrypoint bash \
   "$image" \

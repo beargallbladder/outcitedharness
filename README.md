@@ -60,9 +60,17 @@ scripts/install_litellm.sh install
 uv run python scripts/litellm_qualification.py
 ```
 
-No Cline extension is required. Use Cursor's native agent and tools; invoke
-local orchestration through `harness dispatch`, the `harness-orch` API route,
-or project automation.
+Cursor remains the primary IDE. Cline is restored as an optional
+tool-executing frontend for local orchestration:
+
+```shell
+python scripts/configure_cline.py
+```
+
+Configure Cline as OpenAI Compatible with base URL
+`http://127.0.0.1:7410/v1`, model `harness-orch`, and the
+`LITELLM_MASTER_KEY` value from the uncommitted `.env`. Cline connects only
+through LiteLLM; it never targets physical SGLang workers directly.
 
 For service ownership, ports, SGLang rollback rules, billing controls, and the
 MCP allowlist, see `ARCHITECTURE.md`.
