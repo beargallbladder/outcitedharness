@@ -161,14 +161,14 @@ uv run --python 3.11 python "$ROOT/scripts/datasheet_frontier_batch.py" prepare 
   --allowed-root "$V3R" \
   --model claude-sonnet-5 \
   --input-price-per-million 3.0 --output-price-per-million 15.0 \
-  --batch-discount 0.5 --spend-cap-usd 260 \
+  --batch-discount 0.5 --spend-cap-usd 420 \
   --output "$V3R/frontier-prepared" \
   >>"$V3R/logs/frontier-candidates.log" 2>&1 || exit 1
 
 uv run --python 3.11 python "$ROOT/scripts/datasheet_frontier_batch.py" submit \
   --bundle "$V3R/frontier-prepared" \
   --state-directory "$V3R/frontier-submission" \
-  --approved-spend-cap-usd 260 --resume \
+  --approved-spend-cap-usd 420 --resume \
   >>"$V3R/logs/frontier-candidates.log" 2>&1 || exit 1
 
 echo v3-teacher-batch-submitted
