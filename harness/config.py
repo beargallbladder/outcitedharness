@@ -115,6 +115,8 @@ class Settings(BaseModel):
     gci_timeout_s: float = Field(default=8.0, ge=0.5, le=120.0)
     gci_refresh: GCIRefreshPolicy = Field(default_factory=GCIRefreshPolicy)
     greenfield_runs_root: Path = Path("~/.harness/runs")
+    learning_capture_enabled: bool = False
+    learning_artifact_root: Path = Path("~/.harness/learning-artifacts")
 
     @property
     def gci_repository_sources(self) -> tuple[GCIRepositorySource, ...]:
@@ -197,7 +199,7 @@ def load_config(root: Path | None = None) -> AppConfig:
         max_answer_preview_chars=int(raw_settings.get("max_answer_preview_chars", 800)),
         system_prompt=str(raw_settings.get("system_prompt") or "").strip(),
         local_revision_attempts=int(raw_settings.get("local_revision_attempts", 1)),
-        auto_frontier_rescue=bool(raw_settings.get("auto_frontier_rescue", True)),
+        auto_frontier_rescue=bool(raw_settings.get("auto_frontier_rescue", False)),
         max_frontier_calls_per_task=int(raw_settings.get("max_frontier_calls_per_task", 1)),
         frontier_model_key=str(raw_settings.get("frontier_model_key") or "frontier"),
         frontier_max_input_chars=int(raw_settings.get("frontier_max_input_chars", 20_000)),
@@ -230,6 +232,19 @@ def load_config(root: Path | None = None) -> AppConfig:
         greenfield_runs_root=Path(
             str(raw_settings.get("greenfield_runs_root") or "~/.harness/runs")
         ).expanduser(),
+        learning_capture_enabled=bool(
+            raw_settings.get("learning_capture_enabled", False)
+        ),
+        learning_artifact_root=(
+            _optional_path(
+                root,
+                raw_settings.get(
+                    "learning_artifact_root",
+                    "results/learning-artifacts",
+                ),
+            )
+            or (results_dir / "learning-artifacts")
+        ),
     )
 
     raw_models = _read_yaml(root / "config" / "models.yaml").get("models") or {}

@@ -19,6 +19,7 @@ BASE_URL = os.environ.get("SGLANG_BASE_URL", "http://100.68.133.1:8888/v1").rstr
     "/"
 )
 MODEL = os.environ.get("SGLANG_MODEL", "qwen38-flash-next-nvfp4-sglang")
+API_KEY = os.environ.get("SGLANG_API_KEY", "none")
 OUTPUT = Path(
     os.environ.get("SGLANG_QUAL_OUTPUT", "results/sglang_qualification.json")
 )
@@ -63,7 +64,10 @@ def _tool() -> dict[str, Any]:
 
 
 def _sync_checks() -> dict[str, Any]:
-    with httpx.Client(timeout=TIMEOUT) as client:
+    with httpx.Client(
+        timeout=TIMEOUT,
+        headers={"Authorization": f"Bearer {API_KEY}"},
+    ) as client:
         models_response = client.get(f"{BASE_URL}/models")
         models_response.raise_for_status()
         listed = [
@@ -80,6 +84,11 @@ def _sync_checks() -> dict[str, Any]:
             ),
         )
         chat_text = str(chat["choices"][0]["message"].get("content") or "")
+        chat_usage = chat.get("usage") or {}
+        usage_ok = all(
+            isinstance(chat_usage.get(name), int) and chat_usage[name] > 0
+            for name in ("prompt_tokens", "completion_tokens", "total_tokens")
+        )
 
         json_response = _post(
             client,
@@ -209,6 +218,8 @@ def _sync_checks() -> dict[str, Any]:
         "model_listed": MODEL in listed,
         "chat_text": chat_text,
         "chat_ok": "SGLANG_READY" in chat_text,
+        "usage": chat_usage,
+        "usage_ok": usage_ok,
         "json_text": json_text,
         "json_object_ok": json_object.get("status") == "ready",
         "tool_call": tool_call,
@@ -252,7 +263,10 @@ async def _one_speed(client: httpx.AsyncClient, index: int) -> dict[str, Any]:
 
 async def _speed() -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
-    async with httpx.AsyncClient(timeout=TIMEOUT) as client:
+    async with httpx.AsyncClient(
+        timeout=TIMEOUT,
+        headers={"Authorization": f"Bearer {API_KEY}"},
+    ) as client:
         for concurrency in (1, 2, 4):
             started = time.perf_counter()
             requests = await asyncio.gather(
@@ -280,6 +294,7 @@ def main() -> None:
     required = (
         "model_listed",
         "chat_ok",
+        "usage_ok",
         "json_object_ok",
         "tool_ok",
         "followup_ok",

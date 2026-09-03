@@ -1,10 +1,19 @@
+import json
 from pathlib import Path
 
 import pytest
 
 from harness.config import AppConfig, ModelConfig, Settings
-from harness.dispatch import parse_packets, run_dispatch, score_tool_hit
+from harness.dispatch import (
+    _capture_frontier_rescue,
+    parse_packets,
+    run_dispatch,
+    score_tool_hit,
+)
 from harness.providers.base import ChatResult
+from harness.storage.db import Store
+from harness.task.service import TaskService
+from harness.training.ledger import LearningLedger
 
 
 @pytest.fixture(autouse=True)
@@ -85,6 +94,56 @@ def _enable_test_critic(cfg: AppConfig) -> None:
 """
     )
     cfg.models["asus3_nemotron"] = _model("asus3_nemotron")
+
+
+def test_frontier_rescue_capture_is_quarantined_and_pointer_only(tmp_path: Path):
+    store = Store(tmp_path / "harness.db")
+    task = TaskService(store).start("repair the owned project")
+    ledger = LearningLedger(store, tmp_path / "artifacts")
+
+    _capture_frontier_rescue(
+        ledger,
+        task_id=task.task_id,
+        dispatch_run_id="dispatch-1",
+        frontier_run_id="frontier-1",
+        model_key="frontier",
+        intent="repair the owned project",
+        local_failure_evidence=[
+            {
+                "packet": "p1",
+                "worker": "local",
+                "qa": False,
+                "why": "tests failed",
+                "answer": "candidate",
+            }
+        ],
+        rescue_packet="Local attempts failed. Produce a patch.",
+        response_text="diff --git a/app.py b/app.py",
+        error=None,
+        critic_key="critic",
+        critic_verdict="proceed",
+        critic_text='{"verdict":"proceed"}',
+        critic_verified=True,
+        estimated_cost=0.2,
+    )
+
+    with store.connect() as conn:
+        event = conn.execute("SELECT * FROM learning_events").fetchone()
+        verification = conn.execute(
+            "SELECT * FROM learning_verifications"
+        ).fetchone()
+        assert event is not None
+        metadata = json.loads(event["metadata_json"])
+        assert metadata["data_use"] == "quarantine"
+        assert metadata["disposition"] == "quarantine"
+        assert event["source_revision"] is None
+        assert conn.execute("SELECT COUNT(*) FROM learning_artifacts").fetchone()[0] == 5
+        assert conn.execute("SELECT COUNT(*) FROM learning_admissions").fetchone()[0] == 0
+        assert verification["status"] == "unknown"
+        assert json.loads(verification["metadata_json"])["proof_scope"] == (
+            "model_review_only"
+        )
+    ledger.verify_event(event["event_id"])
 
 
 def test_parse_packets_and_fallback():
@@ -909,6 +968,8 @@ async def test_exhausted_local_repair_runs_one_verified_frontier_rescue(
     cfg.settings.local_revision_attempts = 1
     cfg.settings.auto_frontier_rescue = True
     cfg.settings.max_frontier_calls_per_task = 1
+    cfg.settings.learning_capture_enabled = True
+    cfg.settings.learning_artifact_root = tmp_path / "learning-artifacts"
     packet = Packet(
         id="p1",
         title="answer",
@@ -975,6 +1036,13 @@ async def test_exhausted_local_repair_runs_one_verified_frontier_rescue(
     task = TaskService(Store(cfg.settings.db_path)).get(report.task_id)
     assert task.frontier_calls == 1
     assert task.final_outcome == "frontier_verified"
+    assert report.learning_capture_error == ""
+    with Store(cfg.settings.db_path).connect() as conn:
+        event = conn.execute(
+            "SELECT * FROM learning_events WHERE event_type = 'frontier_rescue'"
+        ).fetchone()
+        assert event is not None
+        assert json.loads(event["metadata_json"])["disposition"] == "quarantine"
 
 
 @pytest.mark.asyncio

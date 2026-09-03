@@ -1,0 +1,15 @@
+ARG BASE_IMAGE=harness/llamafactory-qwen3-next:20260901
+FROM ${BASE_IMAGE}
+
+USER root
+
+# Qwen3.8-Flash-Next uses qwen4_exp. This image is initially qualified only
+# for the four-rank native-TP load/forward probe. Training remains blocked
+# until a PLE-sharded LoRA load/step/save receipt exists.
+LABEL io.harness.qwen38.training-gate="ple-sharded-lora-receipt-required"
+
+RUN python -m pip uninstall -y llamafactory \
+    && python -m pip install --no-cache-dir --upgrade \
+      transformers==5.16.1 \
+      fla-core==0.5.2 \
+    && python -c "import importlib.metadata, transformers; from transformers import Qwen4ExpConfig, Qwen4ExpForCausalLM; assert transformers.__version__ == '5.16.1'; assert importlib.metadata.version('fla-core') == '0.5.2'"

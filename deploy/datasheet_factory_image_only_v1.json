@@ -1,0 +1,16 @@
+{
+  "schema": "harness.electronics-factory-supervisor.v1",
+  "poll_seconds": 300,
+  "state_root": "results/datasheet-image-only-supervisor-v1-20260902",
+  "dynamic_run_directories": [
+    "results/cr-datasheet-vision-586-opn-v3-state-20260902/frontier-run-configs",
+    "results/cr-datasheet-vision-586-parametric-v2-state-20260902/frontier-run-configs",
+    "results/datasheet-ti-power-parametric-v2-state-20260902/frontier-run-configs",
+    "results/datasheet-hash-cache-parametric-v2-state-20260902/frontier-run-configs",
+    "results/cr-datasheet-vision-586-summary-v2-state-20260902/frontier-run-configs",
+    "results/datasheet-ti-power-summary-v2-state-20260902/frontier-run-configs",
+    "results/datasheet-hash-cache-summary-v2-state-20260902/frontier-run-configs"
+  ],
+  "runs": [],
+  "evidence_sha256": "c6ea068854a63bbf21b6de904dabf24aba2c0e1b0645121b3a14b880905199bf"
+}

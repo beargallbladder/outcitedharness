@@ -71,7 +71,14 @@ def _llamafactory_text(pair: TextPair) -> dict[str, str]:
 def _llamafactory_vision(pair: VisionPair) -> dict[str, Any]:
     return {
         "messages": [
-            {"role": "user", "content": pair.prompt},
+            {
+                "role": "user",
+                "content": (
+                    "\n".join("<image>" for _ in pair.image_uris)
+                    + "\n"
+                    + pair.prompt
+                ),
+            },
             {"role": "assistant", "content": pair.response},
         ],
         "images": [
@@ -210,7 +217,12 @@ def build_designwins(
             "file_name": lf_vision.name,
             "formatting": "sharegpt",
             "columns": {"messages": "messages", "images": "images"},
-            "tags": {"role_tag": "role", "content_tag": "content"},
+            "tags": {
+                "role_tag": "role",
+                "content_tag": "content",
+                "user_tag": "user",
+                "assistant_tag": "assistant",
+            },
         }
     dataset_info_path = destination / "llamafactory" / "dataset_info.json"
     _write_json(dataset_info_path, dataset_info)

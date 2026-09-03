@@ -90,7 +90,19 @@ def _safe_argv(raw: Any) -> tuple[str, ...]:
     if head in {"pytest", "ruff", "eslint", "tsc"}:
         return argv
     if head in {"python", "python3"}:
-        return argv if len(argv) >= 3 and argv[1] == "-m" and argv[2] in {"pytest", "ruff"} else ()
+        if len(argv) >= 3 and argv[1] == "-m" and argv[2] in {"pytest", "ruff"}:
+            return argv
+        if len(argv) >= 2:
+            script = Path(argv[1])
+            if (
+                not script.is_absolute()
+                and script.suffix == ".py"
+                and ".." not in script.parts
+                and script.parts
+                and script.parts[0] in {"scripts", "tests"}
+            ):
+                return argv
+        return ()
     if head == "npx":
         return argv if len(argv) >= 2 and Path(argv[1]).name.lower() == "tsc" else ()
     if head in {"npm", "pnpm"}:

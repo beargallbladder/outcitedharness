@@ -261,10 +261,10 @@ def optimize(
         help="Comma-separated model keys (default: four GB10 coder boxes)",
     ),
     only: Optional[str] = typer.Option(None, help="Comma-separated case ids"),
-    direct: bool = typer.Option(False, "--direct", help="Skip M5 packet/rank; same prompt to every box"),
+    direct: bool = typer.Option(False, "--direct", help="Skip foreman packet/rank; same prompt to every box"),
     senior: bool = typer.Option(False, "--senior", help="Ask Claude for a short tune note (costs money)"),
 ) -> None:
-    """M5 foreman → three GB10 workers in parallel. Measures latency, tokens, tool calls."""
+    """Configured foreman → GB10 workers. Measures latency, tokens, and tools."""
     cfg = _cfg()
     worker_keys = [k.strip() for k in workers.split(",") if k.strip()] if workers else None
     only_ids = [k.strip() for k in only.split(",") if k.strip()] if only else None
@@ -282,11 +282,11 @@ def optimize(
 
 @app.command()
 def dispatch(
-    intent: str = typer.Argument(..., help="What you want done. M5 slices this into packets."),
+    intent: str = typer.Argument(..., help="What you want done. The active foreman slices this into packets."),
     workers: Optional[str] = typer.Option(None, help="Comma-separated model keys (default: enabled coder pool)"),
     senior: bool = typer.Option(False, "--senior", help="Ask Claude after the pool (costs money)"),
 ) -> None:
-    """M5 carves packets; idle GB10 coders take them. Tester scores tools/latency/tokens."""
+    """The active foreman carves packets; coder workers execute them."""
     cfg = _cfg()
     worker_keys = [k.strip() for k in workers.split(",") if k.strip()] if workers else None
     report = asyncio.run(run_dispatch(cfg, intent, worker_keys=worker_keys, use_senior=senior))

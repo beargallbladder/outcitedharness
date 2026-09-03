@@ -8,14 +8,14 @@ workers:
   primary_coder:
     enabled: true
     role: coder
-    model_key: dgx3_qwen
-    endpoint: http://100.73.119.63:8900/v1
+    model_key: asus2_qwen
+    endpoint: http://100.68.133.1:8888/v1
     capabilities:
       - coding
       - tool_calling
       - long_context
     failover_order: 1
-    notes: spark-69c8 DGX3; Qwen3-Coder-Next SGLang with DFlash; sole dedicated coder, sized for 2-3 concurrent agents.
+    notes: ASUS2+ASUS4 Qwen3.8 Flash Next TP2; primary coding and foreman service after DGX3 moved to datasheet vision.
 
   dgx2_coder:
     enabled: false
@@ -48,18 +48,19 @@ workers:
       - coding
       - tool_calling
       - long_context
-    notes: compatibility alias only; the same endpoint is active as primary_coder
+    notes: stopped rollback asset; not an active worker while DGX3 serves datasheet vision
 
   dgx3_designwins_ocr:
     enabled: false
-    role: vision_ocr
+    role: vision_extractor
     model_key: dgx3_designwins_ocr
     endpoint: http://100.73.119.63:8902/v1
     capabilities:
       - vision
       - document_layout
       - ocr
-    notes: Disabled placeholder only. Do not displace the DGX3 coder until the 200-page DesignWins bakeoff and an explicit cutover.
+      - structured_extraction
+    notes: Qwen3-VL 30B-A3B FP8 rendered-page extractor; enable only after frozen modality qualification.
 
   dgx3_designwins_extractor:
     enabled: false
@@ -71,21 +72,8 @@ workers:
       - structured_extraction
     notes: Disabled task-specific 8B placeholder. Low-confidence pages escalate directly to frontier vision; there is no general local-VLM fallback tier.
 
-  fallback_reasoner:
-    enabled: true
-    role: foreman
-    priority: 1
-    model_key: m5_qwen
-    endpoint: http://127.0.0.1:8082/v1
-    capabilities:
-      - reasoning
-      - vision
-      - tool_calling
-    failover_order: 2
-    notes: M5 carves packets; not in the coder pool. Foreman chain is m5_qwen then asus2_qwen (health-checked, auto). QA uses dual-Spark Qwen first while M5 is foreman, then local Nemotron and hosted fallbacks.
-
   frontier_senior:
-    enabled: true
+    enabled: false
     role: senior
     model_key: frontier
     endpoint: https://api.anthropic.com/v1
@@ -93,8 +81,7 @@ workers:
       - review
       - vision
       - document_extraction
-    failover_order: 3
-    notes: single-call quality rescue after bounded local repair is exhausted; sole escalation path for unresolved vision/document pages; also available through manual harness rescue
+    notes: Manual paid rescue only. Never part of harness-orch automatic routing.
 
   qwen38_critic:
     enabled: true
@@ -106,7 +93,7 @@ workers:
       - review
       - reasoning
       - long_context
-    notes: Primary QA critic while M5 is foreman. Skipped whenever this same dual-Spark Qwen service is the active fallback foreman.
+    notes: Same endpoint as the active dual-Spark foreman; skipped for independent grading so ASUS3 Nemotron becomes the first critic.
 
   researcher:
     enabled: true
@@ -122,7 +109,7 @@ workers:
     notes: gx10-0309 samkimasus3; Nemotron 3.5 Lightning 30B-A3B NVFP4; primary local critic and researcher/tester ONLY — never foreman. With obsolete thinking retries removed it scored 7/7 in 3.78s alone and 7/7 in 5.47s or less across four concurrent grades; not a coder and not in the coding failover ladder.
 
   glm_critic:
-    enabled: true
+    enabled: false
     role: critic
     priority: 3
     model_key: glm52
@@ -130,10 +117,10 @@ workers:
     capabilities:
       - review
       - long_context
-    notes: independent hosted critic fallback; used only when the local critic is unavailable or invalid
+    notes: Manual hosted critic only; disabled for automatic orchestration.
 
   nemotron_super_critic:
-    enabled: true
+    enabled: false
     role: critic
     priority: 4
     model_key: nemotron_super
@@ -141,7 +128,7 @@ workers:
     capabilities:
       - review
       - long_context
-    notes: final hosted critic fallback; provider availability has been inconsistent
+    notes: Manual hosted critic only; disabled for automatic orchestration.
 
   spark_embedder:
     enabled: true
@@ -156,14 +143,14 @@ workers:
   asus2_foreman:
     enabled: true
     role: foreman
-    priority: 2
+    priority: 1
     model_key: asus2_qwen
     endpoint: http://100.68.133.1:8888/v1
     capabilities:
       - reasoning
       - long_context
       - tool_calling
-    notes: gx10-26b6 + gx10-33af; Qwen3.8 Flash Next NVFP4 SGLang TP2 with MTP2; peer foreman and overflow coding lane when M5 is unavailable. Distinct from Nemotron critic so QA stays adversarial. Not in the dedicated coder pool.
+    notes: gx10-26b6 + gx10-33af; Qwen3.8 Flash Next NVFP4 SGLang TP2 foreman and shared primary coding service. ASUS3 Nemotron supplies independent local QA.
 
   secondary:
     enabled: false

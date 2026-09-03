@@ -1,20 +1,20 @@
 model_list:
   - model_name: local-coder
     litellm_params:
-      model: openai/qwen3-coder-next
-      api_base: http://100.73.119.63:8900/v1
-      api_key: none
-      timeout: 300
-      stream_timeout: 300
+      model: openai/qwen38-flash-next-nvfp4-sglang
+      api_base: http://100.68.133.1:8888/v1
+      api_key: os.environ/QWEN38_API_KEY
+      timeout: 900
+      stream_timeout: 900
     model_info:
       mode: chat
-      max_input_tokens: 131072
+      max_input_tokens: 262144
 
   - model_name: local-qwen38
     litellm_params:
       model: openai/qwen38-flash-next-nvfp4-sglang
       api_base: http://100.68.133.1:8888/v1
-      api_key: none
+      api_key: os.environ/QWEN38_API_KEY
       timeout: 900
       stream_timeout: 900
     model_info:

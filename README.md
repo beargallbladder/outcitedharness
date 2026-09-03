@@ -44,12 +44,13 @@ Cloud providers stay disabled until you fill `base_url`, `model`, and the matchi
 
 ## Live stack
 
-The approved allocation is one dedicated coder plus independent planning and
-criticism:
+The approved allocation uses the qualified TP2 service for coding and planning,
+with independent criticism and a dedicated document-vision node:
 
-- `local-coder`: DGX3 Qwen3-Coder-Next SGLang
+- `local-coder`: compatibility alias to ASUS2 + ASUS4 Qwen3.8 TP2
 - `local-qwen38`: ASUS2 + ASUS4 Qwen3.8 Flash Next SGLang TP2
 - `local-critic`: ASUS3 Nemotron 3.5 Lightning SGLang
+- DGX3 `:8902`: Qwen3-VL 30B-A3B FP8 rendered-page datasheet extraction
 - `harness-orch`: decomposition, parallel dispatch, grading, repair, and verification
 - `frontier-claude`: manual paid route only; never an automatic fallback
 
@@ -60,22 +61,26 @@ scripts/install_litellm.sh install
 uv run python scripts/litellm_qualification.py
 ```
 
-Cursor remains the primary IDE. Cline is restored as an optional
-tool-executing frontend for local orchestration:
+Cursor remains the primary IDE. Cline is an optional direct tool-executing
+frontend for the dual-node Qwen3.8 TP=2 coder:
 
 ```shell
 python scripts/configure_cline.py
 ```
 
-Configure Cline as OpenAI Compatible with base URL
-`http://127.0.0.1:7410/v1`, model `harness-orch`, and the
-`LITELLM_MASTER_KEY` value from the uncommitted `.env`. Cline connects only
-through LiteLLM; it never targets physical SGLang workers directly.
+The script pins Cline 4.1.16 and configures OpenAI Compatible with base URL
+`http://100.68.133.1:8888/v1`, model
+`qwen38-flash-next-nvfp4-sglang`, API key `none`, a 262,144-token context
+window, and an 8,192-token output limit. Cline owns this interactive tool loop.
+`harness-orch` remains available for separate explicit automation; do not use
+it as Cline's model.
 
 For service ownership, ports, SGLang rollback rules, billing controls, and the
 MCP allowlist, see `ARCHITECTURE.md`. Current pass/fail evidence, pilot
-promotion decisions, and the remaining cable gate are recorded in
-`QUALIFICATION.md`.
+promotion decisions, and the completed DGX2-ASUS1 cable qualification are
+recorded in `QUALIFICATION.md`. The immutable code-and-electronics learning
+ledger, queue, capability ladder, and promotion economics are documented in
+`LEARNING_FACTORY.md`.
 
 ## Commands
 
@@ -278,11 +283,14 @@ There is no LLM-as-judge in v0.1. Prefer an objective check. Use `human` when yo
 
 | Key | Default | Role |
 |---|---|---|
-| `dgx_qwen` | on | L0 DGX Qwen3-Coder-Next |
-| `m5_qwen` | on | L1 M5 Qwen3.8-27B 8-bit |
-| `deepseek` | off | L2 cloud proxy |
-| `minimax` | off | L3 cloud proxy |
-| `frontier` | off | L4 OpenAI- or Anthropic-compatible |
+| `dgx3_qwen` | off | DGX3 coder rollback asset |
+| `asus2_qwen` | on | ASUS2+ASUS4 TP2 coder and foreman |
+| `dgx3_designwins_ocr` | off | DGX3 controlled vision qualification |
+| `asus3_nemotron` | on | Independent local critic |
+| `frontier` | manual | Paid senior rescue only |
+
+M5 runs the loopback gateways, Harness, and travel ingress. It does not run an
+inference model or participate in the worker ladder.
 
 Tournament mode never shows one model another model's answer.
 

@@ -1,0 +1,37 @@
+### REJECTED: v3 truncates 96.1% of train responses at cutoff 4096.
+### Kept only as historical evidence. This recipe must never launch again.
+
+model_name_or_path: /training/models/Qwen3-8B
+trust_remote_code: true
+
+stage: sft
+do_train: false
+finetuning_type: lora
+lora_target: all
+
+dataset: designwins_text_train
+dataset_dir: /training/datasets/designwins-v3-20260829/llamafactory
+template: qwen3_nothink
+cutoff_len: 4096
+max_samples: 1101
+overwrite_cache: false
+preprocessing_num_workers: 8
+dataloader_num_workers: 4
+
+output_dir: /training/checkpoints/designwins-text-qwen3-8b-full-20260830
+logging_steps: 5
+save_steps: 64
+save_total_limit: 2
+plot_loss: true
+overwrite_output_dir: false
+save_only_model: false
+report_to: none
+
+per_device_train_batch_size: 1
+gradient_accumulation_steps: 8
+learning_rate: 0.00005
+num_train_epochs: 1
+lr_scheduler_type: cosine
+warmup_ratio: 0.05
+bf16: true
+ddp_timeout: 180000000

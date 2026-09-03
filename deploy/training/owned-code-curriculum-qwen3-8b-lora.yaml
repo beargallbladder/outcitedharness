@@ -1,0 +1,47 @@
+### First same-base coding curriculum qualification. Never route production here.
+
+model_name_or_path: /training/models/Qwen3-8B
+trust_remote_code: true
+
+stage: sft
+do_train: true
+finetuning_type: lora
+lora_target: all
+lora_rank: 16
+lora_alpha: 32
+lora_dropout: 0.05
+
+dataset: coding_sft_train
+eval_dataset: coding_sft_validation
+dataset_dir: /training/datasets/owned-code-curriculum-v1/llamafactory
+template: qwen3_nothink
+cutoff_len: 8192
+max_samples: 1000
+overwrite_cache: true
+preprocessing_num_workers: 4
+dataloader_num_workers: 2
+
+output_dir: /training/checkpoints/owned-code-curriculum-qwen3-8b-lora-v1
+logging_steps: 1
+save_steps: 50
+save_total_limit: 2
+eval_strategy: steps
+eval_steps: 25
+plot_loss: true
+overwrite_output_dir: false
+save_only_model: false
+report_to: none
+
+per_device_train_batch_size: 1
+per_device_eval_batch_size: 1
+gradient_accumulation_steps: 4
+gradient_checkpointing: true
+learning_rate: 0.0001
+num_train_epochs: 1
+lr_scheduler_type: cosine
+warmup_ratio: 0.03
+bf16: true
+seed: 1788172800
+data_seed: 1788172800
+disable_shuffling: true
+ddp_timeout: 180000000

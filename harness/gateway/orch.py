@@ -693,6 +693,17 @@ def _capture_apply_baseline(
         state.checkpoint_error = reason
         state.blocked_reason = f"checkpoint refused mutation: {reason}"
         return False
+    if not root.exists():
+        # Remote Cline clients own their workspace and execute every tool
+        # locally. Harness can attribute and verify those client tool results,
+        # but it cannot snapshot a path that exists only on the client host.
+        state.client_owned_workspace = True
+        state.checkpoint_task_id = task_id
+        state.checkpoint_pending_paths = paths
+        state.checkpoint_pending_number = next_iteration
+        state.checkpoint_error = ""
+        return True
+    state.client_owned_workspace = False
     if not state.checkpoint_run_id:
         state.checkpoint_run_id = uuid.uuid4().hex
     try:
@@ -718,6 +729,13 @@ def _capture_apply_baseline(
 def _finalize_pending_checkpoint(cfg, state: LoopState) -> None:
     number = state.checkpoint_pending_number
     if not number or number <= state.checkpoint_count:
+        return
+    if state.client_owned_workspace:
+        state.checkpoint_count = number
+        state.checkpoint_available = False
+        state.checkpoint_pending_paths = []
+        state.checkpoint_pending_number = 0
+        state.checkpoint_error = ""
         return
     store = _checkpoint_store(cfg)
     manifest = store.record_checkpoint(

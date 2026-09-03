@@ -16,6 +16,7 @@ import httpx
 BASE_URL = os.environ.get("QWEN38_BASE_URL", "http://100.68.133.1:8888/v1")
 URL = f"{BASE_URL.rstrip('/')}/chat/completions"
 MODEL = os.environ.get("QWEN38_MODEL", "qwen38-flash-next-nvfp4")
+API_KEY = os.environ.get("QWEN38_API_KEY", "")
 OUTPUT = Path(
     os.environ.get(
         "QWEN38_SWEEP_OUTPUT",
@@ -61,8 +62,13 @@ def _request(client: httpx.Client, prompt: str) -> dict[str, Any]:
 
 
 def main() -> None:
+    if not API_KEY:
+        raise RuntimeError("QWEN38_API_KEY is required")
     rows: list[dict[str, Any]] = []
-    with httpx.Client(timeout=300) as client:
+    with httpx.Client(
+        timeout=300,
+        headers={"Authorization": f"Bearer {API_KEY}"},
+    ) as client:
         for record_count in RECORD_COUNTS:
             prompt = _prompt(record_count)
             started = time.perf_counter()

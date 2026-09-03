@@ -6,7 +6,7 @@ usage() {
 Usage: training_link_doctor.sh --interface IFACE [options]
 
 Options:
-  --host dgx2|asus1   Inspect one explicit remote training host over SSH.
+  --host ROLE         Inspect one explicit six-node training host over SSH.
   --peer ADDRESS      Also test route and non-fatal reachability to the peer.
   --mtu BYTES         Expected MTU (default: 9000).
   --container-image   Pinned PyTorch/NCCL image already staged on both hosts.
@@ -157,8 +157,10 @@ done
 [[ "$expected_mtu" =~ ^[0-9]+$ && "$expected_mtu" -ge 1500 ]] ||
   die "--mtu must be an integer of at least 1500"
 [[ -z "$peer" || "$peer" =~ ^[A-Fa-f0-9:.]+$ ]] || die "invalid peer address"
-[[ -z "$host" || "$host" == "dgx2" || "$host" == "asus1" ]] ||
-  die "--host must be dgx2 or asus1"
+case "$host" in
+  ""|dgx2|asus1|dgx3|asus3|asus2|asus4) ;;
+  *) die "--host must name one of the six training nodes" ;;
+esac
 [[ "$container_image" =~ ^nvcr\.io/nvidia/pytorch@sha256:[a-f0-9]{64}$ ]] ||
   die "--container-image must be a pinned NVIDIA PyTorch digest"
 

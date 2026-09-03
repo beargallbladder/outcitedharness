@@ -61,10 +61,10 @@ models:
       vision: false
 
   dgx3_qwen:
-    enabled: true
+    enabled: false
     tier: 0
-    display_name: "DGX3 Qwen3-Coder-Next SGLang DFlash"
-    short_name: "DGX3_CODER"
+    display_name: "DGX3 Qwen3-Coder-Next SGLang DFlash (rollback)"
+    short_name: "DGX3_CODER_ROLLBACK"
     provider: openai_compatible
     base_url: http://100.73.119.63:8900/v1
     model: qwen3-coder-next
@@ -78,20 +78,19 @@ models:
     capabilities:
       vision: false
 
-  # DesignWins document lane placeholders. Keep both disabled until the
-  # 200-page MCU bakeoff proves extraction quality, latency, and engine choice.
-  # The 8B entry is task-specific extraction only; unresolved pages escalate
-  # directly to frontier vision rather than a general local-VLM middle tier.
+  # DGX3 document-vision lane. Keep dispatch disabled until the frozen
+  # rendered-page-versus-text qualification passes; the service itself may run
+  # during controlled evaluation.
   dgx3_designwins_ocr:
     enabled: false
     tier: 0
-    display_name: "DGX3 PaddleOCR-VL 1.6 (qualification placeholder)"
-    short_name: "DGX3_DW_OCR"
+    display_name: "DGX3 Qwen3-VL 30B-A3B FP8"
+    short_name: "DGX3_DATASHEET_VISION"
     provider: openai_compatible
     base_url: http://100.73.119.63:8902/v1
-    model: PaddlePaddle/PaddleOCR-VL-1.6
+    model: qwen3-vl-30b-a3b-instruct-fp8
     temperature: 0
-    timeout_s: 180
+    timeout_s: 900
     max_tokens: 4096
     capabilities:
       vision: true
@@ -117,6 +116,7 @@ models:
     short_name: "QWEN38_TP2"
     provider: openai_compatible
     base_url: http://100.68.133.1:8888/v1
+    api_key_env: QWEN38_API_KEY
     model: qwen38-flash-next-nvfp4-sglang
     temperature: 0
     timeout_s: 900
@@ -190,21 +190,6 @@ models:
     timeout_s: 180
     capabilities:
       vision: false
-
-  m5_qwen:
-    enabled: true
-    tier: 1
-    display_name: "M5 Qwen 3.8-27B"
-    short_name: "M5_38"
-    provider: openai_compatible
-    base_url: http://127.0.0.1:8082/v1
-    model: /Volumes/M5_4TB/models/Qwen3.8-27B-8bit
-    temperature: 0
-    timeout_s: 180
-    extra_body:
-      enable_thinking: false
-    capabilities:
-      vision: true
 
   # Shadow-only two-node reasoner on ASUS2 + ASUS4. Disabled prevents normal
   # routing; controlled bakeoffs address this model key explicitly.

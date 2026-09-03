@@ -61,6 +61,13 @@ def test_non_loopback_requires_configured_key():
     assert not _authorized(_request([(b"authorization", b"Bearer other")], remote), spec)
 
 
+def test_loopback_config_does_not_bypass_remote_auth():
+    spec = _spec()
+    remote = _request([], "203.0.113.9")
+
+    assert not _authorized(remote, spec)
+
+
 def test_alias_maps_gateway_ids():
     spec = _spec()
     assert resolve_alias(spec, "harness-local") == "dgx_qwen"

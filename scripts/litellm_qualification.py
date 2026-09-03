@@ -215,8 +215,8 @@ def _sync_checks() -> dict[str, Any]:
         latency: dict[str, dict[str, float | bool]] = {}
         direct_routes = {
             "local-coder": (
-                "http://100.73.119.63:8900/v1/chat/completions",
-                "qwen3-coder-next",
+                "http://100.68.133.1:8888/v1/chat/completions",
+                "qwen38-flash-next-nvfp4-sglang",
             ),
             "local-qwen38": (
                 "http://100.68.133.1:8888/v1/chat/completions",
@@ -228,6 +228,13 @@ def _sync_checks() -> dict[str, Any]:
             ),
         }
         for route, (direct_url, served_model) in direct_routes.items():
+            direct_key = (
+                os.environ.get("QWEN38_API_KEY")
+                if route in {"local-coder", "local-qwen38"}
+                else "none"
+            )
+            if not direct_key:
+                raise RuntimeError("QWEN38_API_KEY is required for Qwen qualification")
             direct_payload = {
                 "model": served_model,
                 "messages": [{"role": "user", "content": "Reply exactly LATENCY_OK"}],
@@ -239,7 +246,7 @@ def _sync_checks() -> dict[str, Any]:
             for attempt in range(3):
                 direct_response = client.post(
                     direct_url,
-                    headers={"Authorization": "Bearer none"},
+                    headers={"Authorization": f"Bearer {direct_key}"},
                     json=direct_payload,
                 )
                 if direct_response.status_code < 400:

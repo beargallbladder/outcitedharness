@@ -1,0 +1,120 @@
+schema: harness.capability-ladder.v1
+
+targets:
+  electronics_qwen3_8b:
+    purpose: electronics_pinout_extraction
+    model_class: Qwen3-8B
+    minimum_verified_examples: 1101
+    distributed_required: false
+    checkpoint_format: bf16_trainable
+    required_gates:
+      - model_load
+      - optimizer_step
+      - adapter_only_save
+      - resume
+      - frozen_holdout
+      - family_non_regression
+      - deterministic_reproduction
+
+  electronics_qwen3_vl_8b:
+    purpose: rendered_datasheet_pinout_extraction
+    model_class: Qwen3-VL-8B
+    minimum_verified_examples: 1101
+    distributed_required: false
+    checkpoint_format: bf16_lora
+    required_gates:
+      - corpus_authorization
+      - source_provenance
+      - exact_page_package_alignment
+      - pdf_lineage_split
+      - model_load
+      - optimizer_step
+      - finite_lora_gradients
+      - adapter_only_save
+      - resume
+      - frozen_holdout
+      - family_non_regression
+      - deterministic_reproduction
+
+  electronics_datasheet_factory_v1:
+    purpose: local_first_datasheet_extraction_and_teacher_data
+    model_class: Qwen3-text-and-vision
+    minimum_verified_examples: 1101
+    distributed_required: false
+    checkpoint_format: immutable_claim_training_pairs
+    required_gates:
+      - authoritative_corpus_join
+      - claim_level_provenance
+      - local_first_routing
+      - anthropic_message_batch_only
+      - batch_spend_cap
+      - teacher_response_reconciliation
+      - claim_level_verification
+      - family_document_holdout
+      - deterministic_reproduction
+      - local_capability_gain
+      - paid_call_replacement
+      - immutable_cr_import_bundle
+
+  coding_qwen_30_35b:
+    purpose: mechanically_verified_code_repair
+    model_class: Qwen-30B-to-35B
+    minimum_verified_examples: 500
+    distributed_required: false
+    checkpoint_format: trainable_or_supported_4bit
+    required_gates:
+      - model_load
+      - optimizer_step
+      - adapter_only_save
+      - resume
+      - frozen_holdout
+      - critical_regression_pack
+      - shadow
+      - canary
+
+  qwen3_coder_next_80b:
+    purpose: local_primary_coder_adapter
+    model_class: Qwen3-Coder-Next-80B
+    minimum_verified_examples: 500
+    distributed_required: true
+    checkpoint_format: trainable_not_nvfp4_serving
+    required_gates:
+      - two_node_fsdp_qlora
+      - per_rank_memory_load
+      - optimizer_step
+      - adapter_only_save
+      - cross_node_resume
+      - frozen_holdout
+      - critical_regression_pack
+      - shadow
+      - canary
+
+  qwen38_flash_next:
+    purpose: production_coder_curriculum_adapter
+    model_class: Qwen3.8-Flash-Next
+    minimum_verified_examples: 500
+    distributed_required: true
+    checkpoint_format: bf16_ple_sharded
+    required_gates:
+      - four_node_nccl
+      - ple_runtime_sharded
+      - native_tp_load
+      - short_context_forward
+      - optimizer_step
+      - finite_lora_gradients
+      - adapter_only_save
+      - cross_node_resume
+      - deployment_logit_parity
+      - frozen_holdout
+      - critical_regression_pack
+      - shadow
+      - canary
+
+speed_only:
+  specforge_dflash_eagle:
+    capability_promotion_allowed: false
+    prerequisite: quality_winner
+    metrics:
+      - acceptance_rate
+      - latency
+      - throughput

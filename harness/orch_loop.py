@@ -235,6 +235,7 @@ class LoopState:
     checkpoint_available: bool = False
     checkpoint_last_manifest: str = ""
     checkpoint_error: str = ""
+    client_owned_workspace: bool = False
     working_set: WorkingSet = field(default_factory=WorkingSet)
 
     def to_dict(self) -> dict[str, Any]:
@@ -361,6 +362,7 @@ class LoopState:
             checkpoint_available=bool(data.get("checkpoint_available")),
             checkpoint_last_manifest=str(data.get("checkpoint_last_manifest") or ""),
             checkpoint_error=str(data.get("checkpoint_error") or ""),
+            client_owned_workspace=bool(data.get("client_owned_workspace")),
             working_set=WorkingSet.from_dict(data.get("working_set")),
         )
 
@@ -428,7 +430,11 @@ def command_allowed(command: str) -> bool:
     if head in {"pytest", "ruff", "eslint", "tsc"}:
         return True
     if head in {"python", "python3"}:
-        return len(argv) >= 3 and argv[1] == "-m" and argv[2] in {"pytest", "ruff"}
+        return (
+            len(argv) >= 3
+            and argv[1] == "-m"
+            and argv[2] in {"pytest", "ruff", "unittest"}
+        )
     if head == "npx":
         return len(argv) >= 2 and Path(argv[1]).name.lower() == "tsc"
     if head == "npm":
@@ -469,7 +475,8 @@ _NEGATED_VERIFY_RE = re.compile(
     r"\b(?:pytest|ruff|eslint|tsc|npx|npm|pnpm)\b"
 )
 _VERIFY_HEAD_RE = re.compile(
-    r"(?i)\b(?:python3?\s+-m\s+pytest|python3?\s+-m\s+ruff|npx\s+tsc|"
+    r"(?i)\b(?:python3?\s+-m\s+pytest|python3?\s+-m\s+ruff|"
+    r"python3?\s+-m\s+unittest|npx\s+tsc|"
     r"npm\s+run\s+[A-Za-z0-9_:-]+|pnpm\s+(?:run\s+)?[A-Za-z0-9_:-]+|"
     r"pytest|ruff|eslint|tsc)\b"
 )
@@ -492,6 +499,7 @@ _CMD_STOP = frozenset(
         "command",
         "must",
         "please",
+        "stop",
     }
 )
 
@@ -506,6 +514,9 @@ def commands_named_in_intent(intent: str) -> list[str]:
     for match in _VERIFY_HEAD_RE.finditer(text):
         tokens = [re.sub(r"\s+", " ", match.group(0)).strip()]
         for tok in re.findall(r"[A-Za-z0-9_./:-]+", text[match.end() :]):
+            tok = tok.rstrip(".,;")
+            if not tok:
+                break
             if tok.lower() in _CMD_STOP:
                 break
             tokens.append(tok)
@@ -679,6 +690,7 @@ def _flatten_command_blob(blob: str) -> tuple[str, int | None, bool]:
     raw = blob or ""
     timed_out = False
     exit_code: int | None = None
+    explicit_exit = False
     try:
         data = json.loads(raw)
     except json.JSONDecodeError:
@@ -686,11 +698,17 @@ def _flatten_command_blob(blob: str) -> tuple[str, int | None, bool]:
     chunks: list[str] = []
 
     def walk(node: Any) -> None:
-        nonlocal exit_code, timed_out
+        nonlocal exit_code, explicit_exit, timed_out
         if isinstance(node, dict):
             found = _exit_from_mapping(node)
             if found is not None:
                 exit_code = found
+                explicit_exit = True
+            elif not explicit_exit and isinstance(node.get("success"), bool):
+                if node["success"] is False:
+                    exit_code = 1
+                elif exit_code is None:
+                    exit_code = 0
             if node.get("timeout") or node.get("timed_out"):
                 timed_out = True
             for key in ("stdout", "stderr", "output", "result", "text", "content"):

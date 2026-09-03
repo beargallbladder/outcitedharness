@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Verify two-rank NCCL correctness and measure collective bandwidth."""
+"""Verify multi-rank NCCL correctness and measure collective bandwidth."""
 
 from __future__ import annotations
 
@@ -26,21 +26,28 @@ def main() -> int:
     parser.add_argument("--output", type=Path)
     parser.add_argument("--warmup", type=int, default=5)
     parser.add_argument("--iterations", type=int, default=20)
+    parser.add_argument("--expected-world-size", type=int, default=2)
     parser.add_argument(
         "--sizes-mib", type=int, nargs="+", default=[1, 64, 256]
     )
     args = parser.parse_args()
     if args.warmup < 1 or args.iterations < 3:
         parser.error("warmup must be >=1 and iterations must be >=3")
+    if args.expected_world_size < 2 or args.expected_world_size > 6:
+        parser.error("expected world size must be between 2 and 6")
     if any(size < 1 or size > 1024 for size in args.sizes_mib):
         parser.error("sizes must be between 1 and 1024 MiB")
 
     dist.init_process_group("nccl", timeout=timedelta(seconds=120))
     rank = dist.get_rank()
     world_size = dist.get_world_size()
-    if world_size != 2:
-        raise RuntimeError(f"expected exactly two ranks, observed {world_size}")
+    if world_size != args.expected_world_size:
+        raise RuntimeError(
+            f"expected exactly {args.expected_world_size} ranks, "
+            f"observed {world_size}"
+        )
     torch.cuda.set_device(0)
+    expected_sum = world_size * (world_size + 1) / 2
 
     rows: list[dict[str, float | int]] = []
     for size_mib in args.sizes_mib:
@@ -64,7 +71,7 @@ def main() -> int:
             dist.all_reduce(tensor)
             torch.cuda.synchronize()
             durations.append(time.perf_counter() - started)
-            if not bool(torch.all(tensor == 3.0)):
+            if not bool(torch.all(tensor == expected_sum)):
                 raise RuntimeError(
                     f"rank {rank} observed an incorrect all-reduce result"
                 )

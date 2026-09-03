@@ -1,0 +1,78 @@
+schema: harness.learning-data-request.v1
+request_id: cr-code-electronics-learning-20260830
+purpose: >-
+  Build mechanically verified coding-repair and electronic-component training
+  candidates for the dedicated local learning factory.
+
+requested_collections:
+  verified_code_repairs:
+    required_fields:
+      - record_id
+      - owned_repository_uri
+      - parent_commit_sha
+      - repaired_commit_sha
+      - task_or_issue_text
+      - unified_diff
+      - failing_test_command
+      - failing_test_output_sha256
+      - passing_test_command
+      - passing_test_output_sha256
+      - ci_run_uri
+      - observed_at
+      - ownership
+      - license
+    optional_fields:
+      - local_attempts
+      - authorized_frontier_request
+      - authorized_frontier_response
+      - frontier_provider
+      - frontier_input_tokens
+      - frontier_output_tokens
+      - frontier_cost_usd
+
+  electronics_pinout_resolutions:
+    required_fields:
+      - record_id
+      - manufacturer
+      - part_number
+      - package
+      - datasheet_revision
+      - source_document_uri
+      - source_document_sha256
+      - source_page_numbers
+      - canonical_pinout_json
+      - verifier_name
+      - verification_output_sha256
+      - observed_at
+      - ownership
+      - license
+    optional_fields:
+      - failed_local_attempts
+      - authorized_frontier_request
+      - authorized_frontier_response
+      - frontier_provider
+      - frontier_cost_usd
+
+explicitly_excluded:
+  - CategoryRank
+  - Tapes
+  - credentials
+  - private_keys
+  - access_tokens
+  - customer_personal_data
+  - records_without_ownership_or_license
+
+delivery:
+  format: jsonl
+  transfer: encrypted_file_transfer
+  integrity: sha256_manifest
+  credentials_out_of_band: true
+  email_attachments_allowed: false
+  minimum_file_permissions: "0600"
+
+acceptance:
+  quarantine_on_arrival: true
+  secret_scan_required: true
+  provenance_validation_required: true
+  parent_state_replay_required_for_code: true
+  mechanical_verification_required_for_training: true

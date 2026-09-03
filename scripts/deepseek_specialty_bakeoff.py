@@ -134,8 +134,8 @@ async def main() -> None:
     cfg = load_config()
     deepseek = cfg.models["deepseek_flash_tp2_shadow"]
     qwen = cfg.models["dgx2_qwen"]
-    m5 = cfg.models["m5_qwen"]
-    include_m5 = os.environ.get("BENCH_INCLUDE_M5", "1") == "1"
+    qwen_tp2 = cfg.models["asus2_qwen"]
+    include_qwen_tp2 = os.environ.get("BENCH_INCLUDE_QWEN_TP2", "1") == "1"
     prefill_rows: list[dict[str, Any]] = []
     for records in (500, 2000):
         lanes = [
@@ -148,8 +148,15 @@ async def main() -> None:
             ),
             _prefill("qwen_single", qwen.base_url, qwen.model, records),
         ]
-        if include_m5:
-            lanes.append(_prefill("m5", m5.base_url, m5.model, records))
+        if include_qwen_tp2:
+            lanes.append(
+                _prefill(
+                    "qwen_tp2",
+                    qwen_tp2.base_url,
+                    qwen_tp2.model,
+                    records,
+                )
+            )
         prefill_rows.extend(await asyncio.gather(*lanes))
     review_rows = await asyncio.gather(
         _review("deepseek_high", "deepseek_flash_tp2_shadow"),

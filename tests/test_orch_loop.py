@@ -389,6 +389,7 @@ def _patch_loop(monkeypatch, report: DispatchReport | None = None, captured: dic
 def test_allowlist_rejects_shell_and_unknowns():
     assert command_allowed("pytest tests/test_x.py")
     assert command_allowed("python3 -m pytest tests/test_x.py")
+    assert command_allowed("python3 -m unittest discover -s tests -v")
     assert command_allowed("ruff check src")
     assert command_allowed("npm run typecheck")
     assert command_allowed("pnpm test:unit")
@@ -407,9 +408,52 @@ def test_allowlist_rejects_shell_and_unknowns():
         "fix test_add.py. Use pytest test_add.py as the acceptance command."
     ) == ["pytest test_add.py"]
     assert commands_named_in_intent(
+        "add clamp. Run python3 -m unittest discover -s tests -v. Stop after it passes."
+    ) == ["python3 -m unittest discover -s tests -v"]
+    assert commands_named_in_intent(
         "add a comment to hello.py. Do not invent tests. Do not run pytest."
     ) == []
     assert commands_named_in_intent("fix the failing unit test in tests/test_x.py") == []
+
+
+def test_remote_client_workspace_defers_checkpoint_to_tool_owner(
+    tmp_path: Path,
+) -> None:
+    from harness.gateway.orch import (
+        _capture_apply_baseline,
+        _finalize_pending_checkpoint,
+    )
+
+    remote_root = tmp_path / "remote-m4-workspace"
+    state = LoopState(intent="add labels")
+    calls = [
+        {
+            "function": {
+                "name": "write_to_file",
+                "arguments": json.dumps(
+                    {
+                        "path": "src/labels.py",
+                        "content": "def normalize_labels(labels): return labels\n",
+                    }
+                ),
+            }
+        }
+    ]
+
+    assert _capture_apply_baseline(
+        SimpleNamespace(),
+        "task-1",
+        state,
+        calls,
+        remote_root,
+        1,
+    )
+    assert state.client_owned_workspace is True
+    assert state.checkpoint_pending_paths == ["src/labels.py"]
+    _finalize_pending_checkpoint(SimpleNamespace(), state)
+    assert state.checkpoint_count == 1
+    assert state.checkpoint_available is False
+    assert state.checkpoint_pending_paths == []
 
 
 def test_parse_command_outcome_reads_client_payloads_and_fails_closed():
@@ -420,6 +464,22 @@ def test_parse_command_outcome_reads_client_payloads_and_fails_closed():
     )
     assert code == 0
     assert "1 passed" in out
+    code, timed, out, _err = parse_command_outcome(
+        json.dumps(
+            [
+                {
+                    "query": "python3 -m unittest discover -s tests -v",
+                    "result": "Ran 5 tests\nOK",
+                    "success": True,
+                }
+            ]
+        )
+    )
+    assert code == 0 and not timed
+    code, timed, out, _err = parse_command_outcome(
+        json.dumps([{"result": "FAILED", "success": False}])
+    )
+    assert code == 1
     code, timed, out, _err = parse_command_outcome(
         "<terminal_output>ok</terminal_output>\n<exit_code>0</exit_code>"
     )

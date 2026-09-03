@@ -8,6 +8,7 @@ import hashlib
 import json
 import os
 import re
+import sys
 import tempfile
 import urllib.request
 from collections import defaultdict
@@ -490,7 +491,7 @@ def parse_args() -> argparse.Namespace:
     return args
 
 
-def main() -> int:
+def _historical_main() -> int:
     args = parse_args()
     pins = {
         "mask": require_pin(args.mask, args.mask_sha16),
@@ -551,6 +552,14 @@ def main() -> int:
         )
     )
     return 0 if payload["comparison"]["owner_tolerance_accepted"] else 1
+
+
+def main() -> int:
+    print(
+        "CategoryRank/Tapes processing is suspended pending new owner guidance.",
+        file=sys.stderr,
+    )
+    return 2
 
 
 if __name__ == "__main__":

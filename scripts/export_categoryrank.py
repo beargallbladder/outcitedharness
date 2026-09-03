@@ -312,7 +312,7 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def main() -> int:
+def _historical_main() -> int:
     args = parse_args()
     try:
         if args.discover:
@@ -330,6 +330,14 @@ def main() -> int:
     except Exception as error:
         print(f"CategoryRank export failed: {error}", file=sys.stderr)
         return 1
+
+
+def main() -> int:
+    print(
+        "CategoryRank/Tapes processing is suspended pending new owner guidance.",
+        file=sys.stderr,
+    )
+    return 2
 
 
 if __name__ == "__main__":

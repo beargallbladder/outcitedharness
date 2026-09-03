@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+printf '%s\n' \
+  "CategoryRank/Tapes processing is suspended pending new owner guidance." >&2
+exit 2
+
 if [[ "${1:-}" == "__container" ]]; then
   model_path="${BGE_MODEL_PATH:-/training/models/bge-m3-cr-tapes-v1/checkpoints_20260427T183216Z}"
   output_path="${TAPES_REPRO_OUTPUT:-/training/evaluations/tapes-open-set-v1-repro/offline-v1-owner-contract.json}"

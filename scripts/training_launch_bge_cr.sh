@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+printf '%s\n' \
+  "CategoryRank/Tapes processing is suspended pending new owner guidance." >&2
+exit 2
+
 root="${DGX2_TRAINING_ROOT:-$HOME/harness-training}"
 image="${BGE_REPRO_IMAGE:-harness/bge-repro-gb10:prod-20260829}"
 output=""

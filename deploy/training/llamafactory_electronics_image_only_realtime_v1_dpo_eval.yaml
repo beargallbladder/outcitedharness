@@ -1,0 +1,10 @@
+### Frozen-evaluation serving profile for the real-time image-only candidate.
+
+model_name_or_path: /training/models/Qwen3-VL-30B-A3B-Instruct-BF16
+adapter_name_or_path: /training/checkpoints/electronics-30b-image-only-realtime-v1-20260902-dpo
+trust_remote_code: true
+infer_backend: huggingface
+infer_dtype: bfloat16
+template: qwen3_vl_nothink
+image_max_pixels: 1048576
+do_sample: false

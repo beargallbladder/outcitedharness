@@ -122,6 +122,16 @@ def load_harness_pass_candidates(
         model_key = str(row["model_key"])
         dedupe_key = (case_id, model_key)
         if dedupe_key in seen_case_model:
+            if rejections is not None:
+                rejections.append(
+                    {
+                        "record_id": int(row["id"]),
+                        "case_id": case_id,
+                        "model_key": model_key,
+                        "reason": "duplicate case/model PASS row",
+                        "duplicate": True,
+                    }
+                )
             continue
         try:
             if case_id not in cases:

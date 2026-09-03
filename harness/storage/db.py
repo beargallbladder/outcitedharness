@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import json
+import os
 import sqlite3
+import stat
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -26,14 +28,35 @@ class RunRecord:
 
 class Store:
     def __init__(self, db_path: Path):
-        self.db_path = db_path
-        db_path.parent.mkdir(parents=True, exist_ok=True)
+        self.db_path = db_path.expanduser().resolve(strict=False)
+        if db_path.is_symlink():
+            raise ValueError("database path cannot be a symlink")
+        self.db_path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        if self.db_path.parent.stat().st_uid != os.geteuid():
+            raise PermissionError("database directory must be owned by this process")
+        os.chmod(self.db_path.parent, 0o700)
+        if not self.db_path.exists():
+            descriptor = os.open(
+                self.db_path,
+                os.O_RDWR | os.O_CREAT | os.O_EXCL,
+                0o600,
+            )
+            os.close(descriptor)
+        database_stat = self.db_path.stat()
+        if database_stat.st_uid != os.geteuid():
+            raise PermissionError("database must be owned by this process")
+        if not stat.S_ISREG(database_stat.st_mode):
+            raise ValueError("database path must be a regular file")
+        os.chmod(self.db_path, 0o600)
         self._init()
 
     def connect(self) -> sqlite3.Connection:
-        conn = sqlite3.connect(self.db_path)
+        conn = sqlite3.connect(self.db_path, timeout=30)
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA foreign_keys = ON")
+        conn.execute("PRAGMA recursive_triggers = ON")
+        conn.execute("PRAGMA busy_timeout = 30000")
+        conn.execute("PRAGMA trusted_schema = OFF")
         return conn
 
     def _init(self) -> None:
@@ -45,8 +68,119 @@ class Store:
             self._ensure_column(conn, "tasks", "updated_at", "TEXT")
             self._ensure_column(conn, "tasks", "final_outcome", "TEXT")
             self._ensure_column(conn, "attempts", "estimated_cost", "REAL")
+            self._ensure_column(conn, "training_jobs", "lease_token", "TEXT")
+            self._ensure_column(
+                conn,
+                "training_jobs",
+                "experiment_sha256",
+                "TEXT",
+            )
+            self._ensure_column(conn, "training_jobs", "handler_pid", "INTEGER")
+            self._ensure_column(conn, "training_jobs", "handler_pgid", "INTEGER")
+            self._ensure_column(conn, "training_jobs", "handler_started_at", "TEXT")
+            self._ensure_column(conn, "dataset_members", "repository_id", "TEXT")
+            self._ensure_column(
+                conn,
+                "dataset_members",
+                "component_family",
+                "TEXT",
+            )
+            self._ensure_column(conn, "dataset_members", "temporal_bucket", "TEXT")
             conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_gateway_turns_task ON gateway_turns(task_id)"
+            )
+            conn.execute(
+                """
+                CREATE UNIQUE INDEX IF NOT EXISTS
+                    idx_training_jobs_experiment
+                ON training_jobs (
+                    dataset_version_id, job_kind, experiment_sha256
+                )
+                WHERE experiment_sha256 IS NOT NULL
+                """
+            )
+            conn.executescript(
+                """
+                CREATE TRIGGER IF NOT EXISTS training_jobs_birth_guard_v1
+                BEFORE INSERT ON training_jobs
+                WHEN NEW.state != 'eligible'
+                  OR NEW.attempt != 0
+                  OR NEW.assigned_node IS NOT NULL
+                  OR NEW.lease_expires_at IS NOT NULL
+                  OR NEW.lease_token IS NOT NULL
+                  OR NEW.handler_pid IS NOT NULL
+                  OR NEW.handler_pgid IS NOT NULL
+                  OR NEW.handler_started_at IS NOT NULL
+                  OR NEW.checkpoint_uri IS NOT NULL
+                  OR NEW.checkpoint_sha256 IS NOT NULL
+                  OR NEW.priority <= 0
+                  OR NEW.max_attempts < 1
+                  OR NEW.dataset_version_id IS NULL
+                  OR NEW.experiment_sha256 IS NULL
+                  OR length(NEW.experiment_sha256) != 64
+                  OR NEW.experiment_sha256 GLOB '*[^0-9a-f]*'
+                  OR NOT EXISTS (
+                    SELECT 1 FROM dataset_versions
+                    WHERE dataset_version_id = NEW.dataset_version_id
+                      AND state = 'eligible'
+                  )
+                  OR NOT EXISTS (
+                    SELECT 1 FROM dataset_members
+                    WHERE dataset_version_id = NEW.dataset_version_id
+                      AND split = 'train'
+                  )
+                  OR EXISTS (
+                    SELECT 1
+                    FROM dataset_members AS dm
+                    LEFT JOIN learning_admissions AS ad
+                      ON ad.event_id = dm.event_id
+                    LEFT JOIN learning_verifications AS v
+                      ON v.verification_id = ad.verification_id
+                    WHERE dm.dataset_version_id = NEW.dataset_version_id
+                      AND (
+                        ad.decision IS NOT 'eligible'
+                        OR v.status IS NOT 'pass'
+                      )
+                  )
+                BEGIN
+                    SELECT RAISE(ABORT, 'invalid training job birth');
+                END;
+
+                CREATE TRIGGER IF NOT EXISTS training_jobs_no_delete_v1
+                BEFORE DELETE ON training_jobs
+                BEGIN
+                    SELECT RAISE(ABORT, 'training jobs are immutable history');
+                END;
+
+                CREATE TRIGGER IF NOT EXISTS training_jobs_experiment_immutable_v1
+                BEFORE UPDATE OF experiment_sha256 ON training_jobs
+                WHEN NEW.experiment_sha256 IS NOT OLD.experiment_sha256
+                BEGIN
+                    SELECT RAISE(ABORT, 'training experiment identity is immutable');
+                END;
+
+                CREATE TRIGGER IF NOT EXISTS training_jobs_process_guard_v1
+                BEFORE UPDATE ON training_jobs
+                WHEN (
+                    (NEW.handler_pid IS NULL) != (NEW.handler_pgid IS NULL)
+                    OR (NEW.handler_pid IS NULL) != (NEW.handler_started_at IS NULL)
+                    OR (
+                        NEW.handler_pid IS NOT NULL
+                        AND (NEW.handler_pid <= 1 OR NEW.handler_pgid <= 1)
+                    )
+                    OR (
+                        NEW.state != 'assigned'
+                        AND (
+                            NEW.handler_pid IS NOT NULL
+                            OR NEW.handler_pgid IS NOT NULL
+                            OR NEW.handler_started_at IS NOT NULL
+                        )
+                    )
+                )
+                BEGIN
+                    SELECT RAISE(ABORT, 'training handler fields do not match state');
+                END;
+                """
             )
 
     @staticmethod
@@ -103,7 +237,7 @@ class Store:
                 values,
             )
 
-    def insert_gateway_turn(self, payload: dict[str, Any]) -> None:
+    def insert_gateway_turn(self, payload: dict[str, Any]) -> int:
         columns = [
             "task_id",
             "started_at",
@@ -123,10 +257,11 @@ class Store:
         ]
         values = [payload.get(col) for col in columns]
         with self.connect() as conn:
-            conn.execute(
+            cursor = conn.execute(
                 f"INSERT INTO gateway_turns ({', '.join(columns)}) VALUES ({', '.join('?' * len(columns))})",
                 values,
             )
+            return int(cursor.lastrowid)
 
     def insert_model_result(self, payload: dict[str, Any]) -> None:
         columns = [

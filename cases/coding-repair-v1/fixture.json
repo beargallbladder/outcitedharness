@@ -1,0 +1,67 @@
+{
+  "cases": [
+    {
+      "case_id": "merge-touching-ranges",
+      "files": {
+        "solution.py": "def merge_ranges(ranges):\n    output = []\n    for start, end in sorted(ranges):\n        if output and start <= output[-1][1]:\n            output[-1] = (output[-1][0], max(output[-1][1], end))\n        else:\n            output.append((start, end))\n    return output\n",
+        "test_solution.py": "from solution import merge_ranges\n\ndef test_overlap():\n    assert merge_ranges([(1, 3), (2, 5)]) == [(1, 5)]\n"
+      },
+      "hidden_test": "from solution import merge_ranges\n\ndef test_edges_and_immutability():\n    rows = [[5, 3], [1, 2], [8, 8], [7, 6]]\n    original = [row[:] for row in rows]\n    assert merge_ranges(rows) == [(1, 8)]\n    assert rows == original\n",
+      "prompt": "Fix merge_ranges. Inputs can be reversed, touching integer ranges must merge, output is sorted, and the input must not be mutated.",
+      "task_class": "algorithm_repair"
+    },
+    {
+      "case_id": "strict-json-pointer",
+      "files": {
+        "solution.py": "def json_pointer_get(document, pointer):\n    if not pointer:\n        return document\n    current = document\n    for raw in pointer.lstrip('/').split('/'):\n        key = raw.replace('~1', '/').replace('~0', '~')\n        current = current[int(key)] if isinstance(current, list) else current[key]\n    return current\n",
+        "test_solution.py": "from solution import json_pointer_get\n\ndef test_basic_pointer():\n    assert json_pointer_get({'a': {'b': 2}}, '/a/b') == 2\n"
+      },
+      "hidden_test": "import pytest\nfrom solution import json_pointer_get\n\ndef test_strict_pointer_rules():\n    doc = {'a/b': {'~x': [3]}}\n    assert json_pointer_get(doc, '/a~1b/~0x/0') == 3\n    for pointer in ('a', '/a~2b', '/a~', '/items/01', '/items/-1'):\n        with pytest.raises((ValueError, KeyError, TypeError)):\n            json_pointer_get({'items': [1, 2]}, pointer)\n",
+      "prompt": "Repair json_pointer_get to implement RFC 6901 reads. Reject malformed tilde escapes and non-canonical list indexes; preserve normal lookup exceptions.",
+      "task_class": "parser_repair"
+    },
+    {
+      "case_id": "strict-event-revisions",
+      "files": {
+        "solution.py": "def reduce_events(events):\n    revisions = {}\n    states = {}\n    for event in events:\n        if event['revision'] >= revisions.get(event['id'], -1):\n            revisions[event['id']] = event['revision']\n            states[event['id']] = event['state']\n    return states\n",
+        "test_solution.py": "from solution import reduce_events\n\ndef test_newer_wins():\n    assert reduce_events([{'id':'a','revision':1,'state':'x'},{'id':'a','revision':2,'state':'y'}]) == {'a':'y'}\n"
+      },
+      "hidden_test": "from solution import reduce_events\n\ndef test_duplicate_negative_and_immutable():\n    rows = [{'id':'a','revision':-2,'state':'old'},{'id':'a','revision':-1,'state':'new'},{'id':'a','revision':-1,'state':'duplicate'}]\n    copy = [dict(row) for row in rows]\n    assert reduce_events(rows) == {'a':'new'}\n    assert rows == copy\n",
+      "prompt": "Fix reduce_events so each entity accepts only strictly increasing integer revisions, ignores stale or duplicate revisions, and does not mutate the input.",
+      "task_class": "state_machine_repair"
+    },
+    {
+      "case_id": "deterministic-topological-batches",
+      "files": {
+        "solution.py": "def topological_batches(graph):\n    pending = {key: set(value) for key, value in graph.items()}\n    output = []\n    while pending:\n        ready = sorted(key for key, deps in pending.items() if not deps)\n        if not ready:\n            break\n        output.append(ready)\n        for key in ready:\n            pending.pop(key)\n        for deps in pending.values():\n            deps.difference_update(ready)\n    return output\n",
+        "test_solution.py": "from solution import topological_batches\n\ndef test_simple_chain():\n    assert topological_batches({'b':['a'],'a':[]}) == [['a'],['b']]\n"
+      },
+      "hidden_test": "import pytest\nfrom solution import topological_batches\n\ndef test_missing_nodes_cycle_and_immutable():\n    graph = {'build': {'lint', 'test'}, 'lint': {'parse'}, 'test': {'parse'}}\n    original = {key: set(value) for key, value in graph.items()}\n    assert topological_batches(graph) == [['parse'], ['lint', 'test'], ['build']]\n    assert graph == original\n    with pytest.raises(ValueError):\n        topological_batches({'a':['b'],'b':['a']})\n",
+      "prompt": "Repair topological_batches. Include dependencies absent as keys, emit all currently ready nodes in sorted batches, reject cycles, and do not mutate the graph.",
+      "task_class": "graph_repair"
+    },
+    {
+      "case_id": "canonical-query-builder",
+      "files": {
+        "solution.py": "from urllib.parse import urlencode\n\ndef build_query(values):\n    return urlencode(values)\n",
+        "test_solution.py": "from solution import build_query\n\ndef test_basic_query():\n    assert build_query({'a':'x'}) == 'a=x'\n"
+      },
+      "hidden_test": "from solution import build_query\n\ndef test_canonical_encoding():\n    assert build_query({'z':None,'b':['x y','/'],'a':True}) == 'a=true&b=x%20y&b=%2F'\n",
+      "prompt": "Fix build_query. Sort keys, repeat sequence values, encode with RFC 3986 percent escapes, omit None values, and render booleans lowercase.",
+      "task_class": "api_contract_repair"
+    },
+    {
+      "case_id": "bounded-chunks",
+      "files": {
+        "solution.py": "def chunks(items, size):\n    return [items[index:index + size] for index in range(0, len(items) - 1, size)]\n",
+        "test_solution.py": "from solution import chunks\n\ndef test_even_chunks():\n    assert chunks([1,2,3,4], 2) == [[1,2],[3,4]]\n"
+      },
+      "hidden_test": "import pytest\nfrom solution import chunks\n\ndef test_boundaries():\n    values = [1,2,3,4,5]\n    assert chunks(values, 2) == [[1,2],[3,4],[5]]\n    assert values == [1,2,3,4,5]\n    assert chunks([], 1) == []\n    for bad in (0, -1, 1.5, True):\n        with pytest.raises((TypeError, ValueError)):\n            chunks(values, bad)\n",
+      "prompt": "Repair chunks so size must be a positive integer, every item appears exactly once, the final chunk may be short, and input is not mutated.",
+      "task_class": "boundary_repair"
+    }
+  ],
+  "core_sha256": "abde6744088c50f573ae855ae266352843a3fd676b1ef52e17e88bb312436d9a",
+  "schema": "harness.coding-repair-fixture.v1",
+  "version": "v1"
+}

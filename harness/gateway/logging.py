@@ -1,10 +1,19 @@
 from __future__ import annotations
 
 import json
+import logging
+from datetime import datetime
+from typing import TYPE_CHECKING
 from typing import Any
 
 from harness.cost import estimate_cost
 from harness.storage.db import Store, utcnow
+
+if TYPE_CHECKING:
+    from harness.training.ledger import LearningLedger
+
+
+LOGGER = logging.getLogger(__name__)
 
 
 def _worker_for_alias(alias: str) -> str:
@@ -66,6 +75,9 @@ def log_turn(
     cost: float | None,
     error: str | None,
     body: dict[str, Any],
+    response: dict[str, Any] | str | None = None,
+    learning_ledger: LearningLedger | None = None,
+    source_revision: str | None = None,
 ) -> None:
     messages = body.get("messages") or []
     prompt_chars = 0
@@ -86,10 +98,11 @@ def log_turn(
         input_tokens,
         output_tokens,
     )
-    store.insert_gateway_turn(
+    started_at = utcnow()
+    turn_id = store.insert_gateway_turn(
         {
             "task_id": task_id,
-            "started_at": utcnow(),
+            "started_at": started_at,
             "alias": alias,
             "model_key": model_key,
             "upstream_model": upstream_model,
@@ -105,6 +118,130 @@ def log_turn(
             "prompt_chars": prompt_chars,
         }
     )
+    if learning_ledger is not None and response is not None:
+        _capture_learning_turn(
+            learning_ledger,
+            turn_id=turn_id,
+            task_id=task_id,
+            started_at=started_at,
+            alias=alias,
+            model_key=model_key,
+            upstream_model=upstream_model,
+            stream=stream,
+            status=status,
+            latency_ms=latency_ms,
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            cost=cost,
+            body=body,
+            response=response,
+            source_revision=source_revision,
+        )
+
+
+def _capture_learning_turn(
+    ledger: LearningLedger,
+    *,
+    turn_id: int,
+    task_id: str,
+    started_at: str,
+    alias: str,
+    model_key: str,
+    upstream_model: str,
+    stream: bool,
+    status: int,
+    latency_ms: float,
+    input_tokens: int | None,
+    output_tokens: int | None,
+    cost: float | None,
+    body: dict[str, Any],
+    response: dict[str, Any] | str,
+    source_revision: str | None,
+) -> None:
+    from harness.training.ledger import ArtifactPayload, VerificationPayload
+    from harness.training.models import (
+        LearningEvent,
+        SourceKind,
+        is_excluded_learning_source,
+    )
+
+    capture_source = f"harness://gateway-turns/{turn_id}"
+    if is_excluded_learning_source(
+        SourceKind.HARNESS,
+        capture_source,
+        {"request": body, "response": response},
+    ):
+        LOGGER.warning(
+            "learning capture skipped excluded source markers for gateway turn %s",
+            turn_id,
+        )
+        return
+
+    event = LearningEvent(
+        event_id=f"gateway-turn-{turn_id}",
+        event_type="gateway_turn",
+        source_kind=SourceKind.HARNESS,
+        source_uri=capture_source,
+        source_revision=source_revision,
+        task_id=task_id,
+        lineage_id=task_id,
+        authorization_scope="settings.learning_capture_enabled",
+        created_at=datetime.fromisoformat(started_at),
+        estimated_cost=cost,
+        metadata={
+            "alias": alias,
+            "model_key": model_key,
+            "upstream_model": upstream_model,
+            "stream": stream,
+            "status": status,
+            "latency_ms": latency_ms,
+            "input_tokens": input_tokens,
+            "output_tokens": output_tokens,
+            "data_use": "quarantine",
+            "disposition": "quarantine",
+        },
+    )
+    request_text = json.dumps(body, ensure_ascii=False, sort_keys=True)
+    response_text = (
+        response
+        if isinstance(response, str)
+        else json.dumps(response, ensure_ascii=False, sort_keys=True)
+    )
+    try:
+        ledger.capture(
+            event,
+            [
+                ArtifactPayload(
+                    kind="gateway_request",
+                    content=request_text,
+                    media_type="application/json",
+                ),
+                ArtifactPayload(
+                    kind="gateway_response",
+                    content=response_text,
+                    media_type=(
+                        "text/plain"
+                        if isinstance(response, str)
+                        else "application/json"
+                    ),
+                ),
+            ],
+            [
+                VerificationPayload(
+                    kind="gateway_transport",
+                    status="unknown",
+                    verifier="harness.gateway",
+                    output_kind="gateway_response",
+                    metadata={
+                        "http_status": status,
+                        "transport_succeeded": status < 400,
+                        "proof_scope": "transport_only",
+                    },
+                )
+            ],
+        )
+    except Exception:
+        LOGGER.exception("learning capture failed for gateway turn %s", turn_id)
 
 
 def turn_cost(

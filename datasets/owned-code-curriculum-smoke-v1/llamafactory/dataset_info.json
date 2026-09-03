@@ -1,0 +1,41 @@
+{
+  "coding_sft_test": {
+    "columns": {
+      "messages": "messages"
+    },
+    "file_name": "coding_sft_test.json",
+    "formatting": "sharegpt",
+    "tags": {
+      "assistant_tag": "assistant",
+      "content_tag": "content",
+      "role_tag": "role",
+      "user_tag": "user"
+    }
+  },
+  "coding_sft_train": {
+    "columns": {
+      "messages": "messages"
+    },
+    "file_name": "coding_sft_train.json",
+    "formatting": "sharegpt",
+    "tags": {
+      "assistant_tag": "assistant",
+      "content_tag": "content",
+      "role_tag": "role",
+      "user_tag": "user"
+    }
+  },
+  "coding_sft_validation": {
+    "columns": {
+      "messages": "messages"
+    },
+    "file_name": "coding_sft_validation.json",
+    "formatting": "sharegpt",
+    "tags": {
+      "assistant_tag": "assistant",
+      "content_tag": "content",
+      "role_tag": "role",
+      "user_tag": "user"
+    }
+  }
+}

@@ -1,23 +1,24 @@
-This workspace uses Cline as a tool-executing client for the Harness orchestrator.
+This workspace uses Cline directly with the dual-node Qwen3.8 TP=2 coder.
 
 Provider:
 - API type: OpenAI Compatible
-- Base URL: http://127.0.0.1:7410/v1
-- Model ID: harness-orch
-- API key: LITELLM_MASTER_KEY from this workspace's .env
+- Base URL: http://100.68.133.1:8888/v1
+- Model ID: qwen38-flash-next-nvfp4-sglang
+- API key: none
 
 Architecture:
-- Cline calls loopback LiteLLM on :7410.
-- LiteLLM routes harness-orch to the internal Harness gateway on :8787.
-- Harness owns gathering, packet construction, worker dispatch, verification,
-  bounded repair, and frontier rescue.
-- SGLang serves the NVIDIA models. It is not the IDE agent or tool executor.
+- Cline owns the interactive agent loop, transcript, tool calls, approvals,
+  context compaction, and retries.
+- ASUS2 + ASUS4 serve Qwen3.8 Flash Next through SGLang tensor parallelism.
+- Harness and LiteLLM remain separate services for explicit headless jobs,
+  fleet evaluation, worker orchestration, and model routing.
 
 Operating rules:
-- Use harness-orch by default; do not point Cline directly at fleet endpoints.
 - Gather repository evidence before edits and execute the requested tool calls.
 - Run the repository's allowlisted verification commands after mutations.
-- Keep exact command exits and file results available to the orchestration loop.
+- Treat every truncation marker as incomplete evidence; read narrower ranges
+  before drawing conclusions or editing.
 - Never restart or reconfigure model services from an ordinary coding task.
 - Never call the protected embedding/GCI ports as chat models.
-- Paid frontier use is a bounded Harness escalation, not an automatic LiteLLM fallback.
+- Do not invoke harness-orch from inside Cline. Run Harness separately when
+  decomposition, critic grading, bounded repair, or frontier rescue is desired.

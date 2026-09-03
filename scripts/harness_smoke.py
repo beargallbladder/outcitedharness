@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Standing smoke: run CR eval cases hc01 + hc12 against harness-auto.
+"""Standing smoke: run CR eval cases hc01 + hc12 against harness-orch.
 
 Runs from launchd (com.samkim.harness-smoke). Results append to
 smoke-results.jsonl next to the eval pack; failures also post a mail to
@@ -42,7 +42,7 @@ def load_case(filename: str, case_id: str) -> dict:
 def ask(prompt: str, evidence: dict) -> tuple[str, str, float]:
     body = json.dumps(
         {
-            "model": "harness-auto",
+            "model": "harness-orch",
             "messages": [
                 {
                     "role": "user",
@@ -113,6 +113,24 @@ def run_case(filename: str, case_id: str) -> dict:
     }
 
 
+def failure_signature(results: list[dict]) -> str:
+    return json.dumps(
+        sorted((r["case_id"], r["why"]) for r in results if not r["pass"])
+    )
+
+
+def previous_failure_signature() -> str | None:
+    try:
+        lines = RESULTS.read_text().splitlines()
+    except OSError:
+        return None
+    for line in reversed(lines):
+        if line.strip():
+            record = json.loads(line)
+            return failure_signature(record.get("results", []))
+    return None
+
+
 def post_failure_mail(results: list[dict]) -> None:
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     failed = [r["case_id"] for r in results if not r["pass"]]
@@ -125,7 +143,7 @@ def post_failure_mail(results: list[dict]) -> None:
         f'subject: "Harness smoke FAIL: {", ".join(failed)}"\n'
         f"created_at: {datetime.now(timezone.utc).isoformat(timespec='seconds')}\n"
         "---\n\n"
-        "Standing smoke (hc01+hc12 vs harness-auto) failed:\n\n"
+        "Standing smoke (hc01+hc12 vs harness-orch) failed:\n\n"
         f"```json\n{json.dumps(results, indent=1)}\n```\n"
     )
     name = f"{stamp}_m5-cursor_cursor-cr_status_harness-smoke-fail.md"
@@ -136,15 +154,19 @@ def main() -> int:
     results = [run_case(f, cid) for f, cid in CASES]
     record = {
         "ts": datetime.now(timezone.utc).isoformat(timespec="seconds"),
-        "target": "harness-auto",
+        "target": "harness-orch",
         "results": results,
     }
+    # Mail only when the failure signature changes; a standing known
+    # failure (e.g. foreman intentionally offline during a fleet sprint)
+    # should not re-mail every six hours.
+    unchanged = failure_signature(results) == previous_failure_signature()
     try:
         with RESULTS.open("a") as fh:
             fh.write(json.dumps(record) + "\n")
     except OSError as exc:
         print(f"could not append results: {exc}", file=sys.stderr)
-    if not all(r["pass"] for r in results):
+    if not all(r["pass"] for r in results) and not unchanged:
         try:
             post_failure_mail(results)
         except OSError as exc:

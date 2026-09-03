@@ -315,10 +315,10 @@ async def _broad_profile(name: str, model: ModelConfig) -> dict[str, Any]:
 
 async def main() -> None:
     cfg = load_config()
-    m5 = _variant(cfg.models["m5_qwen"], None)
+    qwen_tp2 = _variant(cfg.models["asus2_qwen"], None)
     deepseek_base = cfg.models["deepseek_flash_tp2_shadow"]
     calibration = await asyncio.gather(
-        _calibrate("m5", m5, None),
+        _calibrate("qwen_tp2", qwen_tp2, None),
         *(
             _calibrate(
                 f"deepseek_{effort}",
@@ -332,7 +332,7 @@ async def main() -> None:
     best = sorted(deepseek_rows, key=lambda row: (-row["score"], row["latency_ms"]))[0]
     best_effort = str(best["effort"])
     profiles = await asyncio.gather(
-        _broad_profile("m5", m5),
+        _broad_profile("qwen_tp2", qwen_tp2),
         _broad_profile(
             f"deepseek_{best_effort}",
             _variant(deepseek_base, best_effort),

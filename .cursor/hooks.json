@@ -1,0 +1,47 @@
+{
+  "hooks": {
+    "afterAgentResponse": [
+      {
+        "command": ".cursor/hooks/shadow-capture afterAgentResponse",
+        "failClosed": false,
+        "timeout": 5
+      }
+    ],
+    "afterFileEdit": [
+      {
+        "command": ".cursor/hooks/shadow-capture afterFileEdit",
+        "failClosed": false,
+        "timeout": 5
+      }
+    ],
+    "afterShellExecution": [
+      {
+        "command": ".cursor/hooks/shadow-capture afterShellExecution",
+        "failClosed": false,
+        "timeout": 5
+      }
+    ],
+    "beforeReadFile": [
+      {
+        "command": ".cursor/hooks/shadow-capture beforeReadFile",
+        "failClosed": false,
+        "timeout": 5
+      }
+    ],
+    "beforeSubmitPrompt": [
+      {
+        "command": ".cursor/hooks/shadow-capture beforeSubmitPrompt",
+        "failClosed": false,
+        "timeout": 15
+      }
+    ],
+    "stop": [
+      {
+        "command": ".cursor/hooks/shadow-capture stop",
+        "failClosed": false,
+        "timeout": 5
+      }
+    ]
+  },
+  "version": 1
+}

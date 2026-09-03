@@ -26,7 +26,9 @@ def sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
-def regular_files(root: Path, excluded: set[Path]) -> list[Path]:
+def regular_files(
+    root: Path, excluded: set[Path], exclude_hidden: bool = False
+) -> list[Path]:
     files: list[Path] = []
     for directory, dirnames, filenames in os.walk(root, followlinks=False):
         base = Path(directory)
@@ -34,23 +36,30 @@ def regular_files(root: Path, excluded: set[Path]) -> list[Path]:
             child = base / dirname
             if child.is_symlink():
                 raise ValueError(f"refusing symlinked directory: {child.relative_to(root)}")
+            if exclude_hidden and dirname.startswith("."):
+                dirnames.remove(dirname)
         for filename in filenames:
             child = base / filename
             if child in excluded:
                 continue
+            relative = child.relative_to(root)
+            if exclude_hidden and any(part.startswith(".") for part in relative.parts):
+                continue
             mode = child.lstat().st_mode
             if stat.S_ISLNK(mode):
-                raise ValueError(f"refusing symlinked file: {child.relative_to(root)}")
+                raise ValueError(f"refusing symlinked file: {relative}")
             if not stat.S_ISREG(mode):
-                raise ValueError(f"refusing non-regular file: {child.relative_to(root)}")
+                raise ValueError(f"refusing non-regular file: {relative}")
             files.append(child)
     return sorted(files, key=lambda item: item.relative_to(root).as_posix())
 
 
-def build_manifest(root: Path, output: Path) -> dict[str, Any]:
+def build_manifest(
+    root: Path, output: Path, exclude_hidden: bool = False
+) -> dict[str, Any]:
     excluded = {output.resolve(strict=False)}
     entries = []
-    for path in regular_files(root, excluded):
+    for path in regular_files(root, excluded, exclude_hidden):
         relative = path.relative_to(root).as_posix()
         entries.append(
             {
@@ -71,13 +80,13 @@ def encoded_manifest(manifest: dict[str, Any]) -> bytes:
     return (json.dumps(manifest, indent=2, sort_keys=True) + "\n").encode()
 
 
-def create(root: Path, output: Path) -> int:
+def create(root: Path, output: Path, exclude_hidden: bool = False) -> int:
     root = root.resolve()
     output = output.resolve(strict=False)
     if not root.is_dir():
         raise ValueError(f"artifact root is not a directory: {root}")
     output.parent.mkdir(parents=True, exist_ok=True)
-    payload = encoded_manifest(build_manifest(root, output))
+    payload = encoded_manifest(build_manifest(root, output, exclude_hidden))
 
     if output.exists():
         if not output.is_file() or output.is_symlink():
@@ -180,6 +189,11 @@ def parse_args() -> argparse.Namespace:
     create_parser = subparsers.add_parser("create")
     create_parser.add_argument("root", type=Path)
     create_parser.add_argument("output", type=Path)
+    create_parser.add_argument(
+        "--exclude-hidden",
+        action="store_true",
+        help="exclude dotfiles and hidden directory trees from the manifest",
+    )
 
     verify_parser = subparsers.add_parser("verify")
     verify_parser.add_argument("root", type=Path)
@@ -196,7 +210,7 @@ def main() -> int:
     args = parse_args()
     try:
         if args.command == "create":
-            return create(args.root, args.output)
+            return create(args.root, args.output, args.exclude_hidden)
         return verify(args.root, args.manifest, args.allow_extra)
     except (OSError, ValueError, json.JSONDecodeError) as error:
         print(f"training manifest: {error}", file=sys.stderr)

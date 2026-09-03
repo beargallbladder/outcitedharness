@@ -57,7 +57,7 @@ class WorkerRegistry:
     def failover_keys(self) -> list[str]:
         """Enabled workers with a live model_key, in failover_order.
 
-        This is the old auto_ladder: primary_coder → fallback_reasoner → frontier.
+        This mirrors the internal gateway auto_ladder.
         Disabled future nodes are skipped, not errors.
         """
         rows = [

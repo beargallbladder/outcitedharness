@@ -116,6 +116,11 @@ sudo bash scripts/training_configure_link.sh \
   --apply
 ```
 
+On these NetworkManager hosts, the helper updates the existing ConnectX
+profiles rather than relying on transient `ip` assignments. The isolated
+addresses, MTU, and no-default-route setting therefore survive profile
+reactivation and reboot.
+
 Re-run both doctors with the opposite primary address as `--peer` and
 `--require-ready`. Then run the pinned two-rank NCCL correctness/bandwidth
 smoke, starting ASUS1 rank 1 before DGX2 rank 0:
@@ -137,6 +142,29 @@ both hosts, verifies exact all-reduce results, and records median/P95 bandwidth
 at 1, 64, and 256 MiB. Seal rank 0's JSON before any distributed training.
 
 ## 4. Launch SpecForge
+
+The training runtime is pinned to SpecForge commit
+`c439546983863facd8126f505c2d291d0ab31faf` and the ARM64 NVIDIA PyTorch
+26.07 image digest in `SpecForge.GB10.Dockerfile`. Build the same image on both
+hosts; install the container-backed CLI wrapper only in DGX2's authoritative
+root:
+
+```shell
+# DGX2
+bash scripts/training_install_specforge.sh \
+  --role dgx2 --root /home/samkim2/harness-training \
+  --build --install-wrapper
+# Review the plan, then repeat with --apply.
+
+# ASUS1
+bash scripts/training_install_specforge.sh \
+  --role asus1 --root /home/samkimasus1/harness-training --build
+# Review the plan, then repeat with --apply.
+```
+
+The wrapper preserves host cache, NCCL, and RDMA environment variables, mounts
+the owner-marked training root at the identical container path, and runs as the
+calling UID/GID. It does not embed credentials or use a mutable image tag.
 
 Place the real SpecForge configuration below
 `<DGX2_ROOT>/configs/`. Config syntax belongs to the installed SpecForge
@@ -186,7 +214,12 @@ bash scripts/training_launch_two_node.sh \
 Extra SpecForge arguments go after `--`. Keep tokens out of command-line
 arguments because process listings may expose them.
 
-## 5. Reproduce the owner-signed Tapes v1 gate
+## 5. Frozen historical Tapes v1 gate — do not run
+
+**Execution is suspended.** CategoryRank and Tapes data must not be processed,
+evaluated, backfilled, or trained until the owner provides new explicit
+guidance on cleanliness, lineage, and approved use. The commands below are
+retained only as historical provenance and are not an active runbook.
 
 Never evaluate v1 through live `:8800` or the `latest` symlink. The immutable
 checkpoint is
@@ -194,16 +227,9 @@ checkpoint is
 `model.safetensors` SHA-256 is
 `f1e18565298c5f528b9c4aabb04b5460b9b5ec1cb5dd6f653ad0ea754e977ed8`.
 
-Build the isolated runtime and execute the no-network gate on DGX2:
-
-```shell
-docker build \
-  --file configs/BGERepro.GB10.Dockerfile \
-  --tag harness/bge-repro-gb10:prod-20260829 \
-  configs
-BGE_REPRO_IMAGE=harness/bge-repro-gb10:prod-20260829 \
-  bash scripts/run_tapes_offline_repro.sh
-```
+The former build and evaluation commands have been removed from this active
+runbook. The retained launcher is hard-disabled and exits with the suspension
+notice even if invoked directly.
 
 The owner contract pins FlagEmbedding fp16, `text[:512]`, Kim-tag batch 64,
 and retrieval batch 256. Acceptance permits at most one changed Kim-tag
@@ -212,7 +238,11 @@ metric must match exactly. The script exits successfully only when that
 contract passes. It binds the checkpoint server to container loopback and
 runs the entire evaluation with `--network none`.
 
-## 6. Run the CR-owned language-geometry pilot
+## 6. Frozen historical CR language-geometry pilot — do not run
+
+**Execution is suspended.** The earlier owner contract and commands below are
+historical evidence only. Do not resume, reproduce, or alter this pilot while
+the CategoryRank/Tapes data boundary remains closed.
 
 The only approved CR training input is
 `datasets/cr-local-train-v0/cr_bge_m3_joint_corpus_v2_20260818T171746Z.flagembedding.jsonl`
@@ -223,12 +253,8 @@ facts. Raw `category_mentions_v2`, FOUNDATION snapshots, successor/acquisition
 identity pairs, and the packaged eval files remain forbidden as training
 inputs.
 
-Review the validated plan and then launch on DGX2:
-
-```shell
-bash scripts/training_launch_bge_cr.sh
-bash scripts/training_launch_bge_cr.sh --launch
-```
+The former launch commands have been removed from this active runbook. The
+retained launcher is hard-disabled and exits with the suspension notice.
 
 The launcher verifies the owner marker and corpus checksum, requires the
 sealed local stock BGE-M3 checkpoint, writes only below the DGX2 checkpoint
@@ -236,28 +262,22 @@ root, and runs without network access. It never changes live `:8800`; any
 trained checkpoint remains non-production until the owner-defined frozen
 evaluations pass.
 
-Post-training qualification uses the checksum-pinned contrastive holdout and
-then the decision-level open-set gate:
-
-```shell
-docker run --rm --gpus all --network none --ipc host \
-  --user "$(id -u):$(id -g)" --env HOME=/tmp \
-  --mount "type=bind,src=$HOME/harness-training,dst=/training" \
-  --entrypoint python harness/bge-repro-gb10:prod-20260829 \
-  /training/scripts/evaluate_bge_holdout.py \
-  --holdout /training/datasets/tapes-holdout-v1/joint_corpus_v2_tapes_holdout_eval.jsonl \
-  --holdout-sha256 27d986bd1a9a6c8713c2c58400017cab1fd561ab191a2316d143fd2ed5adb7d0 \
-  --baseline /training/models/bge-m3 \
-  --candidate /training/checkpoints/cr-bge-m3-language-geometry-pilot \
-  --output /training/evaluations/cr-bge-m3-language-geometry-pilot-holdout.json
-
-BGE_MODEL_RELATIVE=checkpoints/cr-bge-m3-language-geometry-pilot \
-TAPES_REPRO_OUTPUT_RELATIVE=evaluations/cr-bge-m3-language-geometry-pilot-open-set.json \
-  bash scripts/run_tapes_offline_repro.sh
-```
+The prior post-training qualification commands are likewise intentionally
+absent. Their historical results remain documented below, but they cannot be
+re-run while the data boundary is closed.
 
 The first one-epoch pilot improved broad holdout pos@1 from 73.33% to 75.87%
 but regressed two task types and failed the open-set gate (Kim top1 76.50% to
 70.07%; retrieval R@1 31.03% to 26.60%). It is sealed as a no-promote
 experiment. Do not resume or alter its curriculum without a new CR owner
 ruling.
+
+## 7. Operate the dedicated learning factory
+
+The immutable ledger, verified backlog, durable queue, capability ladder,
+promotion gates, replacement economics, and disabled-by-default external
+connectors are documented in `LEARNING_FACTORY.md`.
+
+The active learning factory accepts owned code repair and DesignWins
+electronics evidence only. It fails closed on missing provenance or proof, and
+it explicitly excludes CategoryRank and Tapes from capture and training.

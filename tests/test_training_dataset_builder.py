@@ -76,3 +76,21 @@ def test_designwins_builder_enforces_quality_and_provenance_audits(
     assert not (destination / "images" / "part-failed").exists()
     assert "gt_audit.json" in manifest["sources"]
     assert "gt_provenance_audit.json" in manifest["sources"]
+    dataset_info = json.loads(
+        (destination / "llamafactory" / "dataset_info.json").read_text()
+    )
+    vision_tags = dataset_info["designwins_vision_train"]["tags"]
+    assert vision_tags["user_tag"] == "user"
+    assert vision_tags["assistant_tag"] == "assistant"
+    vision_rows = []
+    for split in ("train", "validation", "test"):
+        vision_rows.extend(
+            json.loads(
+                (
+                    destination
+                    / "llamafactory"
+                    / f"designwins_vision_{split}.json"
+                ).read_text()
+            )
+        )
+    assert vision_rows[0]["messages"][0]["content"].count("<image>") == 1

@@ -4,7 +4,8 @@ set -euo pipefail
 usage() {
   cat <<'EOF'
 Usage:
-  training_prepare_storage.sh --role dgx2|asus1 --root ABS_PATH [options]
+  training_prepare_storage.sh --role dgx2|asus1|dgx3|asus3|asus2|asus4
+    --root ABS_PATH [options]
 
 Options:
   --apply             Perform changes (default is a no-op plan).
@@ -39,6 +40,10 @@ assert_host_role() {
   case "$expected" in
     dgx2) expected_hostname="spark-49af" ;;
     asus1) expected_hostname="gx10-fc2e" ;;
+    dgx3) expected_hostname="spark-69c8" ;;
+    asus3) expected_hostname="gx10-0309" ;;
+    asus2) expected_hostname="gx10-26b6" ;;
+    asus4) expected_hostname="gx10-33af" ;;
     *) die "unknown host role '$expected'" ;;
   esac
   [[ "$actual" == "$expected_hostname" ]] ||
@@ -140,6 +145,12 @@ apply_local() {
       die "ASUS1 scratch has $available free bytes; floor is $minimum"
     directories=(
       "$root/staging"
+      "$root/datasets"
+      "$root/models"
+      "$root/scripts"
+      "$root/runs"
+      "$root/configs"
+      "$root/manifests"
       "$root/cache/huggingface/hub"
       "$root/cache/huggingface/transformers"
       "$root/cache/huggingface/datasets"
@@ -196,7 +207,10 @@ while (( $# )); do
   esac
 done
 
-[[ "$role" == "dgx2" || "$role" == "asus1" ]] || die "--role must be dgx2 or asus1"
+case "$role" in
+  dgx2|asus1|dgx3|asus3|asus2|asus4) ;;
+  *) die "--role must name one of the six training nodes" ;;
+esac
 valid_path "$root" || die "--root must be a safe absolute path other than /"
 valid_word "$owner" || die "invalid owner"
 valid_word "$group" || die "invalid group"
@@ -208,7 +222,7 @@ if [[ -n "$host" ]]; then
   host_short="${host%%.*}"
   host_short="$(printf '%s' "$host_short" | tr '[:upper:]' '[:lower:]')"
   [[ "$host_short" == "$role" ]] ||
-    die "--host must name the selected role exactly (dgx2 or asus1)"
+    die "--host must name the selected role exactly"
 fi
 
 if [[ "$apply" != true ]]; then

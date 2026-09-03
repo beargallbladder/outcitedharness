@@ -136,7 +136,10 @@ def assert_no_lineage_leakage(
     for split, records in partitions.items():
         split_name = split.value if isinstance(split, Split) else str(split)
         for record in records:
-            lineage = str(_value(record, lineage_key))
+            raw_lineage = str(_value(record, lineage_key))
+            lineage = raw_lineage.strip()
+            if not lineage or lineage != raw_lineage:
+                raise ValueError("lineage_id must be non-empty and canonical")
             previous = owners.setdefault(lineage, split_name)
             if previous != split_name:
                 raise ValueError(

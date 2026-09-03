@@ -14,6 +14,7 @@ import httpx
 BASE_URL = os.environ.get("QWEN38_BASE_URL", "http://100.68.133.1:8888/v1")
 URL = f"{BASE_URL.rstrip('/')}/chat/completions"
 MODEL = os.environ.get("QWEN38_MODEL", "qwen38-flash-next-nvfp4")
+API_KEY = os.environ.get("QWEN38_API_KEY", "")
 REQUIRE_LOGIT_STABILITY = os.environ.get(
     "QWEN38_REQUIRE_LOGIT_STABILITY", "0"
 ).lower() in {"1", "true", "yes"}
@@ -56,7 +57,12 @@ def _request(client: httpx.Client, max_tokens: int, logprobs: bool) -> dict[str,
 
 
 def main() -> None:
-    with httpx.Client(timeout=300) as client:
+    if not API_KEY:
+        raise RuntimeError("QWEN38_API_KEY is required")
+    with httpx.Client(
+        timeout=300,
+        headers={"Authorization": f"Bearer {API_KEY}"},
+    ) as client:
         token_runs = [_request(client, 1, True) for _ in range(10)]
         answer_runs = [_request(client, 64, False) for _ in range(3)]
     top_sets = [

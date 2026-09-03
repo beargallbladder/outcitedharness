@@ -1,0 +1,8 @@
+ARG BASE_IMAGE=harness/llamafactory-gb10:20260829
+FROM ${BASE_IMAGE}
+
+USER root
+RUN python -m pip install --no-cache-dir \
+      bitsandbytes==0.50.2 \
+      deepspeed==0.19.6 \
+    && python -c "import bitsandbytes, deepspeed; assert bitsandbytes.__version__ == '0.50.2'; assert deepspeed.__version__ == '0.19.6'"

@@ -1,0 +1,48 @@
+connectors:
+  - name: owned-github
+    kind: github
+    enabled: false
+    read_only: true
+    base_url: https://api.github.com
+    token_env: HARNESS_LEARNING_GITHUB_TOKEN
+    allowed_paths:
+      - /repos/OWNER/REPOSITORY/commits
+      - /repos/OWNER/REPOSITORY/actions/runs
+
+  - name: render-observability
+    kind: render
+    enabled: false
+    read_only: true
+    base_url: https://api.render.com
+    token_env: HARNESS_LEARNING_RENDER_TOKEN
+    allowed_paths:
+      - /v1/services/REPLACE_WITH_OWNED_SERVICE_ID
+
+  - name: vercel-observability
+    kind: vercel
+    enabled: false
+    read_only: true
+    base_url: https://api.vercel.com
+    token_env: HARNESS_LEARNING_VERCEL_TOKEN
+    allowed_paths:
+      - /v6/deployments/REPLACE_WITH_OWNED_DEPLOYMENT_ID
+
+  - name: anthropic-usage
+    kind: anthropic_usage
+    enabled: false
+    read_only: true
+    base_url: https://api.anthropic.com
+    token_env: HARNESS_LEARNING_ANTHROPIC_ADMIN_KEY
+    allowed_paths:
+      - /v1/organizations/usage_report/messages
+      - /v1/organizations/cost_report
+
+  - name: openai-usage
+    kind: openai_usage
+    enabled: false
+    read_only: true
+    base_url: https://api.openai.com
+    token_env: HARNESS_LEARNING_OPENAI_ADMIN_KEY
+    allowed_paths:
+      - /v1/organization/usage
+      - /v1/organization/costs

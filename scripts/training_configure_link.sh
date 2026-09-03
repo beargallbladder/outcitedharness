@@ -4,14 +4,16 @@ set -euo pipefail
 usage() {
   cat <<'EOF'
 Usage:
-  training_configure_link.sh --role dgx2|asus1
+  training_configure_link.sh --role dgx2|asus1|dgx3|asus3|asus2|asus4
     --primary-interface IFACE --primary-cidr ADDRESS/PREFIX
     --secondary-interface IFACE --secondary-cidr ADDRESS/PREFIX
     [--mtu BYTES] [--apply]
 
 Configure only the two ConnectX direct-link interfaces. The default is a
 no-op plan. Run with sudo and --apply after the interconnect is installed.
-This does not alter the LAN, Wi-Fi, Tailscale, routes, or system services.
+On NetworkManager hosts, the existing device profiles are updated so the
+addresses and MTU survive profile reactivation and reboot. This does not alter
+the LAN, Wi-Fi, Tailscale, default route, or system services.
 EOF
 }
 
@@ -42,8 +44,10 @@ while (( $# )); do
   esac
 done
 
-[[ "$role" == "dgx2" || "$role" == "asus1" ]] ||
-  die "--role must be dgx2 or asus1"
+case "$role" in
+  dgx2|asus1|dgx3|asus3|asus2|asus4) ;;
+  *) die "--role must name one of the six training nodes" ;;
+esac
 for interface in "$primary_interface" "$secondary_interface"; do
   [[ "$interface" =~ ^[A-Za-z0-9_.:-]+$ ]] || die "invalid interface"
 done
@@ -56,7 +60,14 @@ done
 [[ "$mtu" =~ ^[0-9]+$ && "$mtu" -ge 1500 && "$mtu" -le 9216 ]] ||
   die "MTU must be between 1500 and 9216"
 
-expected_hostname="$([[ "$role" == "dgx2" ]] && printf spark-49af || printf gx10-fc2e)"
+case "$role" in
+  dgx2) expected_hostname="spark-49af" ;;
+  asus1) expected_hostname="gx10-fc2e" ;;
+  dgx3) expected_hostname="spark-69c8" ;;
+  asus3) expected_hostname="gx10-0309" ;;
+  asus2) expected_hostname="gx10-26b6" ;;
+  asus4) expected_hostname="gx10-33af" ;;
+esac
 if [[ "$apply" != true ]]; then
   printf 'PLAN only: host=%s primary=%s:%s secondary=%s:%s mtu=%s\n' \
     "$role" "$primary_interface" "$primary_cidr" \
@@ -76,10 +87,34 @@ for interface in "$primary_interface" "$secondary_interface"; do
   fi
 done
 
-ip link set dev "$primary_interface" mtu "$mtu" up
-ip address replace "$primary_cidr" dev "$primary_interface"
-ip link set dev "$secondary_interface" mtu "$mtu" up
-ip address replace "$secondary_cidr" dev "$secondary_interface"
+configure_interface() {
+  local interface="$1"
+  local cidr="$2"
+  local connection=""
+
+  if command -v nmcli >/dev/null 2>&1 &&
+    systemctl is-active --quiet NetworkManager 2>/dev/null; then
+    connection="$(nmcli -g GENERAL.CONNECTION device show "$interface")"
+    [[ -n "$connection" && "$connection" != "--" ]] ||
+      die "NetworkManager has no active profile for $interface"
+    nmcli connection modify "$connection" \
+      ipv4.method manual \
+      ipv4.addresses "$cidr" \
+      ipv4.gateway "" \
+      ipv4.dns "" \
+      ipv4.never-default yes \
+      ipv6.method link-local \
+      802-3-ethernet.mtu "$mtu" \
+      connection.autoconnect yes
+    nmcli connection up "$connection" >/dev/null
+  else
+    ip link set dev "$interface" mtu "$mtu" up
+    ip address replace "$cidr" dev "$interface"
+  fi
+}
+
+configure_interface "$primary_interface" "$primary_cidr"
+configure_interface "$secondary_interface" "$secondary_cidr"
 
 printf 'Configured %s direct link:\n' "$role"
 ip -brief address show dev "$primary_interface"

@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import re
 import time
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -26,7 +28,6 @@ from harness.task.models import AttemptRecord, Evidence
 from harness.task.service import TaskService
 from harness.workers.registry import Worker, load_registry
 
-FOREMAN_KEY = "m5_qwen"
 _FOREMAN_PROBE_TIMEOUT_S = 4.0
 _FOREMAN_CACHE_TTL_S = 20.0
 _foreman_cache: dict[str, tuple[float, bool]] = {}
@@ -307,6 +308,7 @@ class DispatchReport:
     frontier_verified: bool = False
     frontier_why: str = ""
     frontier_cost: float | None = None
+    learning_capture_error: str = ""
 
 
 def score_tool_hit(packet: Packet, result: ChatResult, names: list[str]) -> bool:
@@ -1782,6 +1784,95 @@ def _shot_evidence(shots: list[Shot]) -> list[dict[str, Any]]:
     ]
 
 
+def _capture_frontier_rescue(
+    ledger: Any,
+    *,
+    task_id: str,
+    dispatch_run_id: str,
+    frontier_run_id: str,
+    model_key: str,
+    intent: str,
+    local_failure_evidence: list[dict[str, Any]],
+    rescue_packet: str,
+    response_text: str,
+    error: str | None,
+    critic_key: str,
+    critic_verdict: str,
+    critic_text: str,
+    critic_verified: bool,
+    estimated_cost: float | None,
+) -> None:
+    """Capture one frontier rescue as a non-trainable quarantine event."""
+
+    from harness.training.ledger import ArtifactPayload, VerificationPayload
+    from harness.training.models import LearningEvent, SourceKind
+
+    identity = f"{task_id}\n{dispatch_run_id}\n{frontier_run_id}".encode()
+    event_id = f"frontier-rescue-{hashlib.sha256(identity).hexdigest()[:32]}"
+    response = response_text or f"ERROR: {error or 'empty frontier response'}"
+    ledger.capture(
+        LearningEvent(
+            event_id=event_id,
+            event_type="frontier_rescue",
+            source_kind=SourceKind.HARNESS,
+            source_uri=(
+                f"harness://dispatch/{dispatch_run_id}/frontier/{frontier_run_id}"
+            ),
+            source_revision=None,
+            task_id=task_id,
+            lineage_id=task_id,
+            authorization_scope=(
+                "settings.learning_capture_enabled+settings.auto_frontier_rescue"
+            ),
+            created_at=datetime.now(timezone.utc),
+            estimated_cost=estimated_cost,
+            metadata={
+                "data_use": "quarantine",
+                "disposition": "quarantine",
+                "dispatch_run_id": dispatch_run_id,
+                "frontier_run_id": frontier_run_id,
+                "model_key": model_key,
+                "critic_key": critic_key,
+                "critic_verdict": critic_verdict,
+                "critic_verified": critic_verified,
+                "local_failure_count": len(local_failure_evidence),
+            },
+        ),
+        [
+            ArtifactPayload(kind="task_intent", content=intent),
+            ArtifactPayload(
+                kind="local_failure_evidence",
+                content=json.dumps(
+                    local_failure_evidence,
+                    ensure_ascii=False,
+                    sort_keys=True,
+                ),
+                media_type="application/json",
+            ),
+            ArtifactPayload(kind="frontier_request", content=rescue_packet),
+            ArtifactPayload(kind="frontier_response", content=response),
+            ArtifactPayload(
+                kind="frontier_review",
+                content=critic_text or "No model review was completed.",
+            ),
+        ],
+        [
+            VerificationPayload(
+                kind="frontier_critic_review",
+                status="unknown",
+                verifier="harness.dispatch",
+                output_kind="frontier_review",
+                metadata={
+                    "critic_key": critic_key,
+                    "critic_verdict": critic_verdict,
+                    "critic_verified": critic_verified,
+                    "proof_scope": "model_review_only",
+                },
+            )
+        ],
+    )
+
+
 def _write_error_report(cfg: AppConfig, report: DispatchReport, svc: TaskService, task) -> DispatchReport:
     dest = cfg.settings.results_dir / f"{report.run_id}.json"
     dest.write_text(
@@ -1824,6 +1915,14 @@ async def run_dispatch(
     cfg.settings.results_dir.mkdir(parents=True, exist_ok=True)
     store = Store(cfg.settings.db_path)
     svc = TaskService(store)
+    learning_ledger = None
+    if cfg.settings.learning_capture_enabled:
+        from harness.training.ledger import LearningLedger
+
+        learning_ledger = LearningLedger(
+            store,
+            cfg.settings.learning_artifact_root,
+        )
     task = svc.start(intent)
     report.task_id = task.task_id
     svc.set_stage(task.task_id, "planning")
@@ -1969,16 +2068,20 @@ async def run_dispatch(
         and svc.claim_frontier(task.task_id, cfg.settings.max_frontier_calls_per_task)
     ):
         try:
+            frontier_critic_key = ""
+            frontier_critic_verdict = "not_run"
+            frontier_critic_text = ""
+            failed_attempt_evidence = _shot_evidence(
+                [
+                    shot
+                    for shot in all_attempts
+                    if shot.packet.id in {failed.packet.id for failed in failed_final}
+                ]
+            )
             rescue_packet = build_auto_rescue_packet(
                 intent,
                 thread,
-                _shot_evidence(
-                    [
-                        shot
-                        for shot in all_attempts
-                        if shot.packet.id in {failed.packet.id for failed in failed_final}
-                    ]
-                ),
+                failed_attempt_evidence,
                 report.critic_text,
                 max_chars=cfg.settings.frontier_max_input_chars,
             )
@@ -2021,7 +2124,7 @@ async def run_dispatch(
                     qa_pass=True,
                     preview=report.frontier_text[:2000],
                 )
-                f_verdict, _f_text, f_key, _ = await _grade_shots(
+                f_verdict, f_text, f_key, _ = await _grade_shots(
                     critic_candidates,
                     intent,
                     [frontier_shot],
@@ -2030,6 +2133,9 @@ async def run_dispatch(
                 report.frontier_verified = bool(
                     frontier_shot.qa_pass and f_verdict == "proceed"
                 )
+                frontier_critic_key = f_key
+                frontier_critic_verdict = f_verdict
+                frontier_critic_text = f_text
                 report.frontier_why = frontier_shot.qa_why
                 svc.add_evidence(
                     Evidence(
@@ -2044,6 +2150,29 @@ async def run_dispatch(
                         },
                     )
                 )
+            if learning_ledger is not None:
+                try:
+                    _capture_frontier_rescue(
+                        learning_ledger,
+                        task_id=task.task_id,
+                        dispatch_run_id=run_id,
+                        frontier_run_id=outcome.run_id,
+                        model_key=outcome.model_key,
+                        intent=intent,
+                        local_failure_evidence=failed_attempt_evidence,
+                        rescue_packet=rescue_packet,
+                        response_text=report.frontier_text,
+                        error=outcome.error,
+                        critic_key=frontier_critic_key,
+                        critic_verdict=frontier_critic_verdict,
+                        critic_text=frontier_critic_text,
+                        critic_verified=report.frontier_verified,
+                        estimated_cost=outcome.estimated_cost,
+                    )
+                except Exception as exc:
+                    report.learning_capture_error = (
+                        f"{type(exc).__name__}: frontier capture failed"
+                    )
         except PacketError as exc:
             report.frontier_why = str(exc)
         except Exception as exc:
@@ -2133,6 +2262,7 @@ async def run_dispatch(
                     "verified": report.frontier_verified,
                     "why": report.frontier_why,
                     "estimated_cost": report.frontier_cost,
+                    "learning_capture_error": report.learning_capture_error,
                     "text": report.frontier_text[:2000],
                 },
                 "packets": [

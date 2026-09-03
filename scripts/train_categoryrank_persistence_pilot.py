@@ -7,6 +7,7 @@ import argparse
 import json
 import math
 import os
+import sys
 import tempfile
 from collections.abc import Iterator
 from datetime import date
@@ -255,11 +256,19 @@ def parse_args() -> argparse.Namespace:
     return args
 
 
-def main() -> int:
+def _historical_main() -> int:
     args = parse_args()
     summary = train(args)
     print(json.dumps(summary, sort_keys=True))
     return 0
+
+
+def main() -> int:
+    print(
+        "CategoryRank/Tapes processing is suspended pending new owner guidance.",
+        file=sys.stderr,
+    )
+    return 2
 
 
 if __name__ == "__main__":

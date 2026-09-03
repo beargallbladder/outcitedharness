@@ -1,14 +1,26 @@
 Cline -> Settings -> API Provider: OpenAI Compatible
 
-Base URL (Cline on the M5):  http://127.0.0.1:7410/v1
-Base URL (any tailnet machine):  https://m5max-ai.tail61e9a0.ts.net/v1
-API Key:   value of LITELLM_MASTER_KEY in the Harness .env
-Model ID:  harness-orch
+Base URL:  https://m5max-ai.tail61e9a0.ts.net/v1
+API Key:   dedicated M4 travel key (never the LiteLLM master key)
+Default:   local-qwen38
+Models:    local-qwen38, local-coder, harness-orch
 
-Context window: 131072
-Max output: 8192
+local-qwen38 context/output: 262144 / 8192
+local-coder context/output: 262144 / 8192
+harness-orch context/output: 131072 / 8192
 Tools: enabled
+Images: disabled
+Prompt cache: disabled
 
-The public client boundary is LiteLLM :7410. The tailnet URL securely proxies
-to it and is unavailable outside the tailnet. Harness :8787 is an internal
-orchestration gateway and should not be configured directly in Cline.
+The M4 owns the workspace and Cline tool loop. M5 is a control plane only:
+tailnet HTTPS terminates at its loopback travel LiteLLM on :7411. Select
+local-qwen38 for normal work, local-coder as its compatibility coding alias, and
+harness-orch only for explicit multi-model orchestration. No paid model is
+listed and there is no automatic paid fallback.
+
+Emergency direct-Qwen mode is deliberate and manual:
+
+  python3 scripts/configure_cline.py --direct
+
+It points only to http://100.68.133.1:8888/v1 with model
+qwen38-flash-next-nvfp4-sglang and never activates automatically.

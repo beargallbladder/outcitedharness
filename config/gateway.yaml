@@ -9,9 +9,7 @@ aliases:
 
 # Internal orchestration failover order. This is not a client-visible route.
 auto_ladder:
-  - dgx3_qwen
-  - m5_qwen
-  - frontier
+  - asus2_qwen
 
 context_window: 131072
 max_output_tokens: 8192

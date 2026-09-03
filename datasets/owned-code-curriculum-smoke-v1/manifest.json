@@ -1,0 +1,215 @@
+{
+  "admission_policy": "owned-repository-executable-curriculum-v1",
+  "artifacts": {
+    "canonical/test.jsonl": {
+      "bytes": 26823,
+      "sha256": "801b9f9966355fd00b947bf7c9603aa68a3b406a7404e6c376ed25bfa415cf14"
+    },
+    "canonical/train.jsonl": {
+      "bytes": 192826,
+      "sha256": "4624f979256a01caa6faa90d9902afb538022ff84b43e21c7d044c154188aa00"
+    },
+    "canonical/validation.jsonl": {
+      "bytes": 8691,
+      "sha256": "cca1784177bd7bd76705212702e167c69d626765d1dbe484532ac59238962952"
+    },
+    "llamafactory/coding_sft_test.json": {
+      "bytes": 17096,
+      "sha256": "682574890bda45c459408c5fed7c96e756edcd2fac9f561eba15a833f2dd7ded"
+    },
+    "llamafactory/coding_sft_train.json": {
+      "bytes": 107767,
+      "sha256": "24771773ae8f7b8744c68204de9a58ab071feffbb7f5fa7e7f4d03f2b1c16be9"
+    },
+    "llamafactory/coding_sft_validation.json": {
+      "bytes": 6648,
+      "sha256": "adb40fd82303a200705c8354d3bc0189c54863194e3fd4007218be8226dc8224"
+    },
+    "llamafactory/dataset_info.json": {
+      "bytes": 890,
+      "sha256": "ef1bc24485d47c9b91aa3a8cc4eb5e45cff0065c808013e05a69915223ac6dd5"
+    }
+  },
+  "core_sha256": "9dffb6b74ae82abb8b58cbe2a1241af0e1a25173d94a45ebaf9a0264916ff02a",
+  "counts": {
+    "test": 2,
+    "train": 6,
+    "validation": 1
+  },
+  "created_at": "2026-08-30T04:09:54+00:00",
+  "membership": [
+    {
+      "artifact_id": "artifact-code-curriculum-69a5aebf774bb7ba32a8eddc9b92c429226e7bc5-6f7583b293ad-53d3e10398d183f9",
+      "component_family": "harness/evaluation",
+      "event_id": "code-curriculum-69a5aebf774bb7ba32a8eddc9b92c429226e7bc5",
+      "lineage_id": "git:beargallbladder/outcitedharness:file:harness/evaluation/json_eval.py",
+      "repository_id": "beargallbladder/outcitedharness",
+      "source_file_sha256": "e5d8380bdea016bc776b8106fe2a725219f50e14bf84e021d037ba608019854e",
+      "source_revision": "6742e53877584d52e19a1e8058c27b6034758e3a35824823cecffef3266de38e",
+      "split": "test",
+      "temporal_bucket": "2026-08"
+    },
+    {
+      "artifact_id": "artifact-code-curriculum-7a5e9c123bc9eb744c2a0207348650a9652bed0a-6f7583b293ad-83db41bbdadf46c0",
+      "component_family": "harness/gateway",
+      "event_id": "code-curriculum-7a5e9c123bc9eb744c2a0207348650a9652bed0a",
+      "lineage_id": "git:beargallbladder/outcitedharness:file:harness/gateway/logging.py",
+      "repository_id": "beargallbladder/outcitedharness",
+      "source_file_sha256": "88954cf7a8edbee808ce4b21fbf21deb606c438e63d4ccd3e4f82e1712c35266",
+      "source_revision": "6742e53877584d52e19a1e8058c27b6034758e3a35824823cecffef3266de38e",
+      "split": "test",
+      "temporal_bucket": "2026-08"
+    },
+    {
+      "artifact_id": "artifact-code-curriculum-75341e353ec458957a96b39d3865eb46a6bc685a-6f7583b293ad-35f8c8959532f6be",
+      "component_family": "harness/cases",
+      "event_id": "code-curriculum-75341e353ec458957a96b39d3865eb46a6bc685a",
+      "lineage_id": "git:beargallbladder/outcitedharness:file:harness/cases/loader.py",
+      "repository_id": "beargallbladder/outcitedharness",
+      "source_file_sha256": "142db87f3be8c527cb1894e096faace9e6305edcc3a7ca2cbb1f840782290f9f",
+      "source_revision": "6742e53877584d52e19a1e8058c27b6034758e3a35824823cecffef3266de38e",
+      "split": "train",
+      "temporal_bucket": "2026-08"
+    },
+    {
+      "artifact_id": "artifact-code-curriculum-f0d930be2d15994add7953f97330aa15b7eb3be3-6f7583b293ad-457ed8933ca37757",
+      "component_family": "harness/config.py",
+      "event_id": "code-curriculum-f0d930be2d15994add7953f97330aa15b7eb3be3",
+      "lineage_id": "git:beargallbladder/outcitedharness:file:harness/config.py",
+      "repository_id": "beargallbladder/outcitedharness",
+      "source_file_sha256": "3d243b8c0f5b0bccc3d2b1697c3827083dc54110e00d26cc66e60167b9684f66",
+      "source_revision": "6742e53877584d52e19a1e8058c27b6034758e3a35824823cecffef3266de38e",
+      "split": "train",
+      "temporal_bucket": "2026-08"
+    },
+    {
+      "artifact_id": "artifact-code-curriculum-55d7c3da19757750c53fd6d7cc5d119336409cd8-6f7583b293ad-da8aef2a55d06bf7",
+      "component_family": "harness/cost.py",
+      "event_id": "code-curriculum-55d7c3da19757750c53fd6d7cc5d119336409cd8",
+      "lineage_id": "git:beargallbladder/outcitedharness:file:harness/cost.py",
+      "repository_id": "beargallbladder/outcitedharness",
+      "source_file_sha256": "a1a4cab76b162f932d416ff5fde00b23d09306bacb0ecbf2c0f677b359cc517e",
+      "source_revision": "6742e53877584d52e19a1e8058c27b6034758e3a35824823cecffef3266de38e",
+      "split": "train",
+      "temporal_bucket": "2026-08"
+    },
+    {
+      "artifact_id": "artifact-code-curriculum-ed4ec98a50391a3f23dc0c9b54c507a7a5b25db8-6f7583b293ad-4a2360281645ac60",
+      "component_family": "harness/fleet.py",
+      "event_id": "code-curriculum-ed4ec98a50391a3f23dc0c9b54c507a7a5b25db8",
+      "lineage_id": "git:beargallbladder/outcitedharness:file:harness/fleet.py",
+      "repository_id": "beargallbladder/outcitedharness",
+      "source_file_sha256": "e34a593ea4429db9f16d8d3fa0c0b8d5dafe58c812934ef26e6c92332112960d",
+      "source_revision": "6742e53877584d52e19a1e8058c27b6034758e3a35824823cecffef3266de38e",
+      "split": "train",
+      "temporal_bucket": "2026-08"
+    },
+    {
+      "artifact_id": "artifact-code-curriculum-c2a35e5408b78b69fd382f295545d79af45d1fe0-6f7583b293ad-5015039c664d36b1",
+      "component_family": "harness/gateway",
+      "event_id": "code-curriculum-c2a35e5408b78b69fd382f295545d79af45d1fe0",
+      "lineage_id": "git:beargallbladder/outcitedharness:file:harness/gateway/orch.py",
+      "repository_id": "beargallbladder/outcitedharness",
+      "source_file_sha256": "547081ee883a3c557ae50cad27fdfcb43dfeec0ab53289c62c48f84f7103da3b",
+      "source_revision": "6742e53877584d52e19a1e8058c27b6034758e3a35824823cecffef3266de38e",
+      "split": "train",
+      "temporal_bucket": "2026-08"
+    },
+    {
+      "artifact_id": "artifact-code-curriculum-99b41af31ca9dd8b503f9d77398edbc17e232c57-6f7583b293ad-c13ebc7b92e6b147",
+      "component_family": "harness/gateway",
+      "event_id": "code-curriculum-99b41af31ca9dd8b503f9d77398edbc17e232c57",
+      "lineage_id": "git:beargallbladder/outcitedharness:file:harness/gateway/qwen_tools.py",
+      "repository_id": "beargallbladder/outcitedharness",
+      "source_file_sha256": "6943d51739b98f6927d6a29838f1f294799920b05e2dc0cce3d85b859b91d553",
+      "source_revision": "6742e53877584d52e19a1e8058c27b6034758e3a35824823cecffef3266de38e",
+      "split": "train",
+      "temporal_bucket": "2026-08"
+    },
+    {
+      "artifact_id": "artifact-code-curriculum-f39ce0cd81ab7764d4d7318c67e76b9d5a400eec-6f7583b293ad-1bffc7f222b7dca0",
+      "component_family": "harness/evaluation",
+      "event_id": "code-curriculum-f39ce0cd81ab7764d4d7318c67e76b9d5a400eec",
+      "lineage_id": "git:beargallbladder/outcitedharness:file:harness/evaluation/base.py",
+      "repository_id": "beargallbladder/outcitedharness",
+      "source_file_sha256": "6b031a6596365b44310de4d0425652d25531861ecfeff505127b0d6a869d2357",
+      "source_revision": "6742e53877584d52e19a1e8058c27b6034758e3a35824823cecffef3266de38e",
+      "split": "validation",
+      "temporal_bucket": "2026-08"
+    }
+  ],
+  "schema": "harness.dataset.owned-code-curriculum.v1",
+  "source_events": [
+    {
+      "admission_id": "admission-code-curriculum-55d7c3da19757750c53fd6d7cc5d119336409cd8",
+      "admission_sha256": "28274b81ae49ceec3a63d383d3afab02b68e8d11505cb6e2f84f06fad47e3bd7",
+      "chosen_patch_sha256": "da8aef2a55d06bf7c49aca18000177cc9a034065d70f1579a7064bcdffc1bdd9",
+      "event_id": "code-curriculum-55d7c3da19757750c53fd6d7cc5d119336409cd8",
+      "event_sha256": "4ae1e14184470bac8ba94f577c68e12eade564da559481fdd52c9c603606fe8f"
+    },
+    {
+      "admission_id": "admission-code-curriculum-69a5aebf774bb7ba32a8eddc9b92c429226e7bc5",
+      "admission_sha256": "ec62d3de38577dc53fb0717615db94d8f58e95e46ab7a140401633e8d853a167",
+      "chosen_patch_sha256": "53d3e10398d183f94117b621989c1716d2f3f0d4ccf989a5e9edb6d645038533",
+      "event_id": "code-curriculum-69a5aebf774bb7ba32a8eddc9b92c429226e7bc5",
+      "event_sha256": "df882a8cdd55314ce9e448a99977a2e3d1602265b2de99f13f08d6550da3d4da"
+    },
+    {
+      "admission_id": "admission-code-curriculum-75341e353ec458957a96b39d3865eb46a6bc685a",
+      "admission_sha256": "fc2accfe0b2647382220a7fbc79c91ce89f9281e3701fd5a0349d86f860a60f4",
+      "chosen_patch_sha256": "35f8c8959532f6bed5b2655d84b3847312a347bc8a3595bf807be3fe7abcdb8f",
+      "event_id": "code-curriculum-75341e353ec458957a96b39d3865eb46a6bc685a",
+      "event_sha256": "a989078096e2918d9e8751a34ae243c460e7430643bdf766b097d7d5d303ff25"
+    },
+    {
+      "admission_id": "admission-code-curriculum-7a5e9c123bc9eb744c2a0207348650a9652bed0a",
+      "admission_sha256": "d60bc7a417faeada6a69bca13a52118b850d46d4639452fc4b338b8cacfa5dd8",
+      "chosen_patch_sha256": "83db41bbdadf46c08d8ae2efcbd24e7c61373e1d4fd73ec79bbeb8d52226eafc",
+      "event_id": "code-curriculum-7a5e9c123bc9eb744c2a0207348650a9652bed0a",
+      "event_sha256": "353dc9ef78c7a6ea800ac157212d12cc389c87b370638c7a22aaeea1c386b09d"
+    },
+    {
+      "admission_id": "admission-code-curriculum-99b41af31ca9dd8b503f9d77398edbc17e232c57",
+      "admission_sha256": "b4fc946ce18c627c24af5cd483c20f6c1acaedb6afb288a1d9cba1fa3fba2e85",
+      "chosen_patch_sha256": "c13ebc7b92e6b1475a261694298abad73b9f3d2c319eebf5f0818864f77a6b5c",
+      "event_id": "code-curriculum-99b41af31ca9dd8b503f9d77398edbc17e232c57",
+      "event_sha256": "7fd9694e8d2823b1edf622063a75c21ec04f64ef4a8ed2da1f636ebc54bcc05c"
+    },
+    {
+      "admission_id": "admission-code-curriculum-c2a35e5408b78b69fd382f295545d79af45d1fe0",
+      "admission_sha256": "8155c5d18f4b37fcbdbcfa5c1cff60587f117278a54dbf461842b56fc493055e",
+      "chosen_patch_sha256": "5015039c664d36b19cb60f4635b7687c833621e585fd7c55824b9ab3740b0060",
+      "event_id": "code-curriculum-c2a35e5408b78b69fd382f295545d79af45d1fe0",
+      "event_sha256": "a2000125636142541bb6c8ac89cdb6fad80420b3ee410d15769756848ee72ed9"
+    },
+    {
+      "admission_id": "admission-code-curriculum-ed4ec98a50391a3f23dc0c9b54c507a7a5b25db8",
+      "admission_sha256": "2bec06b0fa9270da4bd5f11700cdbd2518cd66a55b221b6d9a1fdad1eaad60e5",
+      "chosen_patch_sha256": "4a2360281645ac60d15ce03b8d212ac3517493dfcce77589583d2038229059f8",
+      "event_id": "code-curriculum-ed4ec98a50391a3f23dc0c9b54c507a7a5b25db8",
+      "event_sha256": "97d24c5f63415e6f5bbb593acd5794524b534bcf7f0608622cb859a6e7e183c1"
+    },
+    {
+      "admission_id": "admission-code-curriculum-f0d930be2d15994add7953f97330aa15b7eb3be3",
+      "admission_sha256": "b8628f146d768ece2a18e58aa74ca3fd0b91974830698bd52163e90fec3d8926",
+      "chosen_patch_sha256": "457ed8933ca37757064b139f49fa94f574f4d34ce8e127c18467d0dbfc16f884",
+      "event_id": "code-curriculum-f0d930be2d15994add7953f97330aa15b7eb3be3",
+      "event_sha256": "18e8efe15a614cf5988891b23841ee2c3e42ac9285edd0edf9224c5964693abf"
+    },
+    {
+      "admission_id": "admission-code-curriculum-f39ce0cd81ab7764d4d7318c67e76b9d5a400eec",
+      "admission_sha256": "484660140f3edb133467d181e0830cda21d41130c6cf57b2eada5692b41d44ab",
+      "chosen_patch_sha256": "1bffc7f222b7dca03382a9b73eaa7ebaf2f766ff34dde32f535b93f27edd6d2e",
+      "event_id": "code-curriculum-f39ce0cd81ab7764d4d7318c67e76b9d5a400eec",
+      "event_sha256": "a71c40c9f219db132e345d9771d2b76a7e2ac6d1409fb27db79d68619dfd50cd"
+    }
+  ],
+  "split_policy": {
+    "kind": "source_file_lineage_hash",
+    "leakage_keys": [
+      "lineage_id",
+      "source_document_sha256"
+    ],
+    "seed": "owned-code-curriculum-v1"
+  }
+}

@@ -1,0 +1,59 @@
+handlers:
+  - job_kind: production_failure_replay
+    argv:
+      - /home/samkim2/harness-training/scripts/run-production-replay
+    working_directory: /home/samkim2/harness-training
+    allowed_nodes:
+      - dgx2
+      - asus1
+    environment_allowlist: []
+    timeout_seconds: 3600
+
+  - job_kind: frozen_evaluation
+    argv:
+      - /home/samkim2/harness-training/scripts/run-frozen-evaluation
+    working_directory: /home/samkim2/harness-training
+    allowed_nodes:
+      - dgx2
+      - asus1
+    environment_allowlist: []
+    timeout_seconds: 14400
+
+  - job_kind: main_model_qlora
+    argv:
+      - /home/samkim2/harness-training/scripts/run-main-model-qlora
+    working_directory: /home/samkim2/harness-training
+    allowed_nodes:
+      - dgx2
+    environment_allowlist:
+      - HF_TOKEN
+    timeout_seconds: 604800
+
+  - job_kind: electronics_text
+    argv:
+      - /home/samkim2/harness-training/scripts/run-electronics-text
+    working_directory: /home/samkim2/harness-training
+    allowed_nodes:
+      - dgx2
+    environment_allowlist: []
+    timeout_seconds: 86400
+
+  - job_kind: electronics_vision
+    argv:
+      - /home/samkim2/harness-training/scripts/run-electronics-vision
+    working_directory: /home/samkim2/harness-training
+    allowed_nodes:
+      - dgx2
+      - asus1
+    environment_allowlist: []
+    timeout_seconds: 86400
+
+  - job_kind: specforge_draft
+    argv:
+      - /home/samkim2/harness-training/scripts/run-specforge-draft
+    working_directory: /home/samkim2/harness-training
+    allowed_nodes:
+      - dgx2
+      - asus1
+    environment_allowlist: []
+    timeout_seconds: 604800

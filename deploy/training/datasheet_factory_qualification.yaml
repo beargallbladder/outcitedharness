@@ -1,0 +1,31 @@
+schema: harness.electronics-factory-qualification-policy.v1
+
+purpose: local_training_pair_generation
+frontier_mode: anthropic_message_batches_only
+
+thresholds:
+  pin_identity_f1: 0.98
+  pin_semantic_macro_f1: 0.90
+  parametric_accuracy: 0.95
+  summary_claim_precision: 0.95
+  evidence_grounding_rate: 1.0
+  abstention_precision: 0.98
+  maximum_hallucination_rate: 0.01
+  minimum_utility_gain: 0.02
+  maximum_lane_regression: 0.01
+  minimum_paid_call_replacement_rate: 0.70
+  maximum_cost_per_admitted_pair_usd: 0.20
+
+required_receipts:
+  - frozen_family_and_document_holdout
+  - baseline_evaluation
+  - candidate_evaluation
+  - deterministic_reproduction
+  - frontier_batch_cost
+  - claim_verification
+  - immutable_cr_import_bundle
+
+promotion:
+  direct_database_write: false
+  require_all_gates: true
+  failure_action: reject_candidate_keep_evidence

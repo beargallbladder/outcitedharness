@@ -14,15 +14,14 @@ def test_repo_registry_preserves_auto_ladder():
     registry = load_registry(root)
     gateway = yaml.safe_load((root / "config" / "gateway.yaml").read_text())
     assert registry.failover_keys() == list(gateway["auto_ladder"])
-    assert registry.failover_keys() == ["dgx3_qwen", "m5_qwen", "frontier"]
+    assert registry.failover_keys() == ["asus2_qwen"]
 
 
-def test_primary_and_fallback_are_the_live_boxes():
+def test_primary_coder_and_g10_foreman_are_the_live_boxes():
     registry = load_registry(find_project_root())
     primary = registry.get("primary_coder")
-    fallback = registry.get("fallback_reasoner")
-    assert primary is not None and primary.enabled and primary.model_key == "dgx3_qwen"
-    assert fallback is not None and fallback.enabled and fallback.model_key == "m5_qwen"
+    assert primary is not None and primary.enabled and primary.model_key == "asus2_qwen"
+    assert registry.get("fallback_reasoner") is None
     assert "coding" in primary.capabilities
     assert "tool_calling" in primary.capabilities
     assert "long_context" in primary.capabilities
@@ -34,17 +33,14 @@ def test_primary_and_fallback_are_the_live_boxes():
     assert "asus_qwen" not in registry.failover_keys()
     dgx3 = registry.get("dgx3_coder")
     assert dgx3 is not None and not dgx3.enabled and dgx3.model_key == "dgx3_qwen"
-    assert "dgx3_qwen" in registry.failover_keys()
+    assert "dgx3_qwen" not in registry.failover_keys()
     pool = {w.id for w in registry.pool("coder")}
     assert pool == {"primary_coder"}
-    assert registry.get("fallback_reasoner") not in registry.pool("coder")
-    assert {w.id for w in registry.pool("foreman")} == {"fallback_reasoner", "asus2_foreman"}
-    assert [w.id for w in registry.pool("senior")] == ["frontier_senior"]
+    assert {w.id for w in registry.pool("foreman")} == {"asus2_foreman"}
+    assert registry.pool("senior") == []
     assert [w.id for w in registry.pool("critic")] == [
         "qwen38_critic",
         "researcher",
-        "glm_critic",
-        "nemotron_super_critic",
     ]
     researcher = registry.get("researcher")
     assert researcher is not None and researcher.enabled is True
@@ -53,7 +49,7 @@ def test_primary_and_fallback_are_the_live_boxes():
     peer = registry.get("asus2_foreman")
     assert peer is not None and peer.enabled is True and peer.role == "foreman"
     assert peer.model_key == "asus2_qwen"
-    assert "asus2_qwen" not in registry.failover_keys()
+    assert "asus2_qwen" in registry.failover_keys()
     embedder = registry.get("spark_embedder")
     assert embedder is not None and embedder.enabled and embedder.role == "embedder"
     assert embedder.model_key == "spark_embed"
@@ -62,6 +58,13 @@ def test_primary_and_fallback_are_the_live_boxes():
     assert [w.id for w in registry.pool("embedder")] == ["spark_embedder"]
     assert "spark_embed" not in registry.failover_keys()
     assert embedder not in registry.pool("coder")
+    vision = registry.get("dgx3_designwins_ocr")
+    assert vision is not None and vision.enabled is False
+    assert vision.role == "vision_extractor"
+    assert vision.model_key == "dgx3_designwins_ocr"
+    assert {"vision", "document_layout", "structured_extraction"} <= set(
+        vision.capabilities
+    )
 
 
 def test_future_workers_are_unavailable_not_missing():
@@ -151,7 +154,7 @@ def test_healthz_exposes_registry(tmp_path: Path):
         settings=Settings(results_dir=tmp_path / "results", db_path=tmp_path / "h.db"),
         models={
             "dgx_qwen": model("dgx_qwen", "openai_compatible", "http://192.168.4.38:8900/v1"),
-            "m5_qwen": model("m5_qwen", "openai_compatible", "http://127.0.0.1:8082/v1"),
+            "asus2_qwen": model("asus2_qwen", "openai_compatible", "http://100.68.133.1:8888/v1"),
             "frontier": model("frontier", "anthropic", "https://api.anthropic.com/v1"),
         },
         pricing={},
@@ -161,12 +164,12 @@ def test_healthz_exposes_registry(tmp_path: Path):
         listen_port=8787,
         api_key="harness-local",
         aliases={"harness-auto": "auto"},
-        auto_ladder=["dgx_qwen", "m5_qwen", "frontier"],
+        auto_ladder=["dgx_qwen", "asus2_qwen"],
         context_window=131072,
         max_output_tokens=8192,
     )
     body = TestClient(create_app(cfg, spec)).get("/healthz").json()
-    assert body["auto_ladder"] == ["dgx3_qwen", "m5_qwen", "frontier"]
+    assert body["auto_ladder"] == ["asus2_qwen"]
     by_id = {w["id"]: w for w in body["workers"]}
     assert by_id["primary_coder"]["status"] == "healthy"
     assert by_id["secondary"]["detail"] == "secondary unavailable"

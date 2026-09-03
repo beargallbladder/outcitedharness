@@ -1,0 +1,17 @@
+{
+  "checkpoint_format": "bf16_trainable",
+  "completed_gates": [
+    "adapter_only_save",
+    "model_load",
+    "optimizer_step",
+    "resume"
+  ],
+  "evidence_sha256": {
+    "adapter_only_save": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "model_load": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "optimizer_step": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+    "resume": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+  },
+  "target": "electronics_qwen3_8b",
+  "verified_examples": 1101
+}

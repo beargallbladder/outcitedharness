@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import hmac
 import time
 from collections.abc import AsyncIterator
 from typing import Any
@@ -32,6 +33,14 @@ def create_app(
     spec = spec or load_gateway_spec(cfg.root)
     registry = load_registry(cfg.root)
     store = Store(cfg.settings.db_path)
+    learning_ledger = None
+    if cfg.settings.learning_capture_enabled:
+        from harness.training.ledger import LearningLedger
+
+        learning_ledger = LearningLedger(
+            store,
+            cfg.settings.learning_artifact_root,
+        )
 
     async def healthz(request: Request) -> JSONResponse:
         chain = registry.failover_keys() or spec.auto_ladder
@@ -101,11 +110,25 @@ def create_app(
         stream = bool(body.get("stream"))
         if stream:
             return StreamingResponse(
-                _stream_orch(cfg, spec, store, requested, body),
+                _stream_orch(
+                    cfg,
+                    spec,
+                    store,
+                    requested,
+                    body,
+                    learning_ledger=learning_ledger,
+                ),
                 media_type="text/event-stream",
                 headers={"Cache-Control": "no-cache", "Connection": "keep-alive"},
             )
-        return await _complete_orch(cfg, spec, store, requested, body)
+        return await _complete_orch(
+            cfg,
+            spec,
+            store,
+            requested,
+            body,
+            learning_ledger=learning_ledger,
+        )
 
     return Starlette(
         routes=[
@@ -181,7 +204,9 @@ def _presented_keys(request: Request) -> list[str]:
 
 def _loopback(request: Request, spec: GatewaySpec) -> bool:
     peer = request.client.host if request.client else ""
-    return spec.listen_host in {"127.0.0.1", "localhost", "::1"} or peer in {"127.0.0.1", "::1", "localhost"}
+    if peer == "testclient":
+        return spec.listen_host in {"127.0.0.1", "::1", "localhost"}
+    return peer in {"127.0.0.1", "::1", "localhost"}
 
 
 def _fleet_visible(request: Request, spec: GatewaySpec) -> bool:
@@ -190,13 +215,27 @@ def _fleet_visible(request: Request, spec: GatewaySpec) -> bool:
 
 
 def _authorized(request: Request, spec: GatewaySpec) -> bool:
-    if not spec.api_key or _loopback(request, spec):
+    if _loopback(request, spec):
         return True
-    allowed = {spec.api_key, f"sk-{spec.api_key}"}
-    return any(token in allowed for token in _presented_keys(request))
+    if not spec.api_key:
+        return False
+    allowed = (spec.api_key, f"sk-{spec.api_key}")
+    return any(
+        hmac.compare_digest(token, candidate)
+        for token in _presented_keys(request)
+        for candidate in allowed
+    )
 
 
-async def _complete_orch(cfg, spec, store, requested, body):
+async def _complete_orch(
+    cfg,
+    spec,
+    store,
+    requested,
+    body,
+    *,
+    learning_ledger=None,
+):
     from harness.gateway.orch import (
         compact_thread,
         completion_body,
@@ -247,11 +286,21 @@ async def _complete_orch(cfg, spec, store, requested, body):
         cost=None,
         error=error,
         body=body,
+        response=data,
+        learning_ledger=learning_ledger,
     )
     return JSONResponse(data, status_code=status)
 
 
-async def _stream_orch(cfg, spec, store, requested, body):
+async def _stream_orch(
+    cfg,
+    spec,
+    store,
+    requested,
+    body,
+    *,
+    learning_ledger=None,
+):
     from harness.gateway.orch import compact_thread, last_user_text, run_orch, sse_chunk
     from harness.gateway.qwen_tools import synthesize_tool_call_sse
 
@@ -307,6 +356,8 @@ async def _stream_orch(cfg, spec, store, requested, body):
         cost=None,
         error=error,
         body=body,
+        response={"text": text, "tool_calls": result_calls},
+        learning_ledger=learning_ledger,
     )
 
 

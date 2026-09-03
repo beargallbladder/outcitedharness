@@ -1,0 +1,10 @@
+handlers:
+  - job_kind: electronics_designwins_v4
+    argv:
+      - /home/samkim2/harness-training/scripts/run_designwins_v4_training.py
+    working_directory: /home/samkim2/harness-training
+    allowed_nodes:
+      - dgx2
+    environment_allowlist:
+      - HARNESS_TRAINING_ROOT
+    timeout_seconds: 43200

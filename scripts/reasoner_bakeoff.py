@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Compare the production M5 foreman with the shadow TP=2 reasoner."""
+"""Compare the production Qwen TP2 foreman with the shadow reasoner."""
 
 from __future__ import annotations
 
@@ -14,7 +14,7 @@ from harness.providers.base import ChatMessage, ChatRequest, ChatResult
 from harness.providers.openai_compatible import OpenAICompatibleProvider
 
 
-MODEL_KEYS = ("m5_qwen", "deepseek_flash_tp2_shadow")
+MODEL_KEYS = ("asus2_qwen", "deepseek_flash_tp2_shadow")
 OUTPUT = Path("results/reasoner_bakeoff_20260828.json")
 
 REASONING_PROMPT = """\

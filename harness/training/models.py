@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import json
+import re
 from datetime import datetime, timezone
 from enum import Enum
 from typing import Annotated, Any, Literal
+from urllib.parse import unquote_plus
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -19,6 +22,56 @@ class SourceKind(str, Enum):
     GIT = "git"
     CATEGORYRANK = "categoryrank"
     OTHER = "other"
+
+
+_TAPES_MARKER = re.compile(r"(?<![a-z0-9])tapes(?![a-z0-9])")
+_CATEGORYRANK_MARKER = re.compile(r"\bcategory[\s_-]*rank\b")
+
+
+def is_excluded_learning_source(
+    source_kind: SourceKind,
+    source_uri: str,
+    metadata: Any = None,
+) -> bool:
+    if source_kind is SourceKind.CATEGORYRANK:
+        return True
+    material = source_uri
+    if metadata is not None:
+        material += "\n" + json.dumps(
+            metadata,
+            ensure_ascii=False,
+            sort_keys=True,
+            default=str,
+        )
+    normalized = unquote_plus(unquote_plus(material)).casefold()
+    return (
+        bool(_CATEGORYRANK_MARKER.search(normalized))
+        or bool(_TAPES_MARKER.search(normalized))
+    )
+
+
+OWNED_CODE_AUTHORIZATION_SCOPE = "owned_repository_cursor_shadow"
+
+
+def is_authorized_owned_code_learning(
+    source_kind: SourceKind,
+    authorization_scope: str,
+    metadata: Any,
+) -> bool:
+    """Narrow exception for user-owned source code, never product datasets."""
+
+    return (
+        source_kind is SourceKind.GIT
+        and authorization_scope == OWNED_CODE_AUTHORIZATION_SCOPE
+        and isinstance(metadata, dict)
+        and metadata.get("content_class") == "owned_source_code"
+        and metadata.get("owner_attested") is True
+        and metadata.get("data_paths_excluded") is True
+        and isinstance(metadata.get("repository_id"), str)
+        and bool(metadata["repository_id"].strip())
+        and isinstance(metadata.get("repository_policy_sha256"), str)
+        and bool(re.fullmatch(r"[0-9a-f]{64}", metadata["repository_policy_sha256"]))
+    )
 
 
 class DataUse(str, Enum):
@@ -232,4 +285,146 @@ class GitCandidate(StrictModel):
             raise ValueError("patch must be a unified git diff")
         assert_no_secrets(self.problem, field="problem")
         assert_no_secrets(self.patch, field="patch")
+        return self
+
+
+class LearningState(str, Enum):
+    CAPTURED = "captured"
+    REDACTED = "redacted"
+    REPLAYED = "replayed"
+    VERIFIED = "verified"
+    ELIGIBLE = "eligible"
+    ASSIGNED = "assigned"
+    TRAINED = "trained"
+    EVALUATED = "evaluated"
+    CANARY = "canary"
+    PROMOTED = "promoted"
+    REJECTED = "rejected"
+
+
+class LearningEvent(StrictModel):
+    """Immutable metadata for one authorized frontier-to-local learning event."""
+
+    event_id: Annotated[str, Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")]
+    event_type: NonEmpty
+    source_kind: SourceKind
+    source_uri: NonEmpty
+    lineage_id: NonEmpty
+    authorization_scope: NonEmpty
+    created_at: datetime
+    source_revision: str | None = None
+    task_id: str | None = None
+    state: Literal[LearningState.CAPTURED] = LearningState.CAPTURED
+    estimated_cost: Annotated[float | None, Field(ge=0)] = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("created_at")
+    @classmethod
+    def learning_timestamp_is_aware(cls, value: datetime) -> datetime:
+        if value.tzinfo is None or value.utcoffset() is None:
+            raise ValueError("created_at must include a timezone")
+        return value.astimezone(timezone.utc)
+
+    @model_validator(mode="after")
+    def enforce_capture_boundary(self) -> LearningEvent:
+        if "://" not in self.source_uri:
+            raise ValueError("source_uri must include a URI scheme")
+        excluded = is_excluded_learning_source(
+            self.source_kind,
+            self.source_uri,
+            self.metadata,
+        )
+        if excluded and not is_authorized_owned_code_learning(
+            self.source_kind,
+            self.authorization_scope,
+            self.metadata,
+        ):
+            raise ValueError("CategoryRank and Tapes capture is disabled")
+        if self.source_revision is not None and (
+            len(self.source_revision) not in {40, 64}
+            or any(char not in "0123456789abcdef" for char in self.source_revision)
+        ):
+            raise ValueError("source_revision must be a full lowercase commit hash")
+        assert_no_secrets(self.source_uri, field="learning source_uri")
+        assert_no_secrets(self.authorization_scope, field="authorization_scope")
+        assert_value_no_secrets(self.metadata, field="learning event metadata")
+        return self
+
+
+class LearningArtifact(StrictModel):
+    artifact_id: Annotated[str, Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]{0,191}$")]
+    event_id: NonEmpty
+    kind: NonEmpty
+    uri: Annotated[str, Field(pattern=r"^artifact://sha256/[0-9a-f]{64}$")]
+    sha256: Sha256
+    byte_size: Annotated[int, Field(ge=0)]
+    media_type: NonEmpty
+    redacted: bool
+    created_at: datetime
+
+    @field_validator("created_at")
+    @classmethod
+    def artifact_timestamp_is_aware(cls, value: datetime) -> datetime:
+        if value.tzinfo is None or value.utcoffset() is None:
+            raise ValueError("created_at must include a timezone")
+        return value.astimezone(timezone.utc)
+
+
+class LearningVerification(StrictModel):
+    verification_id: Annotated[
+        str, Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]{0,191}$")
+    ]
+    event_id: NonEmpty
+    kind: NonEmpty
+    status: Literal["pass", "fail", "unknown"]
+    verifier: NonEmpty
+    created_at: datetime
+    command: str | None = None
+    output_artifact_id: str | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("created_at")
+    @classmethod
+    def verification_timestamp_is_aware(cls, value: datetime) -> datetime:
+        if value.tzinfo is None or value.utcoffset() is None:
+            raise ValueError("created_at must include a timezone")
+        return value.astimezone(timezone.utc)
+
+    @model_validator(mode="after")
+    def require_verification_evidence(self) -> LearningVerification:
+        if self.status != "unknown" and self.output_artifact_id is None:
+            raise ValueError("known verification status requires an output artifact")
+        if self.command is not None:
+            assert_no_secrets(self.command, field="verification command")
+        assert_no_secrets(self.verifier, field="verifier")
+        assert_value_no_secrets(self.metadata, field="verification metadata")
+        return self
+
+
+class LearningAdmission(StrictModel):
+    admission_id: Annotated[
+        str, Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]{0,191}$")
+    ]
+    event_id: NonEmpty
+    verification_id: NonEmpty
+    decision: Literal["eligible", "rejected"]
+    policy_version: NonEmpty
+    reason: NonEmpty
+    source_revision: Annotated[
+        str, Field(pattern=r"^(?:[0-9a-f]{40}|[0-9a-f]{64})$")
+    ]
+    admission_sha256: Sha256
+    created_at: datetime
+
+    @field_validator("created_at")
+    @classmethod
+    def admission_timestamp_is_aware(cls, value: datetime) -> datetime:
+        if value.tzinfo is None or value.utcoffset() is None:
+            raise ValueError("created_at must include a timezone")
+        return value.astimezone(timezone.utc)
+
+    @model_validator(mode="after")
+    def scan_admission(self) -> LearningAdmission:
+        assert_no_secrets(self.policy_version, field="admission policy")
+        assert_no_secrets(self.reason, field="admission reason")
         return self

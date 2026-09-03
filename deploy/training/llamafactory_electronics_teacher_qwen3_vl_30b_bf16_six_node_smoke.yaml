@@ -1,0 +1,51 @@
+### Two-step six-node sanity gate for the pinned BF16 30B checkpoint.
+### This proves clean BF16 forward/backward and adapter serialization only.
+
+model_name_or_path: /training/models/Qwen3-VL-30B-A3B-Instruct-BF16
+trust_remote_code: true
+image_max_pixels: 1048576
+
+stage: sft
+do_train: true
+finetuning_type: lora
+lora_target: all
+lora_rank: 16
+lora_alpha: 32
+lora_dropout: 0.05
+freeze_vision_tower: false
+freeze_multi_modal_projector: false
+freeze_language_model: false
+
+dataset: electronics_sft_train
+dataset_dir: /training/datasets/datasheet-electronics-teacher-v5/llamafactory
+template: qwen3_vl_nothink
+cutoff_len: 8192
+max_samples: 14
+overwrite_cache: true
+preprocessing_num_workers: 1
+dataloader_num_workers: 1
+
+output_dir: /training/checkpoints/electronics-teacher-qwen3-vl-30b-bf16-six-node-smoke-v1
+logging_steps: 1
+save_steps: 2
+save_total_limit: 1
+plot_loss: true
+overwrite_output_dir: false
+save_only_model: false
+report_to: none
+
+per_device_train_batch_size: 1
+gradient_accumulation_steps: 1
+gradient_checkpointing: true
+gradient_checkpointing_kwargs:
+  use_reentrant: false
+learning_rate: 0.00002
+max_steps: 2
+lr_scheduler_type: cosine
+warmup_ratio: 0.0
+bf16: true
+seed: 1788172800
+data_seed: 1788172800
+disable_shuffling: true
+ddp_timeout: 180000000
+ddp_find_unused_parameters: false

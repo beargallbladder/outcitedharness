@@ -1,4 +1,5 @@
 .env
+config/learning-connectors.yaml
 .venv/
 .litellm-venv/
 __pycache__/
@@ -9,10 +10,8 @@ __pycache__/
 .ruff_cache/
 dist/
 build/
-results/*.db
-results/*.db-journal
-results/*.sqlite
-results/*.sqlite-journal
-results/runs/
-results/tasks/
+# Run artifacts are data, not code: 8+ GB of sealed extraction bundles,
+# page evidence, rendered images, and sqlite state. They are hash-sealed
+# on disk and backed up outside git.
+results/
 .DS_Store

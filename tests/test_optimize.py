@@ -17,7 +17,7 @@ from harness.storage.db import Store
 def _model(key: str) -> ModelConfig:
     return ModelConfig(
         key=key,
-        tier=0 if key != "m5_qwen" else 1,
+        tier=0,
         display_name=key,
         short_name=key,
         provider="openai_compatible",
@@ -27,6 +27,19 @@ def _model(key: str) -> ModelConfig:
 
 
 def _cfg(tmp_path: Path) -> AppConfig:
+    config_dir = tmp_path / "config"
+    config_dir.mkdir(exist_ok=True)
+    config_dir.joinpath("workers.yaml").write_text(
+        """
+workers:
+  foreman:
+    enabled: true
+    role: foreman
+    priority: 1
+    model_key: asus2_qwen
+    endpoint: http://127.0.0.1/asus2_qwen
+"""
+    )
     return AppConfig(
         root=tmp_path,
         settings=Settings(results_dir=tmp_path / "results", db_path=tmp_path / "h.db"),
@@ -35,7 +48,7 @@ def _cfg(tmp_path: Path) -> AppConfig:
             "dgx2_qwen": _model("dgx2_qwen"),
             "asus_qwen": _model("asus_qwen"),
             "dgx3_qwen": _model("dgx3_qwen"),
-            "m5_qwen": _model("m5_qwen"),
+            "asus2_qwen": _model("asus2_qwen"),
             "frontier": _model("frontier"),
         },
         pricing={},
@@ -93,7 +106,7 @@ async def test_run_optimize_mocked(tmp_path: Path, monkeypatch):
 
         async def chat(self, request):
             text = request.messages[-1].content
-            if self.model.key == "m5_qwen":
+            if self.model.key == "asus2_qwen":
                 if "Turn this into a worker packet" in text:
                     return ChatResult(
                         provider="openai_compatible",

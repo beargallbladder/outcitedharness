@@ -1,0 +1,43 @@
+### Pipeline qualification only. Promotion requires frozen coding evaluations.
+
+model_name_or_path: /training/models/Qwen3-8B
+trust_remote_code: true
+
+stage: sft
+do_train: true
+finetuning_type: lora
+lora_target: all
+lora_rank: 16
+lora_alpha: 32
+lora_dropout: 0.05
+
+dataset: coding_sft_train
+dataset_dir: /training/datasets/cursor-shadow-code-v1/llamafactory
+template: qwen3_nothink
+cutoff_len: 8192
+max_samples: 16
+overwrite_cache: true
+preprocessing_num_workers: 1
+dataloader_num_workers: 1
+
+output_dir: /training/checkpoints/cursor-shadow-code-qwen3-8b-smoke-v1
+logging_steps: 1
+save_steps: 8
+save_total_limit: 1
+plot_loss: true
+overwrite_output_dir: false
+save_only_model: false
+report_to: none
+
+per_device_train_batch_size: 1
+gradient_accumulation_steps: 1
+gradient_checkpointing: true
+learning_rate: 0.0001
+num_train_epochs: 1
+lr_scheduler_type: cosine
+warmup_ratio: 0.0
+bf16: true
+seed: 1788172800
+data_seed: 1788172800
+disable_shuffling: true
+ddp_timeout: 180000000

@@ -1,8 +1,8 @@
-# 27B is CONTROL. Monsters are on trial for a 3-Spark chair.
+# Local Qwen is CONTROL. Monsters are on trial for a 3-Spark chair.
 # PASS only. PARTIAL counts as a miss.
 
 control: dgx_qwen
-local_second: m5_qwen
+local_second: asus2_qwen
 challengers:
   - deepseek_flash
   - hy3

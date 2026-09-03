@@ -1,11 +1,11 @@
-### Qwen3-8B DesignWins text-extraction LoRA pilot.
-### Paths are the authoritative DGX2 training root.
+### REJECTED: v3 truncates train responses at cutoff 4096.
+### Kept only as historical evidence. This recipe must never launch again.
 
 model_name_or_path: /training/models/Qwen3-8B
 trust_remote_code: true
 
 stage: sft
-do_train: true
+do_train: false
 finetuning_type: lora
 lora_target: all
 

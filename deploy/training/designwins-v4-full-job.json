@@ -1,0 +1,8 @@
+{
+  "dataset_artifact_manifest_relative": "manifests/designwins-v4-20260831.artifact.sha256.json",
+  "dataset_relative": "datasets/designwins-v4-20260831",
+  "image": "sha256:728b352622d569b1343cb384dd8aa394917203d02631322b02d302d068e38139",
+  "output_relative": "checkpoints/designwins-text-qwen3-8b-v4-full-20260831",
+  "recipe_relative": "configs/llamafactory_designwins_text_v4_full.yaml",
+  "sequence_audit_relative": "manifests/designwins-v4-20260831.sequence-audit.json"
+}

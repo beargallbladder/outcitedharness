@@ -66,7 +66,7 @@ def test_harness_override_replaces_inference_and_sets_timeout(tmp_path: Path):
     (tmp_path / ".harness.toml").write_text(
         """
 [verification]
-required = ["unit", "lint"]
+required = ["unit", "lint", "script"]
 
 [verification.commands.unit]
 argv = [".venv/bin/pytest", "-q"]
@@ -75,6 +75,9 @@ timeout = 90
 [verification.commands.lint]
 argv = ["python", "-m", "ruff", "check", "."]
 timeout = 30
+
+[verification.commands.script]
+argv = ["python3", "tests/shadow/contract.py"]
 
 [verification.commands.unsafe]
 argv = ["bash", "-c", "rm -rf /"]
@@ -87,6 +90,7 @@ argv = ["bash", "-c", "rm -rf /"]
     assert [(item.name, item.command, item.timeout_s) for item in contract.commands] == [
         ("unit", ".venv/bin/pytest -q", 90),
         ("lint", "python -m ruff check .", 30),
+        ("script", "python3 tests/shadow/contract.py", 60),
     ]
     assert all(item.source == ".harness.toml" for item in contract.commands)
 

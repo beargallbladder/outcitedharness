@@ -5,8 +5,8 @@ default_timeout_s: 180
 tournament_parallel: true
 max_answer_preview_chars: 800
 local_revision_attempts: 1
-auto_frontier_rescue: true
-max_frontier_calls_per_task: 1
+auto_frontier_rescue: false
+max_frontier_calls_per_task: 0
 frontier_model_key: frontier
 frontier_max_input_chars: 20000
 frontier_max_output_tokens: 2048
@@ -31,6 +31,8 @@ gci_refresh:
   jitter_seconds: 0
   state_path: ~/.harness/gci-refresh.sqlite
 greenfield_runs_root: ~/.harness/runs
+learning_capture_enabled: false
+learning_artifact_root: results/learning-artifacts
 system_prompt: |
   You are completing a benchmark task.
   Follow the instructions exactly.

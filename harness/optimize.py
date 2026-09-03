@@ -21,7 +21,6 @@ from harness.task.service import TaskService
 
 from harness.workers.registry import load_registry
 
-FOREMAN_KEY = "m5_qwen"
 SENIOR_KEY = "frontier"
 
 WORKER_TOOLS = [
@@ -195,6 +194,15 @@ def parse_ranks(text: str, keys: list[str]) -> tuple[str | None, dict[str, int],
     return winner_s, ranks, str(data.get("reason") or "")[:400]
 
 
+def _configured_foreman(cfg: AppConfig) -> ModelConfig | None:
+    for worker in load_registry(cfg.root).pool("foreman"):
+        if worker.model_key:
+            model = cfg.models.get(worker.model_key)
+            if model is not None and model.enabled:
+                return model
+    return None
+
+
 async def _foreman_rank(
     foreman: ModelConfig, case: OptimizeCase, shots: list[WorkerShot]
 ) -> tuple[str | None, dict[str, int], str]:
@@ -289,9 +297,9 @@ async def run_optimize(
     if not cases:
         raise ValueError("no fleet_optimize cases")
 
-    foreman = cfg.models.get(FOREMAN_KEY) if use_foreman else None
+    foreman = _configured_foreman(cfg) if use_foreman else None
     if use_foreman and (foreman is None or not foreman.enabled):
-        raise ValueError("foreman m5_qwen is not enabled")
+        raise ValueError("no enabled foreman worker is configured")
     senior = cfg.models.get(SENIOR_KEY) if use_senior else None
     if use_senior and (senior is None or not senior.enabled):
         raise ValueError("senior frontier is not enabled")

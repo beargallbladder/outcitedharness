@@ -20,7 +20,7 @@ MODEL_KEYS = tuple(
     key.strip()
     for key in os.environ.get(
         "CRITIC_BAKEOFF_MODEL_KEYS",
-        "asus3_nemotron,glm52,nemotron_super,m5_qwen,asus2_qwen,frontier",
+        "asus3_nemotron,glm52,nemotron_super,asus2_qwen,frontier",
     ).split(",")
     if key.strip()
 )

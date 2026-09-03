@@ -1,0 +1,93 @@
+{
+  "schema": "harness.electronics-factory-supervisor.v1",
+  "poll_seconds": 300,
+  "state_root": "results/datasheet-factory-control-v1",
+  "dynamic_run_directories": [
+    "results/datasheet-factory-control-v1/frontier-run-configs",
+    "results/cr-datasheet-vision-586-factory-state-v1-20260902/frontier-run-configs",
+    "results/datasheet-ti-power-intake-v1-20260902/frontier-run-configs",
+    "results/datasheet-hash-cache-intake-v1-20260902/frontier-run-configs"
+  ],
+  "runs": [
+    {
+      "run_id": "semantic-v6-fast-20260901",
+      "prepared_bundle": "results/datasheet-structural-frontier-batch-semantic-v6-fast-20260901",
+      "submission_state": "results/datasheet-structural-frontier-submit-semantic-v6-fast-20260901",
+      "lifecycle_root": "results/datasheet-frontier-lifecycle-semantic-v6-fast-20260901",
+      "work_queues": [
+        "results/datasheet-structural-local-work-v8-20260901.json"
+      ],
+      "page_evidence": "results/datasheet-page-evidence-20260901",
+      "pillar_evidence": "results/datasheet-six-node-local-semantic-v6-fast-20260901/frontier-candidates/pillar-evidence.jsonl",
+      "corpus_registry": "results/datasheet-corpus-registry-20260901.json",
+      "ground_truth_root": "/Volumes/M5_4TB/DigiKey_Reference_Designs/claude_ground_truth",
+      "local_results": [
+        "results/datasheet-six-node-local-semantic-v6-fast-20260901/frontier-candidates/local-results.jsonl"
+      ],
+      "input_price_per_million": 3.0,
+      "output_price_per_million": 15.0,
+      "batch_discount": 0.5,
+      "minimum_sft_pairs": 1,
+      "minimum_dpo_pairs": 1,
+      "training_ready_output": "results/datasheet-training-ready-semantic-v6-fast-20260901.json",
+      "api_key_env": "ANTHROPIC_API_KEY",
+      "timeout_seconds": 900
+    },
+    {
+      "run_id": "semantic-v6-supplement-20260901",
+      "prepared_bundle": "results/datasheet-structural-frontier-batch-semantic-v6-supplement-20260901",
+      "submission_state": "results/datasheet-structural-frontier-submit-semantic-v6-supplement-20260901",
+      "lifecycle_root": "results/datasheet-frontier-lifecycle-semantic-v6-supplement-20260901",
+      "work_queues": [
+        "results/datasheet-structural-local-work-v14-pin-semantic-supplement-20260901.json"
+      ],
+      "page_evidence": "results/datasheet-page-evidence-20260901",
+      "pillar_evidence": "results/datasheet-six-node-local-semantic-v6-supplement-20260901/frontier-candidates/pillar-evidence.jsonl",
+      "corpus_registry": "results/datasheet-corpus-registry-20260901.json",
+      "ground_truth_root": "/Volumes/M5_4TB/DigiKey_Reference_Designs/claude_ground_truth",
+      "local_results": [
+        "results/datasheet-six-node-local-semantic-v6-supplement-20260901/frontier-candidates/local-results.jsonl"
+      ],
+      "input_price_per_million": 3.0,
+      "output_price_per_million": 15.0,
+      "batch_discount": 0.5,
+      "minimum_sft_pairs": 1,
+      "minimum_dpo_pairs": 1,
+      "training_ready_output": "results/datasheet-training-ready-semantic-v6-supplement-20260901.json",
+      "api_key_env": "ANTHROPIC_API_KEY",
+      "timeout_seconds": 900
+    }
+  ],
+  "disabled_handoff": {
+    "run_ids": [
+      "semantic-v6-fast-20260901",
+      "semantic-v6-supplement-20260901"
+    ],
+    "static_bundles": [
+      "results/datasheet-parametric-frontier-training-pairs-v19-0000-0199-20260901"
+    ],
+    "frozen_cohorts": [
+      "results/datasheet-extraction-frozen-cohort-v6-20260901",
+      "results/datasheet-parametric-frozen-cohort-v2-20260901"
+    ],
+    "dataset_directory": "results/datasheet-electronics-teacher-v6-20260902",
+    "handoff_directory": "results/electronics-30b-training-handoff-v6-20260902",
+    "candidate_id": "electronics-teacher-qwen3-vl-30b-bf16-v6",
+    "validation_fraction": 0.2,
+    "split_seed": "electronics-teacher-v6-20260902",
+    "minimum_sft_pairs": 256,
+    "minimum_dpo_pairs": 192,
+    "minimum_lineages": 100,
+    "minimum_sft_capabilities": {
+      "parametrics": 100,
+      "pin_semantics": 128
+    },
+    "minimum_dpo_capabilities": {
+      "parametrics": 100,
+      "pin_semantics": 128
+    },
+    "sft_epochs": 3,
+    "dpo_epochs": 2
+  },
+  "evidence_sha256": "abe64e7f8892632a9ba0f841c0393c7aa011fbb49fd3d5b86eb6fa0128a21a69"
+}

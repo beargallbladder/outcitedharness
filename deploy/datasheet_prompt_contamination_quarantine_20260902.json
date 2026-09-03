@@ -1,0 +1,46 @@
+{
+  "schema": "harness.electronics-prompt-contamination-quarantine.v1",
+  "created_at": "2026-09-02T09:02:00Z",
+  "reason": "Model prompts contained PDF-extracted table text. Pin and ball extraction must use TOC-located rendered page images; extracted table text is not authoritative model input.",
+  "decision": {
+    "allow_training": false,
+    "allow_shipping": false,
+    "allow_evaluation_baseline": false,
+    "retain_for_forensics": true
+  },
+  "frontier_runs": [
+    {
+      "run_id": "semantic-v6-fast-20260901",
+      "batch_id": "msgbatch_01ACToxZVq87ovnTjPiUtfsW",
+      "action": "cancel_requested"
+    },
+    {
+      "run_id": "semantic-v6-supplement-20260901",
+      "batch_id": "msgbatch_018MSKfChNrSyUL66sb2qost",
+      "action": "cancel_requested"
+    }
+  ],
+  "local_outputs": [
+    "results/datasheet-six-node-local-semantic-v6-fast-20260901",
+    "results/datasheet-six-node-local-semantic-v6-supplement-20260901",
+    "results/datasheet-six-node-local-semantic-v7-expanded-20260902",
+    "results/datasheet-ti-power-factory-v1-20260902/local-chunks",
+    "results/datasheet-hash-cache-factory-v1-20260902/local-chunks"
+  ],
+  "superseded_queue_sha256": [
+    "32500a68d3c5ccb7c452a60fb1894fcc5aa7e7d056053135541de05b778966dd"
+  ],
+  "replacement_contract": {
+    "locator": "toc_definition_table",
+    "package_header_gate": true,
+    "page_image_only_model_input": true,
+    "page_chunk_size": 3,
+    "render_dpi": 120,
+    "teacher_model": "claude-sonnet-5",
+    "completion_gate": "unique_physical_ids == exact_package_pin_count",
+    "identity": "manifest_or_filename_exact_opn",
+    "density_fallback": false,
+    "row_cap": null
+  },
+  "evidence_sha256": "6f5e70ed41273c9f04e06dd096b9202f63eb0525f3e557c1a894b343ea6d9060"
+}

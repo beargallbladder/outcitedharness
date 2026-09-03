@@ -1,0 +1,7 @@
+#!/bin/sh
+set -eu
+
+PYTHON="${HARNESS_SHADOW_PYTHON:-$HOME/.harness/shadow/venv/bin/python}"
+HOOK_DIR=$(CDPATH= cd "$(dirname "$0")" && /bin/pwd -P)
+REPOSITORY_ROOT=$(CDPATH= cd "$HOOK_DIR/../.." && /bin/pwd -P)
+exec "$PYTHON" -m harness.shadow hook "$1" --repository-root "$REPOSITORY_ROOT"
