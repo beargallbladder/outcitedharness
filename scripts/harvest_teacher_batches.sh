@@ -20,7 +20,9 @@ RUNS=(
 
 all_ended() {
   local sd="$1" tmp
-  tmp="$(mktemp)"
+  # The batch CLI refuses to overwrite existing files, and mktemp creates
+  # the file it names; ask for an unused name instead.
+  tmp="$(mktemp -u)"
   uv run --python 3.11 python "$ROOT/scripts/datasheet_frontier_batch.py" \
     status --state-directory "$ROOT/$sd" --output "$tmp" >/dev/null 2>&1 || {
     rm -f "$tmp"
