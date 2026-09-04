@@ -30,6 +30,7 @@ from harness.electronics.ground_truth import (
 )
 from harness.electronics.local_verification import (
     grounded_pin_rows,
+    parametric_fact_identity,
     quoted_parametric_evidence,
     verify_opn_decoder,
     verify_parametrics,
@@ -472,7 +473,11 @@ def main() -> int:
         elif capability == "parametrics":
             raw_facts = outcome["response"].get("facts")
             grounded_facts = []
-            grounded_fact_hashes = set()
+            # Dedup key must match the aggregate duplicate gate inside
+            # verify_parametrics exactly; hashing raw JSON let normalized
+            # twins (case or numeric-type variants of one printed fact)
+            # through, and the aggregate re-check then failed the whole page.
+            grounded_identities = set()
             if isinstance(raw_facts, list):
                 counts["parametric_facts:seen"] += len(raw_facts)
                 for fact in raw_facts:
@@ -480,15 +485,17 @@ def main() -> int:
                         {"result": {"facts": [fact]}},
                         page,
                     )
-                    fact_hash = hashlib.sha256(
-                        canonical_json(fact)
-                    ).hexdigest()
+                    identity = (
+                        parametric_fact_identity(fact)
+                        if fact_verdict.passed
+                        else None
+                    )
                     if (
                         fact_verdict.passed
-                        and fact_hash not in grounded_fact_hashes
+                        and identity not in grounded_identities
                     ):
                         grounded_facts.append(fact)
-                        grounded_fact_hashes.add(fact_hash)
+                        grounded_identities.add(identity)
                     else:
                         counts["parametric_facts:quarantined"] += 1
             counts["parametric_facts:admitted"] += len(grounded_facts)

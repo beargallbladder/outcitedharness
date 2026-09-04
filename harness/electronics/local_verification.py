@@ -814,6 +814,29 @@ def verify_pin_semantics(
     )
 
 
+def parametric_fact_identity(fact: Mapping[str, Any]) -> tuple:
+    """Normalized identity used for duplicate detection.
+
+    Any deduplication done before calling verify_parametrics must use this
+    exact identity; deduplicating on raw JSON lets normalized twins (case or
+    numeric-type variants of the same printed fact) through, and the
+    aggregate duplicate gate then rejects the whole set.
+    """
+
+    return (
+        _normalized(fact["field"]),
+        _normalized(fact["value"]),
+        _normalized(fact.get("value_role")),
+        _normalized(fact.get("unit")),
+        tuple(
+            sorted(
+                _normalized(value)
+                for value in _leaf_values(fact.get("conditions"))
+            )
+        ),
+    )
+
+
 def verify_parametrics(
     result: Mapping[str, Any],
     page: Mapping[str, Any],
@@ -882,21 +905,7 @@ def verify_parametrics(
         in {"-", "—", "–", "na", "n/a"}
         for fact in facts
     )
-    identities = [
-        (
-            _normalized(fact["field"]),
-            _normalized(fact["value"]),
-            _normalized(fact.get("value_role")),
-            _normalized(fact.get("unit")),
-            tuple(
-                sorted(
-                    _normalized(value)
-                    for value in _leaf_values(fact.get("conditions"))
-                )
-            ),
-        )
-        for fact in facts
-    ]
+    identities = [parametric_fact_identity(fact) for fact in facts]
     duplicate_facts = len(identities) - len(set(identities))
     row_grounded = 0
     role_grounded = 0
