@@ -7,6 +7,7 @@ import argparse
 import hashlib
 import json
 import os
+import re
 import shutil
 import tempfile
 from collections import Counter
@@ -41,7 +42,38 @@ def _parser() -> argparse.ArgumentParser:
         type=int,
         help="Bounded smoke run; omitted means the full unique corpus.",
     )
+    parser.add_argument(
+        "--supplemental-bindings",
+        type=Path,
+        help=(
+            "Optional JSONL of {document_sha256, package} rows minted from "
+            "verified upstream extraction (for example ordering-page OPN "
+            "decodes). Expected pin counts derive from digits printed in "
+            "the package name itself; rows without digits are ignored. "
+            "Every downstream locator gate still applies unchanged."
+        ),
+    )
     return parser
+
+
+def _supplemental_requests(
+    path: Path | None,
+) -> dict[str, set[tuple[str, int]]]:
+    if path is None:
+        return {}
+    requests: dict[str, set[tuple[str, int]]] = {}
+    for line in path.read_text(encoding="utf-8").splitlines():
+        if not line.strip():
+            continue
+        row = json.loads(line)
+        package = str(row.get("package") or "").strip()
+        digest = str(row.get("document_sha256") or "").strip()
+        # Pin count is the trailing digit run in the package name itself
+        # (LQFP100 -> 100); no word boundary exists inside such tokens.
+        matches = [int(item) for item in re.findall(r"(\d{2,4})", package)]
+        if package and digest and matches:
+            requests.setdefault(digest, set()).add((package, matches[-1]))
+    return requests
 
 
 def _ground_truth_values(
@@ -107,6 +139,7 @@ def main() -> int:
     registry_path = args.corpus_registry.expanduser().resolve(strict=True)
     registry = json.loads(registry_path.read_text(encoding="utf-8"))
     verify_corpus_registry(registry)
+    supplemental = _supplemental_requests(args.supplemental_bindings)
     pdf_root = Path(registry["sources"]["pdf_root"]).resolve()
     documents = list(registry["documents"])
     if args.maximum_documents is not None:
@@ -121,9 +154,13 @@ def main() -> int:
         path = (pdf_root / paths[0]).resolve()
         if not path.is_relative_to(pdf_root):
             raise ValueError("PDF path escapes configured root")
-        requests = package_requests_from_ground_truth(
-            _ground_truth_values(registry, document)
+        merged = set(
+            package_requests_from_ground_truth(
+                _ground_truth_values(registry, document)
+            )
         )
+        merged.update(supplemental.get(document["document_sha256"], set()))
+        requests = tuple(sorted(merged))
         tasks.append(
             (
                 document["document_sha256"],
