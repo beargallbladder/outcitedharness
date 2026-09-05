@@ -1,11 +1,29 @@
-"""Merge a LoRA adapter into base shards, one shard at a time, fail-closed."""
+"""Merge a LoRA adapter into base shards, one shard at a time, fail-closed.
+
+Runs inside the pinned vLLM image's Python environment so the result is
+guaranteed loadable by the production serving stack. Paths come from the
+environment so continual rounds can merge onto a previously merged base:
+
+    MERGE_BASE     base model directory (default: pristine BF16 base)
+    MERGE_ADAPTER  LoRA adapter directory
+    MERGE_OUT      output directory (must not already contain shards)
+"""
 import json, os, shutil, sys
 import torch
 from safetensors.torch import load_file, save_file
 
-BASE = "/training/models/Qwen3-VL-30B-A3B-Instruct-BF16"
-ADAPTER = "/training/checkpoints/electronics-30b-pin-gate-v1-20260904-sft"
-OUT = "/training/models/Qwen3-VL-30B-PinGate-SFT-457-Merged"
+BASE = os.environ.get(
+    "MERGE_BASE", "/training/models/Qwen3-VL-30B-A3B-Instruct-BF16"
+)
+ADAPTER = os.environ.get(
+    "MERGE_ADAPTER",
+    "/training/checkpoints/electronics-30b-pin-gate-v1-20260904-sft",
+)
+OUT = os.environ.get(
+    "MERGE_OUT", "/training/models/Qwen3-VL-30B-PinGate-SFT-457-Merged"
+)
+if os.path.isdir(OUT) and os.listdir(OUT):
+    raise SystemExit(f"merge output already populated: {OUT}")
 
 cfg = json.load(open(f"{ADAPTER}/adapter_config.json"))
 scaling = cfg["lora_alpha"] / cfg["r"]
@@ -55,4 +73,4 @@ if applied != len(targets):
 for f in os.listdir(BASE):
     if not f.endswith(".safetensors"):
         shutil.copy2(f"{BASE}/{f}", f"{OUT}/{f}")
-print(f"MERGE457_OK applied={applied} scaling={scaling}")
+print(f"MERGE_OK out={OUT} applied={applied} scaling={scaling}")
