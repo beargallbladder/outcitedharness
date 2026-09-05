@@ -12,6 +12,30 @@ from harness.electronics.locator import locate_pin_definition_pages
 
 
 PAGE_INDEX_SCHEMA = "harness.electronics-page-index.v1"
+# Longer tokens first so \b alternation prefers UFBGA over BGA, WSON over SON.
+_PACKAGE_FAMILY = re.compile(
+    r"\b(UFQFPN|VFQFPN|HTSSOP|DSBGA|WLCSP|UFBGA|TFBGA|LFBGA|VFBGA|NFBGA|"
+    r"HSOIC|TSSOP|VSSOP|LQFP|TQFP|VQFN|UQFN|WQFN|SSOP|MSOP|SOIC|PDIP|SDIP|"
+    r"WSON|VSON|QFP|QFN|BGA|LGA|SOT|SON)\b"
+)
+_PACKAGE_SCAN_PAGES = 30
+
+
+def _printed_package_families(document: Any) -> set[str]:
+    """Distinct uppercase package family tokens printed in the front matter.
+
+    Used to decide whether a document plausibly ships a single package
+    variant. Multi-package MCU datasheets (for example LQFP plus QFN) print
+    several family names; attesting single-package from a lone pin-count
+    binding alone sent wrong-package pages to the teacher in the mcupin4
+    run and wasted most of that batch.
+    """
+
+    families: set[str] = set()
+    for page_number in range(min(int(document.page_count), _PACKAGE_SCAN_PAGES)):
+        for match in _PACKAGE_FAMILY.finditer(document[page_number].get_text()):
+            families.add(match.group(1))
+    return families
 LANE_PATTERNS: dict[str, tuple[re.Pattern[str], ...]] = {
     "pin_or_ball": (
         re.compile(r"\bPIN(?:OUT|OUTS)?\b", re.IGNORECASE),
@@ -164,8 +188,17 @@ def index_document(
         if request[0] and request[1] >= 1 and request not in unique_requests:
             unique_requests.append(request)
     # The borderless-table relaxation needs no package-column projection, so
-    # it is only safe when the document binds exactly one package request.
-    single_package = len(unique_requests) == 1
+    # it is only safe when the document binds exactly one package request AND
+    # its printed front matter names at most one package family, matching the
+    # request. A lone binding is a weak proxy on multi-package documents.
+    single_package = False
+    if len(unique_requests) == 1:
+        requested_family = re.sub(
+            r"[-\s]?\d+$", "", unique_requests[0][0].upper()
+        )
+        single_package = bool(requested_family) and _printed_package_families(
+            document
+        ) <= {requested_family}
     for request in unique_requests:
         result = locate_pin_definition_pages(
             document,
