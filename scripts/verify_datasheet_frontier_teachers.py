@@ -46,6 +46,7 @@ from harness.electronics.models import (
     EvidenceKind,
     EvidenceReference,
     ModelIdentity,
+    is_valid_claim_json,
 )
 from harness.electronics.regions import structural_pin_regions
 
@@ -481,6 +482,12 @@ def main() -> int:
             if isinstance(raw_facts, list):
                 counts["parametric_facts:seen"] += len(raw_facts)
                 for fact in raw_facts:
+                    # Claim-contract JSON gate first: a fact with, say, an
+                    # empty conditions key can pass grounding but would abort
+                    # the whole run when minted into a FactClaim.
+                    if not is_valid_claim_json(fact):
+                        counts["parametric_facts:quarantined"] += 1
+                        continue
                     fact_verdict = verify_parametrics(
                         {"result": {"facts": [fact]}},
                         page,
@@ -786,7 +793,11 @@ def main() -> int:
                 status="passed" if passed else "quarantined",
                 verifier="source_evidence_rule",
                 checks=tuple(verification_core["checks"]),
-                claim_ids=tuple(claim_ids),
+                # A datasheet can print the same summary line twice (for
+                # example one bullet repeated under USART and UART); both
+                # mint the identical content-addressed claim, and the
+                # verification references it once.
+                claim_ids=tuple(dict.fromkeys(claim_ids)),
                 evidence_sha256=tuple(verification_core["evidence_sha256"]),
                 verified_response=verified_response,
                 verified_response_sha256=verification_core[
@@ -801,9 +812,19 @@ def main() -> int:
         args.verifications_output,
         verifications,
     )
+    # Claim IDs are content-derived, so two overlapping work items that
+    # ground the identical fact with identical evidence mint the same
+    # claim. The bundle stores each claim once; verification records keep
+    # referencing the shared claim_id.
+    unique_claims = list(
+        {claim.claim_id: claim for claim in claims}.values()
+    )
+    counts["claims:duplicate_identity_merged"] = len(claims) - len(
+        unique_claims
+    )
     claims_manifest = seal_claim_bundle(
         args.claims_output,
-        claims,
+        unique_claims,
         source_receipts={
             "prepared_evidence_sha256": manifest["evidence_sha256"],
             "reconciliation_evidence_sha256": reconciliation[
@@ -816,7 +837,7 @@ def main() -> int:
     summary = {
         "counts": {
             **dict(sorted(counts.items())),
-            "claims": len(claims),
+            "claims": len(unique_claims),
             "verifications": len(verifications),
         },
         "verifications": verification_receipt,

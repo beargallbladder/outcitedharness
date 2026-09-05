@@ -106,6 +106,22 @@ def _validate_json_value(value: Any, *, field: str) -> Any:
     return value
 
 
+def is_valid_claim_json(value: Any) -> bool:
+    """True when value satisfies the claim contract's JSON rules.
+
+    Teacher output is untrusted; anything destined for a claim value or
+    conditions map must pass this before admission so a single malformed
+    fact (for example an empty object key) is quarantined instead of
+    aborting a whole verification run at claim-minting time.
+    """
+
+    try:
+        _validate_json_value(value, field="value")
+    except ValueError:
+        return False
+    return True
+
+
 class SourceDocument(StrictModel):
     schema_name: Literal["harness.electronics-source-document.v1"] = Field(
         default="harness.electronics-source-document.v1",
