@@ -412,13 +412,18 @@ def main() -> int:
             temporary_image = images / image_name
             package_scope = item["structural_evidence"].get("package_scope")
             if item["capability"] in {"pin_or_ball", "pin_semantics"}:
+                # An exact package identity and expected pin count are always
+                # required. The column header may be absent only for the
+                # single-package borderless-table locator path, where there is
+                # no per-package column to project; the extracted_n ==
+                # package_n gate still applies at verification.
                 if (
                     not package_scope
-                    or not package_scope.get("column_header")
+                    or not package_scope.get("package")
                     or package_scope.get("expected_package_pins") is None
                 ):
                     raise ValueError(
-                        "pin vision requires an exact package column and count"
+                        "pin vision requires an exact package and count"
                     )
                 rendering = render_full_page(
                     source_path,

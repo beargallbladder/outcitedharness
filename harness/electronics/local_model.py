@@ -382,12 +382,22 @@ def local_prompt(
     }[capability]
     scope_rule = ""
     if isinstance(package_scope, Mapping):
-        scope_rule = (
-            "Extract only package "
-            f"{package_scope.get('package')!r} using table column "
-            f"{package_scope.get('column_header')!r}. Ignore every other "
-            "package column. "
-        )
+        if package_scope.get("column_header"):
+            scope_rule = (
+                "Extract only package "
+                f"{package_scope.get('package')!r} using table column "
+                f"{package_scope.get('column_header')!r}. Ignore every other "
+                "package column. "
+            )
+        else:
+            # Single-package documents (borderless-table locator path) have
+            # no per-package column to project; the whole printed pin table
+            # belongs to the one bound package.
+            scope_rule = (
+                "This document ships one package variant, "
+                f"{package_scope.get('package')!r}. Extract the full printed "
+                "pin table for it. "
+            )
     source_instruction = (
         f"Extracted page evidence:\n{encoded}"
         if include_page_evidence

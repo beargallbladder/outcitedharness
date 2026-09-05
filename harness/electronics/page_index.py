@@ -158,18 +158,22 @@ def index_document(
         for lane in entry["lanes"]:
             pages[lane].add(int(entry["page_1based"]))
     exact: list[dict[str, Any]] = []
-    seen_requests: set[tuple[str, int]] = set()
+    unique_requests: list[tuple[str, int]] = []
     for package, expected_pins in package_requests:
         request = (str(package).strip(), int(expected_pins))
-        if not request[0] or request[1] < 1 or request in seen_requests:
-            continue
-        seen_requests.add(request)
+        if request[0] and request[1] >= 1 and request not in unique_requests:
+            unique_requests.append(request)
+    # The borderless-table relaxation needs no package-column projection, so
+    # it is only safe when the document binds exactly one package request.
+    single_package = len(unique_requests) == 1
+    for request in unique_requests:
         result = locate_pin_definition_pages(
             document,
             document_id=document_sha256,
             requested_package=request[0],
             expected_package_pins=request[1],
             source_path=str(source_path),
+            text_section_single_package=single_package,
         )
         exact.append(
             {

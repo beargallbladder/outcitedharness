@@ -430,6 +430,7 @@ def locate_pin_definition_pages(
     requested_package: str,
     expected_package_pins: int,
     source_path: str,
+    text_section_single_package: bool = False,
 ) -> LocateResult:
     if not document_id or not requested_package or expected_package_pins < 1:
         raise ValueError("invalid locator request")
@@ -470,6 +471,31 @@ def locate_pin_definition_pages(
 
     pages = _consecutive_definition_pages(document, start_page, final_page)
     if not pages:
+        # Analog/power vendors (notably TI) print pin-function tables without
+        # ruling lines, so find_tables() sees nothing even though the TOC has
+        # located the section. When the caller attests the document binds
+        # exactly one package (so no column projection is needed), send the
+        # first three pages of the located section: these vendors open the
+        # section with the pinout drawing and function table, and section
+        # ends routinely overshoot by dozens of pages. A truncated table
+        # cannot slip through because the extracted_n == package_n gate and
+        # teacher-side grounding still apply unchanged downstream.
+        if text_section_single_package and final_page >= start_page:
+            capped_final = min(start_page + 2, final_page)
+            return LocateResult(
+                document_id=document_id,
+                requested_package=requested_package,
+                expected_package_pins=expected_package_pins,
+                source_path=source_path,
+                status="send",
+                reason="toc_pin_section_without_ruled_table_single_package",
+                toc_class=toc_class,
+                toc_title=toc_title,
+                pages_1based=tuple(range(start_page, capped_final + 1)),
+                column_header=None,
+                column_headers_all=(),
+                corroborating_jedec_ids=None,
+            )
         return _withheld(
             document_id=document_id,
             requested_package=requested_package,
