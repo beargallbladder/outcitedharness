@@ -165,6 +165,12 @@ def main() -> int:
 
     totals: Counter[str] = Counter()
     semantic: Counter[str] = Counter()
+    # Which pipeline stage actually answered each example. A healthy vision
+    # evaluation is dominated by focused_local_vision; a fallback-dominated
+    # run means the served model was not really measured (the deterministic
+    # normalizer or text path answered instead) and the scores say nothing
+    # about the checkpoint under test.
+    answer_stages: Counter[str] = Counter()
     details = []
     vendor_values: dict[str, Counter[str]] = defaultdict(Counter)
     for work_id, expected_record in labels.items():
@@ -174,6 +180,9 @@ def main() -> int:
         vendor = item.get("vendor") or "unknown"
         totals["examples"] += 1
         totals["json_valid"] += result is not None
+        answer_stages[
+            (result or {}).get("local_pillar_stage") or "no_result"
+        ] += 1
         if capability == "parametrics":
             expected_facts = expected_record["expected_facts"]
             predicted_facts = (
@@ -428,6 +437,10 @@ def main() -> int:
             "reference": totals["parametric_reference"],
         },
         "semantic_counts": dict(semantic),
+        "answer_stages": dict(sorted(answer_stages.items())),
+        "model_under_test_answer_rate": (
+            answer_stages.get("focused_local_vision", 0) / totals["examples"]
+        ),
         "unevaluated_lanes": ["series_summary", "opn_decoder"],
     }
     by_vendor = {
