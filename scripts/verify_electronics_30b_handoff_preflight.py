@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import re
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -17,7 +18,6 @@ from harness.electronics.corpus import sha256_file
 from harness.electronics.training_handoff import (
     HANDOFF_SCHEMA,
     IMAGE_ID,
-    MODEL_NAME,
     verify_training_dataset,
 )
 from verify_electronics_30b_six_node_preflight import (
@@ -85,8 +85,20 @@ def verify(
     config = yaml.safe_load(config_path.read_text(encoding="utf-8"))
     if not isinstance(config, dict):
         raise ValueError("training config must contain a mapping")
+    # The model directory comes from the sealed handoff config (its hash is
+    # verified against the handoff receipt above), so continual rounds may
+    # train from a promoted merged checkpoint instead of the pristine base.
+    # The architecture stays pinned: the model's config.json must still hash
+    # to the base BF16 revision, which merged checkpoints copy verbatim.
+    model_path = str(config.get("model_name_or_path") or "")
+    model_prefix = "/training/models/"
+    model_name = model_path.removeprefix(model_prefix)
+    if (
+        not model_path.startswith(model_prefix)
+        or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{1,127}", model_name)
+    ):
+        raise ValueError("training config model path is unsafe")
     required_config = {
-        "model_name_or_path": f"/training/models/{MODEL_NAME}",
         "stage": stage,
         "do_train": True,
         "finetuning_type": "lora",
@@ -106,7 +118,7 @@ def verify(
     if wrong:
         raise ValueError(f"training config violates handoff policy: {wrong}")
 
-    model = (root / "models" / MODEL_NAME).resolve(strict=True)
+    model = (root / "models" / model_name).resolve(strict=True)
     _inside(root / "models", model)
     model_config = json.loads(
         _regular(model / "config.json", "model config").read_text()
@@ -181,6 +193,7 @@ def verify(
         "image": image,
         "handoff_evidence_sha256": handoff["evidence_sha256"],
         "config_sha256": receipt["sha256"],
+        "model_name": model_name,
         "model_config_sha256": MODEL_CONFIG_SHA256,
         "model_manifest_sha256": sha256_file(model_manifest),
         "model_files_verified": model_files,

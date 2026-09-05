@@ -346,13 +346,16 @@ def _training_config(
     train_pairs: int,
     epochs: int,
     seed: int,
+    base_model: str = MODEL_NAME,
 ) -> dict[str, Any]:
     if stage not in {"sft", "dpo"}:
         raise ValueError(f"unsupported training stage: {stage}")
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{1,127}", base_model):
+        raise ValueError("base_model must be a bare model directory name")
     steps_per_epoch = ceil(train_pairs / 6)
     output_suffix = "sft" if stage == "sft" else "dpo"
     config: dict[str, Any] = {
-        "model_name_or_path": f"/training/models/{MODEL_NAME}",
+        "model_name_or_path": f"/training/models/{base_model}",
         "trust_remote_code": True,
         "image_max_pixels": 1_048_576,
         "stage": stage,
@@ -425,6 +428,7 @@ def seal_training_handoff(
     proof: DatasetProof,
     sft_epochs: int = 3,
     dpo_epochs: int = 2,
+    base_model: str = MODEL_NAME,
 ) -> dict[str, Any]:
     if not re.fullmatch(r"[a-z0-9][a-z0-9-]{5,95}", candidate_id):
         raise ValueError("candidate_id must be a safe lowercase slug")
@@ -446,6 +450,7 @@ def seal_training_handoff(
         train_pairs=proof.train_sft_pairs,
         epochs=sft_epochs,
         seed=seed,
+        base_model=base_model,
     )
     dpo_config = _training_config(
         stage="dpo",
@@ -454,6 +459,7 @@ def seal_training_handoff(
         train_pairs=proof.train_dpo_pairs,
         epochs=dpo_epochs,
         seed=seed + 1,
+        base_model=base_model,
     )
     try:
         config_receipts: dict[str, dict[str, Any]] = {}

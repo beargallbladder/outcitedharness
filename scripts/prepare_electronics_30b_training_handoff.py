@@ -12,6 +12,7 @@ from pathlib import Path
 from harness.electronics.corpus import sha256_file
 from harness.electronics.training_handoff import (
     HANDOFF_SCHEMA,
+    MODEL_NAME,
     seal_training_handoff,
     verify_training_dataset,
 )
@@ -62,6 +63,15 @@ def _parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--sft-epochs", type=int, default=3)
     parser.add_argument("--dpo-epochs", type=int, default=2)
+    parser.add_argument(
+        "--base-model",
+        default=MODEL_NAME,
+        help=(
+            "bare directory name under /training/models to train from; "
+            "defaults to the pristine BF16 base. Continual rounds pass the "
+            "promoted merged checkpoint here."
+        ),
+    )
     return parser
 
 
@@ -170,6 +180,7 @@ def main() -> int:
             proof=proof,
             sft_epochs=args.sft_epochs,
             dpo_epochs=args.dpo_epochs,
+            base_model=args.base_model,
         )
     print(
         json.dumps(
