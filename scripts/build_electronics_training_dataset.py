@@ -108,6 +108,62 @@ def _unique(pairs: list[Pair]) -> list[Pair]:
     return [by_id[pair_id] for pair_id in sorted(by_id)]
 
 
+_PIN_CAPABILITIES = {"pin_or_ball", "pin_semantics"}
+
+
+def _null_type_majority(response_json: str) -> bool | None:
+    """True/False for a pin pair by row-majority null `type`; None if not pin.
+
+    Round 3 taught why this matters: adding 1,692 majority-null-type pin rows
+    (TI power and borderless MCU tables print no Type column) against 293
+    typed ones collapsed the candidate's type_accuracy from 1.0 to 0.476 on
+    documents that DO print types. The pairs are individually correct — the
+    imbalance is the defect — so the remedy is a composition cap, not a
+    verification change.
+    """
+
+    rows = json.loads(response_json).get("pins")
+    if not isinstance(rows, list) or not rows:
+        return None
+    nulls = sum(1 for row in rows if isinstance(row, dict) and row.get("type") is None)
+    return nulls * 2 > len(rows)
+
+
+def _cap_null_type_pin_pairs(
+    pairs: list[Pair],
+    *,
+    max_null_fraction: float,
+    response_of: Any,
+) -> tuple[list[Pair], int]:
+    """Drop excess majority-null-type pin pairs beyond the requested fraction.
+
+    Selection is deterministic (sorted pair_id order); non-pin pairs and
+    typed pin pairs are never dropped.
+    """
+
+    null_ids: list[str] = []
+    typed_count = 0
+    for pair in pairs:
+        if pair.capability not in _PIN_CAPABILITIES:
+            continue
+        majority = _null_type_majority(response_of(pair))
+        if majority is True:
+            null_ids.append(pair.pair_id)
+        elif majority is False:
+            typed_count += 1
+    # keep_null / (typed + keep_null) <= max_null_fraction
+    if max_null_fraction >= 1.0 or not null_ids:
+        return pairs, 0
+    keep_null = int(
+        (max_null_fraction * typed_count) / (1.0 - max_null_fraction)
+    )
+    if len(null_ids) <= keep_null:
+        return pairs, 0
+    dropped = set(sorted(null_ids)[keep_null:])
+    kept = [pair for pair in pairs if pair.pair_id not in dropped]
+    return kept, len(dropped)
+
+
 def _holdout_documents(cohort: Path) -> set[str]:
     queue = json.loads((cohort.resolve(strict=True) / "work-queue.json").read_text())
     if queue.get("policy", {}).get("evaluation_only") is not True:
@@ -240,6 +296,7 @@ def build_dataset(
     *,
     validation_fraction: float = 0.2,
     split_seed: str = "electronics-teacher-v1",
+    max_null_type_pin_fraction: float = 1.0,
 ) -> dict[str, Any]:
     if not 0.0 < validation_fraction < 0.5:
         raise ValueError("validation_fraction must be between 0 and 0.5")
@@ -263,6 +320,16 @@ def build_dataset(
         )
     sft = _unique(sft)
     dpo = _unique(dpo)
+    sft, sft_null_dropped = _cap_null_type_pin_pairs(
+        sft,
+        max_null_fraction=max_null_type_pin_fraction,
+        response_of=lambda pair: pair.response,
+    )
+    dpo, dpo_null_dropped = _cap_null_type_pin_pairs(
+        dpo,
+        max_null_fraction=max_null_type_pin_fraction,
+        response_of=lambda pair: pair.chosen_response,
+    )
     if not sft or not dpo:
         raise ValueError("both SFT and DPO pairs are required")
     if any(pair.disposition is not PairDisposition.ADMITTED for pair in sft):
@@ -391,6 +458,11 @@ def build_dataset(
             "images": len(image_names),
             "splits": counts,
         },
+        "pin_type_balance": {
+            "max_null_type_pin_fraction": max_null_type_pin_fraction,
+            "sft_null_type_pairs_dropped": sft_null_dropped,
+            "dpo_null_type_pairs_dropped": dpo_null_dropped,
+        },
         "artifacts": {
             path.relative_to(destination).as_posix(): {
                 "bytes": path.stat().st_size,
@@ -425,6 +497,16 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--output-directory", required=True, type=Path)
     parser.add_argument("--validation-fraction", type=float, default=0.2)
     parser.add_argument("--split-seed", default="electronics-teacher-v1")
+    parser.add_argument(
+        "--max-null-type-pin-fraction",
+        type=float,
+        default=1.0,
+        help=(
+            "cap majority-null-type pin pairs at this fraction of all pin "
+            "pairs (default 1.0 = no cap); round 3's type_accuracy collapse "
+            "motivates 0.25 for continual rounds"
+        ),
+    )
     return parser.parse_args()
 
 
@@ -436,8 +518,10 @@ def main() -> int:
         args.output_directory,
         validation_fraction=args.validation_fraction,
         split_seed=args.split_seed,
+        max_null_type_pin_fraction=args.max_null_type_pin_fraction,
     )
     print(json.dumps(manifest["counts"], indent=2, sort_keys=True))
+    print(json.dumps(manifest["pin_type_balance"], indent=2, sort_keys=True))
     return 0
 
 
