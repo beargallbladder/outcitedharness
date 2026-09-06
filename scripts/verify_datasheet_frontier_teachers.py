@@ -426,33 +426,85 @@ def main() -> int:
                 )
                 passed = False
         elif capability == "series_summary":
-            verdict = verify_series_summary(
-                {"result": outcome["response"]},
-                page,
+            # Per-fact salvage, mirroring the parametric lane: one
+            # paraphrased characteristic used to quarantine the whole
+            # response, discarding applications that ARE printed verbatim
+            # (the GD probe lost all 52 application strings this way).
+            # Each fact is grounded independently; only printed facts are
+            # admitted, and the reassembled response must still pass the
+            # aggregate verifier.
+            raw_characteristics = [
+                str(value).strip()
+                for value in outcome["response"].get("characteristics", [])
+                if isinstance(value, str) and value.strip()
+            ]
+            raw_applications = [
+                str(value).strip()
+                for value in outcome["response"].get("applications", [])
+                if isinstance(value, str) and value.strip()
+            ]
+            counts["summary_facts:seen"] += len(raw_characteristics) + len(
+                raw_applications
             )
-            passed = verdict.passed
-            if passed:
-                characteristics = [
-                    str(value).strip()
-                    for value in outcome["response"].get(
-                        "characteristics", []
-                    )
-                    if isinstance(value, str) and value.strip()
-                ]
-                applications = [
-                    str(value).strip()
-                    for value in outcome["response"].get(
-                        "applications", []
-                    )
-                    if isinstance(value, str) and value.strip()
-                ]
+            grounded_characteristics: list[str] = []
+            grounded_applications: list[str] = []
+            seen_facts: set[str] = set()
+            for value, admitted in (
+                *((v, grounded_characteristics) for v in raw_characteristics),
+                *((v, grounded_applications) for v in raw_applications),
+            ):
+                probe = {
+                    "summary": value,
+                    "characteristics": (
+                        [value] if admitted is grounded_characteristics else []
+                    ),
+                    "applications": (
+                        [value] if admitted is grounded_applications else []
+                    ),
+                }
+                fact_verdict = verify_series_summary(
+                    {"result": probe},
+                    page,
+                )
+                if fact_verdict.passed and value not in seen_facts:
+                    admitted.append(value)
+                    seen_facts.add(value)
+                else:
+                    counts["summary_facts:quarantined"] += 1
+            counts["summary_facts:admitted"] += len(
+                grounded_characteristics
+            ) + len(grounded_applications)
+            if grounded_characteristics or grounded_applications:
                 verified_response = {
                     "summary": " ".join(
-                        characteristics or applications
+                        grounded_characteristics or grounded_applications
                     ),
-                    "characteristics": characteristics,
-                    "applications": applications,
+                    "characteristics": grounded_characteristics,
+                    "applications": grounded_applications,
                 }
+                verdict = verify_series_summary(
+                    {"result": verified_response},
+                    page,
+                )
+                if not verdict.passed:
+                    raise ValueError(
+                        "individually grounded summary facts failed "
+                        "aggregate verification"
+                    )
+                passed = True
+                if len(grounded_characteristics) + len(
+                    grounded_applications
+                ) == len(raw_characteristics) + len(raw_applications):
+                    counts["summary_pages:fully_grounded"] += 1
+                else:
+                    counts["summary_pages:partially_salvaged"] += 1
+            else:
+                verdict = verify_series_summary(
+                    {"result": outcome["response"]},
+                    page,
+                )
+                passed = False
+                verified_response = None
         elif capability == "opn_decoder":
             verdict = verify_opn_decoder(
                 {"result": outcome["response"]},
@@ -535,6 +587,10 @@ def main() -> int:
         reason = verdict.reason
         if capability == "parametrics" and not passed:
             reason = "teacher contains no independently grounded parametric facts"
+        if capability == "series_summary" and not passed:
+            reason = (
+                "teacher contains no independently grounded summary facts"
+            )
         if capability in {"pin_or_ball", "pin_semantics"} and not passed:
             reason = (
                 "teacher contains no aggregate-safe set of independently "
