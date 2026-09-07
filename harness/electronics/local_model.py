@@ -25,6 +25,7 @@ RESPONSE_SCHEMAS: dict[str, dict[str, Any]] = {
         "required": ["package", "pins"],
         "properties": {
             "package": {"type": ["string", "null"]},
+            "package_as_read": {"type": ["string", "null"]},
             "pins": {
                 "type": "array",
                 "items": {
@@ -42,6 +43,7 @@ RESPONSE_SCHEMAS: dict[str, dict[str, Any]] = {
         "type": "object",
         "required": ["pins"],
         "properties": {
+            "package_as_read": {"type": ["string", "null"]},
             "pins": {
                 "type": "array",
                 "items": {
@@ -341,6 +343,9 @@ def local_prompt(
             "Return one row per visibly printed physical pin or ball. "
             "Never combine multiple identifiers into one row and never fill a "
             "sequence that is not printed. Keep package variants isolated. "
+            "Set package_as_read to the exact printed header text of the "
+            "pin-number column you read, copied verbatim from the page; use "
+            "null only when no pin-number column header is printed. "
         ),
         "pin_semantics": (
             "Return one row per visibly printed physical pin or ball. "
@@ -354,7 +359,10 @@ def local_prompt(
             "description or supply domain into type. Copy each value only "
             "from the matching identity row and matching semantic column. "
             "Represent blank and non-value scalar cells as JSON null. Keep "
-            "package variants isolated. "
+            "package variants isolated. Set package_as_read to the exact "
+            "printed header text of the pin-number column you read, copied "
+            "verbatim from the page; use null only when no pin-number column "
+            "header is printed. "
         ),
         "parametrics": (
             "Return one fact per actual data value. Skip blank cells and "
