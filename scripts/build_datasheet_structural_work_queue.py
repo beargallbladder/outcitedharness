@@ -99,12 +99,17 @@ def main() -> int:
     )
     parser.add_argument(
         "--pin-work-source",
-        choices=("priority", "locator"),
+        choices=("priority", "locator", "evidence"),
         default="priority",
         help=(
             "priority: pin pages must be proposed by the priority queue; "
             "locator: additionally synthesize pin work for every sendable "
-            "TOC-located definition-table page of priority-queue documents."
+            "TOC-located definition-table page of priority-queue documents; "
+            "evidence: admit priority pin pages WITHOUT exact ground-truth "
+            "TOC corroboration when the page itself shows definition-table "
+            "structure (for holdout/exam corpora where no ground truth "
+            "exists by construction; pair with "
+            "--package-scope-policy allow-withhold)."
         ),
     )
     parser.add_argument("--output", type=Path, required=True)
@@ -241,7 +246,7 @@ def main() -> int:
                 )
                 effective_capability = capability
         else:
-            if key not in exact_by_page:
+            if key not in exact_by_page and args.pin_work_source != "evidence":
                 counts["withheld_pin_without_exact_toc_location"] += 1
                 continue
             regions = structural_pin_regions(page)
@@ -403,7 +408,11 @@ def main() -> int:
             "capabilities": sorted(selected_capabilities),
             "full_page_vision_for_definition_tables": True,
             "diagram_authority": "corroboration_only",
-            "pin_locator": "toc_definition_table_only",
+            "pin_locator": (
+                "page_evidence_structural_regions"
+                if args.pin_work_source == "evidence"
+                else "toc_definition_table_only"
+            ),
             "pin_work_source": args.pin_work_source,
             "pin_package_header_gate": "required",
             "pin_completion_gate": "merged_unique_ids_equal_exact_package_count",

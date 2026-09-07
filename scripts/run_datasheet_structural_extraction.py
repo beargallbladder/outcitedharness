@@ -258,6 +258,18 @@ def _parser() -> argparse.ArgumentParser:
         choices=("fallback", "always"),
         default="fallback",
     )
+    parser.add_argument(
+        "--allow-unanchored-pin-scope",
+        action="store_true",
+        help=(
+            "Permit pin work items without an exact package scope: the model "
+            "reads the printed pin table as-is with no expected-count anchor. "
+            "For holdout/exam corpora where no ground-truth package binding "
+            "exists by construction; verification stays evidence-grounded, "
+            "but the merged-count-equals-package-count completion gate "
+            "cannot apply."
+        ),
+    )
     parser.add_argument("--output-directory", type=Path, required=True)
     return parser
 
@@ -421,7 +433,7 @@ def main() -> int:
                     not package_scope
                     or not package_scope.get("package")
                     or package_scope.get("expected_package_pins") is None
-                ):
+                ) and not args.allow_unanchored_pin_scope:
                     raise ValueError(
                         "pin vision requires an exact package and count"
                     )
