@@ -230,3 +230,9 @@ def test_header_lists_and_headings_are_not_parts():
     grid = [["Feature", "ATmega1608,ATmega1609", "ATmega3208,ATmega3209"], ["Flash (KB)", "16", "32"], ["SRAM (KB)", "2", "4"]]
     _, bindings = bind_columns(grid, 1, {})
     assert bindings[0]["part_numbers"] == ["ATmega1608", "ATmega1609"]
+
+
+def test_shared_module_rows_apply_to_every_protocol():
+    assert row_attributes("eUSCI B: _ SPI, I2C", "") == [("spi_count", None), ("i2c_count", None)]
+    assert row_attributes("eUSCI A: _ UART, IrDA, SPI", "") == [("uart_count", None), ("spi_count", None)]
+    assert row_attributes("Communication interfaces", "SPI/I2S") == [("spi_count", 0), ("i2s_count", 1)]

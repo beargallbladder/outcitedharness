@@ -131,12 +131,17 @@ def main() -> int:
     parser.add_argument("--referee", type=Path, required=True)
     parser.add_argument("--pins", type=Path, default=None, help="pin_count knives (pin_counts set, gpio_count)")
     parser.add_argument("--out", type=Path, required=True)
+    parser.add_argument("--domain", default="st.com", help="referee domain filter for --pins rows")
+    parser.add_argument(
+        "--match", choices=("exact", "prefix"), default="exact",
+        help="prefix: an orderable part (MSP430FR2422IPW16R) matches the unique referee root it extends (MSP430FR2422)",
+    )
     args = parser.parse_args()
 
     referee = _load_referee(args.referee)
     if args.pins:
         for part, row in _load_referee(args.pins).items():
-            if row.get("domain") and "st.com" not in str(row.get("domain")):
+            if row.get("domain") and args.domain not in str(row.get("domain")):
                 continue
             referee.setdefault(part, {}).update({k: v for k, v in row.items() if k in ("pin_counts", "gpio_count")})
 
@@ -158,6 +163,13 @@ def main() -> int:
             part = part.upper()
             parts_ours.add(part)
             ref = referee.get(part)
+            if ref is None and args.match == "prefix":
+                roots = [r for r in referee if len(r) >= 7 and part.startswith(r) and part != r]
+                if roots:
+                    root = max(roots, key=len)
+                    # Unique longest root; a tie (two roots of equal length) is ambiguous.
+                    if sum(1 for r in roots if len(r) == len(root)) == 1:
+                        ref = referee[root]
             if ref is None:
                 continue
             parts_overlap.add(part)

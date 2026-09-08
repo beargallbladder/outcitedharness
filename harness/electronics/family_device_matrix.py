@@ -268,10 +268,38 @@ def row_attributes(group_label: str, sub_label: str) -> list[tuple[str, int | No
             if out:
                 return out
     full = " ".join(p for p in (group_label, sub_label) if p)
+    shared = _shared_module_attributes(full)
+    if shared:
+        return [(a, None) for a in shared]
     attribute = label_attribute(full)
     if attribute is None and sub_label:
         attribute = label_attribute(sub_label)
     return [(attribute, None)] if attribute else []
+
+
+_INTERFACE_NAME = {
+    "uart": "uart_count", "usart": "usart_count", "lpuart": "lpuart_count", "spi": "spi_count",
+    "i2c": "i2c_count", "i²c": "i2c_count", "i2s": "i2s_count", "can": "can_count", "can fd": "can_count",
+}
+_INTERFACE_LIST = re.compile(r"(?:^|[:\s_])((?:(?:e?USCI\s*[AB]|UART|USART|LPUART|SPI|I2C|I²C|I2S|IrDA|LIN|CAN(?:\s*FD)?|SMBus|PMBus)\s*,\s*)+(?:UART|USART|LPUART|SPI|I2C|I²C|I2S|IrDA|LIN|CAN(?:\s*FD)?|SMBus|PMBus))\b", re.I)
+INTERFACE_COUNT_ATTRIBUTES = {"uart_count", "usart_count", "lpuart_count", "spi_count", "i2c_count", "i2s_count", "can_count"}
+
+
+def _shared_module_attributes(label: str) -> list[str]:
+    """'eUSCI B: SPI, I2C' names one module class that speaks several
+    protocols: the printed count applies to every protocol listed (TI's
+    n_spi counts SPI-capable modules across eUSCI A and B). A slash list
+    ('SPI/I2S') is per-protocol and handled as a composite instead."""
+    match = _INTERFACE_LIST.search(label)
+    if not match:
+        return []
+    names = [n.strip().lower() for n in match.group(1).split(",")]
+    out: list[str] = []
+    for name in names:
+        attribute = _INTERFACE_NAME.get(name)
+        if attribute and attribute not in out:
+            out.append(attribute)
+    return out if len(out) >= 2 or (out and len(names) >= 2) else []
 
 
 def parse_value(verbatim: str, attribute: str, label_unit: str | None) -> dict[str, Any]:
@@ -410,6 +438,13 @@ def parse_value(verbatim: str, attribute: str, label_unit: str | None) -> dict[s
         return leaf
 
     if attribute.endswith("_kb") and unit == "MB":
+        if not (number * 1024).is_integer():
+            # "4.2 Mbytes": a decimal marketing figure; 4.2 x 1024 is not a
+            # memory size and 4.2 x 1000 is a guess about the vendor's
+            # convention. Kept verbatim, not typed.
+            leaf["status"] = "unknown"
+            leaf["reason"] = "fractional_megabytes"
+            return leaf
         number *= 1024
         unit = "KB"
     if number.is_integer():
@@ -1162,16 +1197,20 @@ def build_family_record(
                                 _uncount(leaf)
                             continue
                         if (
-                            attribute.startswith("timer_")
-                            and existing["status"] == "typed" and leaf["status"] == "typed"
+                            existing["status"] == "typed" and leaf["status"] == "typed"
                             and existing["receipt"]["row_label"] != label
-                            and re.search(r"\bbits?\b", existing["receipt"]["row_label"] + " " + label, re.I)
+                            and (
+                                (attribute.startswith("timer_") and re.search(r"\bbits?\b", existing["receipt"]["row_label"] + " " + label, re.I))
+                                or (attribute in INTERFACE_COUNT_ATTRIBUTES and _shared_module_attributes(existing["receipt"]["row_label"]) and _shared_module_attributes(label))
+                            )
                         ):
                             # "General purpose (32-bit)" + "General purpose (16-bit)":
                             # two rows of one timer class, printed by width. Sum.
+                            # "eUSCI A: UART, SPI: 4" + "eUSCI B: SPI, I2C: 2": two
+                            # module classes that both speak SPI. Sum.
                             existing["typ"] = existing["typ"] + leaf["typ"]
                             existing["verbatim"] = f"{existing['verbatim']} + {leaf['verbatim']}"
-                            existing["note"] = "sum of bit-width rows"
+                            existing["note"] = "sum of rows"
                             existing.setdefault("rows", [existing["receipt"]["row_label"]]).append(label)
                             if part == (binding.get("part_numbers") or [binding["part_number"]])[0]:
                                 _uncount(leaf)
