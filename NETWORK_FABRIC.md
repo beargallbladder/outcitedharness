@@ -42,6 +42,23 @@ cables as rollback assets; do not treat it as evidence that the active links
 are down. The NADDOD straight cables negotiate 200 Gb/s and `fec91`
 automatically.
 
+### Known issue: ConnectX-7 firmware power-throttle (found 2026-09-07)
+
+Every Spark/GX10 CX7 can enter a firmware state where it links at 200 Gb/s
+but sends at ~12.5-13.3 Gb/s on every path (`ib_write_bw`, `iperf3`, NFS,
+Qwen TP all capped identically). The switch is not involved: hardware offload
+is on, CPU idle, no rate limits. The throttle is on the *sending* NIC. A warm
+reboot does not clear it; the only confirmed fix is a full power drain
+(`sudo poweroff`, unplug ~60 s, replug, power on), after which each PCIe half
+does ~111 Gb/s. The boot-time `insufficient power (27W)` dmesg line appears in
+both states and is not diagnostic. Do not run `mstfwreset` or a PCI rescan
+remotely on these boxes; a rescan on spark on 2026-09-07 caused a kernel
+panic (the `cx7-pcie-hotplug` driver powers the NIC off the bus when no cable
+is present). Verify after any drain with the drained box as the client:
+`ib_write_bw -d rocep1s0f1 -R -F -q 4 -s 65536 -D 5 --report_gbits <peer>`.
+All six fabric nodes were drained and verified on 2026-09-07. Full evidence in
+`HANDOFF-20260907-qwen-cluster.md`.
+
 ## Existing pair addresses
 
 The switch is transparent at Layer 2, so the existing isolated addresses and
