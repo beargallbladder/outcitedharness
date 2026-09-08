@@ -189,3 +189,11 @@ def test_bind_part_with_package_letter_and_ordering_wildcards():
     ]
     _, bindings = bind_columns(grid, 2, {})
     assert [(b["part_number"], b.get("package_letter")) for b in bindings] == [("STM32U3C5CI", None), ("STM32U3C5VI", "Y"), ("STM32U3C5VI", "T")]
+
+
+def test_composite_components_of_one_class_are_summed():
+    from harness.electronics.family_device_matrix import _cell_leaves
+
+    leaves = _cell_leaves("1/1", [("can_count", 0), ("can_count", 1)], None)
+    assert leaves == [("can_count", {"verbatim": "1/1", "status": "typed", "typ": 2, "unit": "count", "note": "sum of components", "components": ["1", "1"]})]
+    assert ("package", None) not in row_attributes("Tamper pins (legacy/SMPS package)", "")

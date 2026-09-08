@@ -98,7 +98,7 @@ _LABEL_RULES: tuple[tuple[str, re.Pattern[str], re.Pattern[str] | None], ...] = 
     ("sram_kb", re.compile(r"\bs?ram\b", re.I), re.compile(r"\bbackup\b|\bcache\b|\bparity\b\s*only|\bdma\b|\bfs?mc\b|controller|\bexternal\b|\bpsram\b|\bsdram\b|\becc\b|\bsram\d\b|\baxi\b|\bahb\b|\bd\d\s+domain\b|\bitcm\b|\bdtcm\b|\btcm\b|\bccm\b|\bretention\b|instruction|flexible", re.I)),
     ("freq_mhz", re.compile(r"\b(?:frequency|freq\.?|clock\s+speed|cpu\s+speed|speed)\b|\bmhz\b", re.I), re.compile(r"\badc\b|\bbus\b|\bexternal\b", re.I)),
     ("core", re.compile(r"\b(?:core|cpu|cortex)\b", re.I), re.compile(r"frequen|speed|mhz|\bram\b", re.I)),
-    ("package", re.compile(r"\bpackages?\b", re.I), None),
+    ("package", re.compile(r"\bpackages?\b", re.I), re.compile(r"\bpins?\b|tamper|wakeup|\blegacy\b|\bsmps\b|dedicated|thermal|\bfootprint\b", re.I)),
     ("gpio_count", re.compile(r"\bgpios?\b|\bi/os?\b|\bgeneral[\s-]purpose\s+i/?os?\b|\bio\s+pins?\b", re.I), re.compile(r"\bwakeup\b|\btamper\b|\bfast\b|\bnormal\b|\bfs?mc\b|tolerant|\b5\s*v\b|\btc\b|\btta?\b|\bft\b|\bhigh[\s-]sink\b|\bmultiplexed\b", re.I)),
     ("timer_advanced", re.compile(r"\btimers?\b.*\badvanced\b|\badvanced[\s-]control\b", re.I), None),
     ("timer_general_purpose", re.compile(r"\btimers?\b.*\bgeneral\b|\bgeneral\s*-?\s*purpose\b", re.I), re.compile(r"\bi/?os?\b|input|output|gpio", re.I)),
@@ -943,6 +943,21 @@ def _cell_leaves(verbatim: str, attributes: list[tuple[str, int | None]], label_
         text = text[: extra.start()].strip()
     components = split_composite_value(text, max(i for _, i in composite) + 1)
     out: list[tuple[str, dict[str, Any]]] = []
+    repeated = {a for a in {a for a, _ in composite} if sum(1 for b, _ in composite if b == a) > 1}
+    for attribute in sorted(repeated):
+        # "FDCAN/TT-FDCAN: 1/1" names two kinds of one interface class;
+        # the class count is the sum of the printed components.
+        indices = [i for a, i in composite if a == attribute]
+        if components is None:
+            out.append((attribute, {"verbatim": _norm(verbatim), "status": "unknown", "reason": "composite_value_mismatch"}))
+            continue
+        leaves = [parse_value(components[i], attribute, label_unit) for i in indices]
+        if attribute in NUMERIC_ATTRIBUTES and all(l["status"] == "typed" for l in leaves):
+            leaf = {"verbatim": _norm(verbatim), "status": "typed", "typ": sum(l["typ"] for l in leaves), "unit": leaves[0].get("unit"), "note": "sum of components", "components": [components[i] for i in indices]}
+        else:
+            leaf = {"verbatim": _norm(verbatim), "status": "unknown", "reason": "composite_components_untyped"}
+        out.append((attribute, leaf))
+    composite = [(a, i) for a, i in composite if a not in repeated]
     for attribute, index in composite:
         if components is None:
             out.append((attribute, {"verbatim": _norm(verbatim), "status": "unknown", "reason": "composite_value_mismatch"}))
