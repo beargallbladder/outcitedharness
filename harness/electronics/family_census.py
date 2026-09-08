@@ -166,6 +166,8 @@ def is_concrete_part_token(token: str) -> bool:
         return False
     if not 6 <= len(token) <= 24:
         return False
+    if re.search(r"[\s,/;()]", token) or not token[0].isalpha():
+        return False
     if sum(ch.isdigit() for ch in token) < 2:
         return False
     if _NON_PART_PREFIX.match(token) or _NON_PART_TOKEN.match(token):

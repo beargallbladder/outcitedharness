@@ -47,6 +47,7 @@ from harness.electronics.family_census import (
     packages_from_text,
     strip_title_rows,
 )
+from harness.electronics.ordering_codes import ST_MEMORY_LETTER_KB
 
 MATRIX_SCHEMA = "harness.electronics-family-device-matrix.v1"
 EXTRACTED_BY = "harness family_device_matrix v1 (deterministic PyMuPDF)"
@@ -183,10 +184,7 @@ _UNIT_WORDS = {
 
 # ST ordering-code memory letter -> code flash KB (public ST grammar, used
 # only as a self-consistency check, never as a value source).
-ST_FLASH_CODE_KB = {
-    "4": 16, "6": 32, "8": 64, "B": 128, "C": 256, "D": 384, "E": 512,
-    "F": 768, "G": 1024, "H": 1536, "I": 2048, "J": 4096,
-}
+ST_FLASH_CODE_KB = ST_MEMORY_LETTER_KB
 # STM32 + product line (F446, G0B1, WB55, WBA23, WLE5) + pin letter + memory
 # letter; anything after is package/temperature/option suffix.
 _ST_PART = re.compile(
@@ -429,7 +427,14 @@ def _bitwidth_only(text: str) -> bool:
 
 
 def _header_token(cell: str) -> str:
-    """'STM32\\nF446MC' -> 'STM32F446MC'; keep printed casing."""
+    """'STM32\\nF446MC' -> 'STM32F446MC'; 'AVR64DB64\\nAVR128DB64' ->
+    'AVR64DB64,AVR128DB64' (whole parts sharing a prefix are a list, not
+    fragments of one token); keep printed casing."""
+    pieces = cell.split()
+    if len(pieces) > 1 and all(is_concrete_part_token(p.strip(",")) for p in pieces):
+        prefixes = {re.match(r"^[A-Za-z]+", p).group(0).upper() for p in pieces if re.match(r"^[A-Za-z]+", p)}
+        if len(prefixes) == 1:
+            return ",".join(p.strip(",") for p in pieces)
     return re.sub(r"\s+", "", cell)
 
 
@@ -562,6 +567,9 @@ def bind_columns(
         # Case C: wildcard/stem over a code row (GD32F405xx / RE RG RK ...).
         for col, token, code in zip(data_cols, tokens, codes1):
             base = _wildcard_base(token) if token else ""
+            if base and not re.match(r"^[A-Za-z]{1,8}\d", base):
+                # "Part Number" over a code row is a heading, not a stem.
+                base = ""
             if base:
                 bindings.append({"column_index": col, "part_number": base + code, "family_token": token, "binding": "header_wildcard_codes"})
             else:

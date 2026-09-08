@@ -211,3 +211,22 @@ def test_vendor_specific_count_forms():
     header = dict(_cell_leaves("128 / 32", row_attributes("", "FLASH / SRAM (KB)"), "KB"))
     assert (header["code_flash_kb"]["typ"], header["sram_kb"]["typ"]) == (128, 32)
     assert ("temp_range", None) not in row_attributes("Temperature sensor", "")
+
+
+def test_header_lists_and_headings_are_not_parts():
+    from harness.electronics.family_device_matrix import _header_token
+    from harness.electronics.family_census import is_concrete_part_token
+
+    assert _header_token("STM32\nF446MC") == "STM32F446MC"
+    assert _header_token("AVR64DB64\nAVR128DB64") == "AVR64DB64,AVR128DB64"
+    assert not is_concrete_part_token("ATmega1608,ATmega1609")
+    grid = [
+        ["Part Number", "IG", "IK", "VE"],
+        ["Flash (KB)", "1024", "3072", "512"],
+        ["SRAM (KB)", "256", "256", "128"],
+    ]
+    _, bindings = bind_columns(grid, 1, {})
+    assert all(b["part_number"] is None for b in bindings)
+    grid = [["Feature", "ATmega1608,ATmega1609", "ATmega3208,ATmega3209"], ["Flash (KB)", "16", "32"], ["SRAM (KB)", "2", "4"]]
+    _, bindings = bind_columns(grid, 1, {})
+    assert bindings[0]["part_numbers"] == ["ATmega1608", "ATmega1609"]
