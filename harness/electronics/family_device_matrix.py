@@ -1,0 +1,928 @@
+"""Deterministic reader for family device-comparison tables (knife lane v1).
+
+Input: a document the census marked ``above_opn`` / ``family_matrix``. Output:
+one family record in the CR conventions shape (``_meta`` receipts, typed
+numeric leaves ``{typ|min|max, unit}``, ``part_number: null`` + ``family`` +
+``part_numbers_covered``) with two layers:
+
+  shared    attributes the table prints identically for every variant
+            (merged cell or equal values) -- the family content layer;
+  variants  one row per data column the table carries, bound to a concrete
+            part number only when the document itself binds it (header token,
+            header code list, or a printed device-summary join) -- the knife
+            layer.
+
+Every value keeps its verbatim string, page, row label and column. A value the
+reader cannot type with certainty is emitted as ``unknown`` with the verbatim
+retained; nothing is guessed. Column-to-part binding that cannot be made from
+printed text is ``part_number: null`` with the header token kept, never a
+minted part number.
+
+The label grammar here is deliberately stricter than the census's
+``attributes_in_label`` (which only asks "does this row address the
+attribute?"). Here the label decides which knife the value lands in, so
+"GPIOs" is ``gpio_count`` not ``pin_count``, "Tamper pins" is nothing,
+"Maximum CPU frequency" is ``freq_mhz`` and not ``core``, and a row that
+prints "SPI / I2S : 4/3" becomes ``spi_count=4`` and ``i2s_count=3`` because
+the document itself paired them.
+
+PyMuPDF tables only. Frontier/local models never run here; they are the
+teacher for the ``unknown`` residue downstream.
+"""
+
+from __future__ import annotations
+
+import hashlib
+import re
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any, Iterable
+
+from harness.electronics.family_census import (
+    PART_TOKEN,
+    attributes_in_label,
+    classify_table,
+    is_concrete_part_token,
+    is_wildcard_token,
+    packages_from_text,
+)
+
+MATRIX_SCHEMA = "harness.electronics-family-device-matrix.v1"
+EXTRACTED_BY = "harness family_device_matrix v1 (deterministic PyMuPDF)"
+
+# Attributes that get a typed numeric leaf and their default unit.
+NUMERIC_ATTRIBUTES: dict[str, str] = {
+    "code_flash_kb": "KB",
+    "data_flash_kb": "KB",
+    "eeprom_kb": "KB",
+    "sram_kb": "KB",
+    "freq_mhz": "MHz",
+    "pin_count": "pins",
+    "gpio_count": "count",
+    "adc_count": "count",
+    "adc_channels": "channels",
+    "dac_count": "count",
+    "dac_channels": "channels",
+    "timers": "count",
+    "timer_advanced": "count",
+    "timer_general_purpose": "count",
+    "timer_basic": "count",
+    "timer_low_power": "count",
+    "timer_watchdog": "count",
+    "timer_systick": "count",
+    "rtc": "count",
+    "pwm_channels": "channels",
+    "usart_count": "count",
+    "uart_count": "count",
+    "lpuart_count": "count",
+    "spi_count": "count",
+    "i2s_count": "count",
+    "i2c_count": "count",
+    "can_count": "count",
+    "sdio_count": "count",
+    "comparator_count": "count",
+    "opamp_count": "count",
+    "operating_voltage": "V",
+    "temp_range": "degC",
+    "standby_current_ua": "uA",
+}
+BOOLEAN_ATTRIBUTES = {"usb", "ethernet", "trustzone", "crypto", "lcd", "camera", "fsmc"}
+
+# (attribute, must-match, must-not-match). Evaluated against the full label
+# (carried group label + sub label); first match wins per token group.
+_LABEL_RULES: tuple[tuple[str, re.Pattern[str], re.Pattern[str] | None], ...] = (
+    ("data_flash_kb", re.compile(r"\bdata\s*(?:flash|area|memory)\b", re.I), None),
+    ("eeprom_kb", re.compile(r"\beeprom\b", re.I), None),
+    ("code_flash_kb", re.compile(r"\bflash\b|\bprogram\s+memory\b|\bcode\s+(?:area|memory)\b", re.I), re.compile(r"\bdata\b|\bexternal\b|\boption\b|\bsector\b|\bpage\b|\bbank|\bfs?mc\b|\bnand\b|\bnor\b|controller|\becc\b|protection|interface|\botfdec\b|\bxspi\b|\bqspi\b|\bospi\b", re.I)),
+    ("sram_kb", re.compile(r"\bs?ram\b", re.I), re.compile(r"\bbackup\b|\bcache\b|\bparity\b\s*only|\bdma\b|\bfs?mc\b|controller|\bexternal\b|\bpsram\b|\bsdram\b|\becc\b|\bsram\d\b|\baxi\b|\bahb\b|\bd\d\s+domain\b|\bitcm\b|\bdtcm\b|\btcm\b|\bccm\b|\bretention\b", re.I)),
+    ("freq_mhz", re.compile(r"\b(?:frequency|freq\.?|clock\s+speed|cpu\s+speed|speed)\b|\bmhz\b", re.I), re.compile(r"\badc\b|\bbus\b|\bexternal\b", re.I)),
+    ("core", re.compile(r"\b(?:core|cpu|cortex)\b", re.I), re.compile(r"frequen|speed|mhz|\bram\b", re.I)),
+    ("package", re.compile(r"\bpackages?\b", re.I), None),
+    ("gpio_count", re.compile(r"\bgpios?\b|\bi/os?\b|\bgeneral[\s-]purpose\s+i/?os?\b|\bio\s+pins?\b", re.I), re.compile(r"\bwakeup\b|\btamper\b|\bfast\b|\bnormal\b|\bfs?mc\b|tolerant|\b5\s*v\b|\btc\b|\btta?\b|\bft\b|\bhigh[\s-]sink\b|\bmultiplexed\b", re.I)),
+    ("timer_advanced", re.compile(r"\btimers?\b.*\badvanced\b|\badvanced[\s-]control\b", re.I), None),
+    ("timer_general_purpose", re.compile(r"\btimers?\b.*\bgeneral\b|\bgeneral\s*-?\s*purpose\b", re.I), re.compile(r"\bi/?o", re.I)),
+    ("timer_basic", re.compile(r"\btimers?\b.*\bbasic\b", re.I), None),
+    ("timer_low_power", re.compile(r"\btimers?\b.*\blow[\s-]power\b|\blptim\b", re.I), None),
+    ("timer_systick", re.compile(r"\bsystick\b", re.I), None),
+    ("timer_watchdog", re.compile(r"\bwatchdog\b|\bwdg\b", re.I), None),
+    ("rtc", re.compile(r"\brtc\b|\breal[\s-]time\s+clock\b", re.I), None),
+    ("pwm_channels", re.compile(r"\bpwm\b", re.I), re.compile(r"advanced|general|basic|motor|low[\s-]power|except|complementary", re.I)),
+    ("timers", re.compile(r"\btimers?\b", re.I), re.compile(r"advanced|general|basic|low|systick|watchdog|wdg|\blp\b|\b16-bit\b|\b32-bit\b|encoder|motor|pwm", re.I)),
+    ("adc_channels", re.compile(r"\badcs?\b.*\bchannels?\b|\bchannels?\b.*\badcs?\b", re.I), None),
+    ("adc_count", re.compile(r"\badcs?\b", re.I), re.compile(r"channel|resolution|speed|rate|bit\b", re.I)),
+    ("dac_channels", re.compile(r"\bdacs?\b.*\bchannels?\b|\bchannels?\b.*\bdacs?\b", re.I), None),
+    ("dac_count", re.compile(r"\bdacs?\b", re.I), re.compile(r"channel|resolution|bit\b", re.I)),
+    ("comparator_count", re.compile(r"\bcomparators?\b|\bcomp\b", re.I), None),
+    ("opamp_count", re.compile(r"\bop[\s-]?amps?\b|\boperational\s+amplifier", re.I), None),
+    ("operating_voltage", re.compile(r"\b(?:operating|supply|power\s+supply)\s+voltage\b|\bvdd\b", re.I), re.compile(r"temperature", re.I)),
+    ("temp_range", re.compile(r"\btemperature", re.I), None),
+    ("standby_current_ua", re.compile(r"\b(?:standby|stop|shutdown|deep\s*sleep|power[\s-]?down)\b.*?\b(?:current|consumption)\b", re.I), None),
+    ("lpuart_count", re.compile(r"\blpuart\b|\blow[\s-]power\s+uart\b", re.I), None),
+    ("usart_count", re.compile(r"\busart\b", re.I), None),
+    ("uart_count", re.compile(r"\buart\b", re.I), None),
+    ("i2s_count", re.compile(r"\bi2s\b", re.I), None),
+    ("spi_count", re.compile(r"\bspi\b", re.I), re.compile(r"\bquad|\bocto|\bqspi\b|\bospi\b|\bxspi\b|\bhyper", re.I)),
+    ("i2c_count", re.compile(r"\bi2c\b|\bi²c\b", re.I), None),
+    ("can_count", re.compile(r"\bcan(?:\s*fd)?\b|\bfdcan\b|\bbxcan\b", re.I), None),
+    ("sdio_count", re.compile(r"\bsdio\b|\bsdmmc\b|\bsd/mmc\b", re.I), None),
+    ("usb", re.compile(r"\busb\b", re.I), None),
+    ("ethernet", re.compile(r"\bethernet\b|\beth\b", re.I), None),
+    ("trustzone", re.compile(r"\btrustzone\b", re.I), None),
+    ("crypto", re.compile(r"\bcrypto|\baes\b|\bhash\b|\bpka\b", re.I), None),
+    ("lcd", re.compile(r"\blcd\b|\bltdc\b", re.I), None),
+    ("camera", re.compile(r"\bcamera\b|\bdcmi\b", re.I), None),
+    ("fsmc", re.compile(r"\bfsmc\b|\bfmc\b", re.I), re.compile(r"\bnor\w*|\bnand\b|\bs?ram\b|\bpsram\b|\bsdram\b|multiplexed|\bmux\b|controller|\bi/o", re.I)),
+)
+
+_UNIT_IN_LABEL = (
+    (re.compile(r"\b(?:kbytes?|kb|kbyte|kilobytes?)\b", re.I), "KB"),
+    (re.compile(r"\b(?:mbytes?|mb|mbyte)\b", re.I), "MB"),
+    (re.compile(r"\bmhz\b", re.I), "MHz"),
+    (re.compile(r"\bkhz\b", re.I), "kHz"),
+    (re.compile(r"[µu]a\b", re.I), "uA"),
+    (re.compile(r"\bma\b", re.I), "mA"),
+    (re.compile(r"°\s*c\b|\bdeg\s*c\b", re.I), "degC"),
+    (re.compile(r"(?<![a-z])v\b", re.I), "V"),
+)
+
+_FOOTNOTE = re.compile(r"(?<=\S)\s*\(\d{1,2}\)$")
+_INT = re.compile(r"^\d{1,6}$")
+_NUMBER = re.compile(r"^\d{1,6}(?:\.\d+)?$")
+_INT_WITH_BREAKDOWN = re.compile(r"^(\d{1,6})\s*\((?:\d+\s*[+x×]\s*)+\d+\)$")
+_INT_WITH_NOTE = re.compile(r"^(\d{1,6})\s*(\([^()]*\)|[a-z][a-z /.-]*)$", re.I)
+_INT_WITH_UNIT = re.compile(
+    r"^(\d{1,6}(?:\.\d+)?)\s*(k\s*bytes?|kbytes?|kb|k|m\s*bytes?|mbytes?|mb|m|mhz|khz|[µu]a|ma|v|°c)$", re.I
+)
+_EXTRA_CLAUSE = re.compile(r"\s*\+\s*\d+\s*extra\b.*$", re.I)
+_INT_TOKENS = re.compile(r"^\d{1,4}(?:\s*[/ ]\s*\d{1,4})+$")
+_RANGE = re.compile(
+    r"^([-+]?\d+(?:\.\d+)?)\s*(?:to|-|\.\.)\s*([-+]?\d+(?:\.\d+)?)\s*([a-zµ°]*)$",
+    re.I,
+)
+# First printed range inside a longer cell ("Ambient: -40 to 85 °C / -40 to
+# 105 °C", "1.8 V to 3.6 V (down to 1.65 V ...)").
+_RANGE_ANY = re.compile(
+    r"([-+]?\s?\d+(?:\.\d+)?)\s*(?:V|°\s*C)?\s*(?:to|-)\s*([-+]?\s?\d+(?:\.\d+)?)", re.I
+)
+# "5 (16-bit) 2 (32-bit)", "2 (32 bits) and 8 (16 bits)", "1 (16-bit) high frequency"
+_BITWIDTH_GROUP = re.compile(r"(\d{1,3})\s*\(\s*\d{1,2}\s*-?\s*bits?\s*\)", re.I)
+_YES = re.compile(r"^(yes|y|✓|x)$", re.I)
+_NO = re.compile(r"^(no|n|n/a|na)$", re.I)
+_EXPLICIT_NONE = re.compile(r"^(-{1,2}|—|–|none|0)$", re.I)
+_YES_NO = re.compile(r"^(yes|no|y|n|-|—|–|n/a|na|✓|x)$", re.I)
+_COMPOSITE_LABEL = re.compile(r"\s*(?:/|\[|\])\s*")
+_MULTI_VALUE = re.compile(r"\bor\b", re.I)
+
+_UNIT_WORDS = {
+    "kbytes": "KB", "kbyte": "KB", "kb": "KB", "k": "KB", "k bytes": "KB", "k byte": "KB",
+    "mbytes": "MB", "mbyte": "MB", "mb": "MB", "m": "MB", "m bytes": "MB", "m byte": "MB",
+    "mhz": "MHz", "khz": "kHz", "ua": "uA", "µa": "uA",
+    "ma": "mA", "v": "V", "°c": "degC",
+}
+
+# ST ordering-code memory letter -> code flash KB (public ST grammar, used
+# only as a self-consistency check, never as a value source).
+ST_FLASH_CODE_KB = {
+    "4": 16, "6": 32, "8": 64, "B": 128, "C": 256, "D": 384, "E": 512,
+    "F": 768, "G": 1024, "H": 1536, "I": 2048, "J": 4096,
+}
+# STM32 + product line (F446, G0B1, WB55, WBA23, WLE5) + pin letter + memory
+# letter; anything after is package/temperature/option suffix.
+_ST_PART = re.compile(
+    r"^STM32(?:[A-Z]\d[A-Z0-9]\d|[A-Z]{2}\d{2}|[A-Z]{3}\d{1,2}|[A-Z]{3}\d)([A-Z])([0-9A-Z])(?:[A-Z0-9]*)$"
+)
+_HEADER_LIST_SPLIT = re.compile(r"\s*[,/]\s*")
+
+
+def _norm(text: Any) -> str:
+    return " ".join(str(text).split()) if text is not None else ""
+
+
+def _strip_footnotes(text: str) -> str:
+    previous = None
+    while previous != text:
+        previous = text
+        text = _FOOTNOTE.sub("", text).strip()
+    return text
+
+
+def unit_from_label(label: str) -> str | None:
+    for pattern, unit in _UNIT_IN_LABEL:
+        if pattern.search(label):
+            return unit
+    return None
+
+
+def label_attribute(label: str) -> str | None:
+    """Single attribute for a (sub)label, or None when it addresses nothing we
+    read. First matching rule wins."""
+    for attribute, must, must_not in _LABEL_RULES:
+        if must.search(label) and not (must_not and must_not.search(label)):
+            return attribute
+    return None
+
+
+def split_composite_label(sub_label: str) -> list[str]:
+    """'SPI / I2S' -> ['SPI', 'I2S']; 'SPI [I2S]' -> ['SPI', 'I2S'];
+    'USART/ UART' -> ['USART', 'UART']. Anything else -> [sub_label]."""
+    if not re.search(r"/|\[", sub_label):
+        return [sub_label]
+    parts = [p for p in _COMPOSITE_LABEL.split(sub_label) if p]
+    return parts if 2 <= len(parts) <= 3 else [sub_label]
+
+
+def split_composite_value(text: str, count: int) -> list[str] | None:
+    """'4/3 (simplex)' -> ['4', '3 (simplex)'] ; '2 [1]' -> ['2', '1'];
+    '4/1 FMP +' -> ['4', '1 FMP +']. None when the value does not carry
+    exactly ``count`` components."""
+    parts = [p.strip() for p in re.split(r"\s*/\s*|\s*\[\s*|\s*\]\s*", text) if p.strip()]
+    return parts if len(parts) == count else None
+
+
+def row_attributes(group_label: str, sub_label: str) -> list[tuple[str, int | None]]:
+    """Attributes addressed by one table row.
+
+    Returns [(attribute, component_index)] where component_index is None for
+    a plain row and 0..n-1 for a composite row like 'SPI / I2S'.
+    """
+    if sub_label:
+        components = split_composite_label(sub_label)
+        if len(components) > 1:
+            out: list[tuple[str, int | None]] = []
+            for index, component in enumerate(components):
+                attribute = label_attribute(f"{group_label} {component}")
+                if attribute is None:
+                    attribute = label_attribute(component)
+                if attribute:
+                    out.append((attribute, index))
+            if out:
+                return out
+    full = " ".join(p for p in (group_label, sub_label) if p)
+    attribute = label_attribute(full)
+    if attribute is None and sub_label:
+        attribute = label_attribute(sub_label)
+    return [(attribute, None)] if attribute else []
+
+
+def parse_value(verbatim: str, attribute: str, label_unit: str | None) -> dict[str, Any]:
+    """Type one printed cell. Returns a leaf with ``status`` in
+    {typed, boolean, verbatim, unknown}; the verbatim string is always kept."""
+    raw = _norm(verbatim)
+    text = _strip_footnotes(raw)
+    leaf: dict[str, Any] = {"verbatim": raw}
+    if not text:
+        leaf["status"] = "unknown"
+        leaf["reason"] = "empty_cell"
+        return leaf
+
+    if attribute in BOOLEAN_ATTRIBUTES:
+        if _YES_NO.match(text):
+            leaf["status"] = "boolean"
+            leaf["value"] = text.lower() in {"yes", "y", "✓"}
+            return leaf
+        leaf["status"] = "verbatim"
+        return leaf
+
+    if attribute == "package":
+        packages = packages_from_text(text)
+        leaf["status"] = "verbatim"
+        if packages:
+            leaf["packages"] = packages
+        return leaf
+
+    if attribute not in NUMERIC_ATTRIBUTES:
+        leaf["status"] = "verbatim"
+        return leaf
+
+    unit = label_unit or NUMERIC_ATTRIBUTES[attribute]
+
+    if attribute in {"operating_voltage", "temp_range"}:
+        cleaned = text.replace("−", "-").replace("–", "-").replace("—", "-").replace("º", "°")
+        cleaned = re.sub(r"(?<=\d)\s*(?:V|°\s*C)\b", "", cleaned, flags=re.I)
+        cleaned = re.sub(r"\s*(?:V|°\s*C)\s*$", "", cleaned, flags=re.I)
+        cleaned = re.sub(r"(?<![\d.])-\s+(?=\d)", "-", cleaned)
+        match = _RANGE.match(cleaned)
+        if match is None and attribute == "temp_range":
+            # Multi-grade cells ("-40 to 85 / -40 to 105 / -40 to 125"): the
+            # document states a set of grades. min/max carry the first printed
+            # grade; every grade is kept in ``grades``. A junction-temperature
+            # clause is not an operating range.
+            ambient = re.split(r"\bjunction\b", cleaned, flags=re.I)[0]
+            grades = [(float(a.replace(" ", "").replace("+", "")), float(b.replace(" ", "").replace("+", ""))) for a, b in _RANGE_ANY.findall(ambient)]
+            if grades and not re.match(r"^\s*junction", cleaned, re.I):
+                leaf.update({"status": "typed", "min": grades[0][0], "max": grades[0][1], "unit": unit, "grades": [list(g) for g in grades], "note": "first of several printed grades" if len(grades) > 1 else "range within longer cell"})
+                return leaf
+        if match is None and attribute == "operating_voltage":
+            first = _RANGE_ANY.search(cleaned)
+            if first:
+                leaf.update({"status": "typed", "min": float(first.group(1).replace("+", "")), "max": float(first.group(2).replace("+", "")), "unit": unit, "note": cleaned[first.end():].strip(" ()") or "range within longer cell"})
+                return leaf
+        if match:
+            leaf.update(
+                {
+                    "status": "typed",
+                    "min": float(match.group(1).replace("+", "")),
+                    "max": float(match.group(2).replace("+", "")),
+                    "unit": unit,
+                }
+            )
+            return leaf
+        leaf["status"] = "unknown"
+        leaf["reason"] = "not_a_range"
+        return leaf
+
+    # Presence flags in a count row ("RTC: Yes", "SDIO: Yes") are kept as
+    # booleans; ST's "-" is its explicit none.
+    if _EXPLICIT_NONE.match(text):
+        leaf.update({"status": "typed", "typ": 0, "unit": unit, "note": "explicit none"})
+        return leaf
+    if _YES.match(text):
+        leaf.update({"status": "boolean", "value": True})
+        return leaf
+    if _NO.match(text):
+        leaf.update({"status": "boolean", "value": False})
+        return leaf
+    if _MULTI_VALUE.search(text) and not _BITWIDTH_GROUP.search(text):
+        leaf["status"] = "unknown"
+        leaf["reason"] = "alternative_values"
+        return leaf
+
+    number: float | None = None
+    if _NUMBER.match(text):
+        number = float(text)
+    elif unit == "count" and len(_BITWIDTH_GROUP.findall(text)) >= 1 and _bitwidth_only(text):
+        groups = _BITWIDTH_GROUP.findall(text)
+        number = float(sum(int(g) for g in groups))
+        leaf["components"] = [m.group(0) for m in _BITWIDTH_GROUP.finditer(text)]
+        leaf["note"] = "sum of bit-width groups"
+    else:
+        match = _INT_WITH_BREAKDOWN.match(text)
+        if match:
+            number = float(match.group(1))
+            leaf["breakdown"] = text[len(match.group(1)):].strip()
+        else:
+            match = _INT_WITH_UNIT.match(text)
+            if match:
+                number = float(match.group(1))
+                unit = _UNIT_WORDS.get(" ".join(match.group(2).lower().split()), unit)
+            else:
+                match = _INT_WITH_NOTE.match(text)
+                if match:
+                    number = float(match.group(1))
+                    leaf["note"] = text[len(match.group(1)):].strip()
+    if number is None:
+        leaf["status"] = "unknown"
+        leaf["reason"] = "unparsed_numeric"
+        return leaf
+
+    if attribute.endswith("_kb") and unit == "MB":
+        number *= 1024
+        unit = "KB"
+    if number.is_integer():
+        number = int(number)
+    leaf.update({"status": "typed", "typ": number, "unit": unit})
+    return leaf
+
+
+def _bitwidth_only(text: str) -> bool:
+    """True when the cell is only bit-width groups joined by and/+/,/space,
+    optionally followed by a short qualifier ('high frequency')."""
+    rest = _BITWIDTH_GROUP.sub("", text)
+    rest = re.sub(r"\band\b|\+|,|/", " ", rest, flags=re.I).strip()
+    return len(rest.split()) <= 3 and not re.search(r"\d", rest)
+
+
+def _header_token(cell: str) -> str:
+    """'STM32\\nF446MC' -> 'STM32F446MC'; keep printed casing."""
+    return re.sub(r"\s+", "", cell)
+
+
+_CODE = re.compile(r"[A-Z][0-9A-Z](?:xxN|xxP|xxQ)?")
+
+
+def _split_stem_codes(cell: str, expected: int | None = None) -> tuple[str, list[str]] | None:
+    """'STM32G050 _ F6 K6 K8 C6 C8' -> ('STM32G050', ['F6','K6','K8','C6','C8']).
+
+    Also 'STM32C071__F8/_FB_F8xxN/...' (codes separated by / or _) and, when
+    ``expected`` is given, a glued run 'G8GBK8KB' that chunks into exactly
+    ``expected`` two-character codes.
+    """
+    text = re.sub(r"[_/]+", " ", _norm(cell)).strip()
+    parts = text.split()
+    if len(parts) < 2:
+        return None
+    stem = parts[0]
+    if not PART_TOKEN.fullmatch(stem) and not is_wildcard_token(stem):
+        return None
+    rest = parts[1:]
+    codes = [p for p in rest if _CODE.fullmatch(p)]
+    if len(codes) >= 2 and len(codes) == len(rest):
+        return stem, codes
+    if expected and len(rest) >= 1:
+        # Glued codes: split each blob into 2-char codes (with optional xxN).
+        glued: list[str] = []
+        for blob in rest:
+            pos = 0
+            while pos < len(blob):
+                match = _CODE.match(blob, pos)
+                if not match or match.end() == pos:
+                    return None
+                glued.append(match.group(0))
+                pos = match.end()
+        if len(glued) == expected:
+            return stem, glued
+    return None
+
+
+def _wildcard_base(token: str) -> str:
+    """'GD32F405xx' -> 'GD32F405'; 'STM32F101Tx' -> 'STM32F101T'; composite
+    'STM32C011x4/x6' -> 'STM32C011'."""
+    token = token.split("/")[0]
+    return re.sub(r"x[A-Za-z0-9x]*$", "", token) if "x" in token else token
+
+
+def _join_wildcard(token: str, device_summary: dict[str, list[str]]) -> list[str]:
+    """Members of a header wildcard like STM32F101Tx from a printed device
+    summary {STM32F101x8: [STM32F101C8, ...]} -> parts matching both."""
+    pattern = re.compile("^" + re.escape(_wildcard_base(token)) + r"[0-9A-Z]$")
+    members: list[str] = []
+    for parts in device_summary.values():
+        for part in parts:
+            if pattern.match(part) and part not in members:
+                members.append(part)
+    return sorted(members)
+
+
+def bind_columns(
+    grid: list[list[str]],
+    label_cols: int,
+    device_summary: dict[str, list[str]] | None,
+) -> tuple[int, list[dict[str, Any]]]:
+    """Bind each data column to a part number using only printed header text.
+
+    Returns (number_of_header_rows, bindings). Each binding has
+    ``part_number`` (or None), ``family_token``, ``binding`` in
+    {header_token, header_codes, header_wildcard_codes, device_summary_join,
+    unbound} and ``column_index``.
+    """
+    width = len(grid[0])
+    data_cols = list(range(label_cols, width))
+    row0 = grid[0]
+    row1 = grid[1] if len(grid) > 1 else [""] * width
+
+    # Case B: one header cell listing stem + codes.
+    for cell in row0[label_cols:]:
+        split = _split_stem_codes(cell, expected=len(data_cols))
+        if split:
+            stem, codes = split
+            if len(codes) == len(data_cols):
+                base = _wildcard_base(stem)
+                out: list[dict[str, Any]] = []
+                for col, code in zip(data_cols, codes):
+                    if len(code) > 2:
+                        # 'F8xxN' is an ordering-suffix variant, not a part
+                        # number the document spells out; keep it verbatim.
+                        out.append({"column_index": col, "part_number": None, "family_token": base + code, "binding": "unbound", "reason": "ordering_suffix_variant"})
+                    else:
+                        out.append({"column_index": col, "part_number": base + code, "family_token": stem, "binding": "header_codes"})
+                return 1, out
+            return 1, [
+                {"column_index": col, "part_number": None, "family_token": stem, "binding": "unbound", "reason": "code_count_mismatch"}
+                for col in data_cols
+            ]
+
+    filled0: list[str] = []
+    carry = ""
+    for col in range(width):
+        cell = _norm(row0[col])
+        if cell:
+            carry = cell
+        filled0.append(carry if col >= label_cols else cell)
+
+    tokens = [_header_token(filled0[col]) for col in data_cols]
+    codes1 = [_norm(row1[col]) for col in data_cols]
+    codes1_ok = all(re.fullmatch(r"[A-Z][0-9A-Z]{1,3}", c or "") for c in codes1)
+    second_header_is_labels = bool(row_attributes(_norm(row1[0]), _norm(row1[1]) if label_cols > 1 else ""))
+
+    bindings: list[dict[str, Any]] = []
+    if codes1_ok and not second_header_is_labels and len(set(codes1)) >= 2:
+        # Case C: wildcard/stem over a code row (GD32F405xx / RE RG RK ...).
+        for col, token, code in zip(data_cols, tokens, codes1):
+            base = _wildcard_base(token) if token else ""
+            if base:
+                bindings.append({"column_index": col, "part_number": base + code, "family_token": token, "binding": "header_wildcard_codes"})
+            else:
+                bindings.append({"column_index": col, "part_number": None, "family_token": token or None, "binding": "unbound", "reason": "no_header_token"})
+        return 2, bindings
+
+    # Case A: concrete token per column; a token spanning several columns is
+    # ambiguous unless a printed device summary resolves the members.
+    counts: dict[str, int] = {}
+    for token in tokens:
+        counts[token] = counts.get(token, 0) + 1
+    for col, token in zip(data_cols, tokens):
+        if token and is_concrete_part_token(token) and counts[token] == 1:
+            bindings.append({"column_index": col, "part_number": token, "family_token": token, "binding": "header_token"})
+            continue
+        if token and counts[token] == 1 and _HEADER_LIST_SPLIT.search(token):
+            # Several parts named for one column ("STM32L552CE,STM32L552CC/
+            # STM32L552CExxP"): the column binds to every concrete part the
+            # header prints; ordering-suffix wildcards are kept verbatim.
+            pieces = [p for p in _HEADER_LIST_SPLIT.split(token) if p]
+            concrete = [p for p in pieces if is_concrete_part_token(p) and not re.search(r"xx", p)]
+            if concrete:
+                bindings.append(
+                    {"column_index": col, "part_number": concrete[0], "part_numbers": concrete, "also_covers": [p for p in pieces if p not in concrete], "family_token": token, "binding": "header_token_list"}
+                )
+                continue
+        if token and is_wildcard_token(token) and device_summary:
+            members = _join_wildcard(token, device_summary)
+            if len(members) == counts[token]:
+                offset = [c for c, t in zip(data_cols, tokens) if t == token].index(col)
+                bindings.append(
+                    {"column_index": col, "part_number": members[offset], "family_token": token, "binding": "device_summary_join", "join_members": members}
+                )
+                continue
+        bindings.append(
+            {"column_index": col, "part_number": None, "family_token": token or None, "binding": "unbound", "reason": "spanning_or_wildcard_header" if token else "empty_header"}
+        )
+    return 1, bindings
+
+
+def read_device_summary(document: Any, pages: Iterable[int]) -> dict[str, list[str]]:
+    """ST 'Table 1. Device summary': Reference -> Part number list."""
+    summary: dict[str, list[str]] = {}
+    for page_number in pages:
+        try:
+            tables = document[page_number - 1].find_tables().tables
+        except Exception:  # noqa: BLE001
+            continue
+        for table in tables:
+            try:
+                rows = table.extract()
+            except Exception:  # noqa: BLE001
+                continue
+            if not rows or len(rows[0]) < 2:
+                continue
+            header = " ".join(_norm(c) for c in rows[0]).lower()
+            if "reference" not in header or "part" not in header:
+                continue
+            for row in rows[1:]:
+                reference = _norm(row[0])
+                if not reference:
+                    continue
+                parts = [
+                    t for t in PART_TOKEN.findall(" ".join(_norm(c) for c in row[1:]))
+                    if is_concrete_part_token(t)
+                ]
+                if parts:
+                    bucket = summary.setdefault(reference, [])
+                    for part in parts:
+                        if part not in bucket:
+                            bucket.append(part)
+    return summary
+
+
+def st_flash_code_kb(part_number: str | None) -> int | None:
+    if not part_number or part_number.startswith(("STM32WB", "STM32MP", "STM32N")):
+        # Wireless/MPU lines use a different memory-letter table; not checked.
+        return None
+    match = _ST_PART.match(part_number)
+    if not match:
+        return None
+    return ST_FLASH_CODE_KB.get(match.group(2))
+
+
+def read_matrix_table(
+    rows: list[list[Any]],
+    *,
+    page: int,
+    device_summary: dict[str, list[str]] | None,
+) -> dict[str, Any] | None:
+    description = classify_table(rows)
+    if description is None or description["orientation"] != "parts_as_columns":
+        return None
+    width = max(len(r) for r in rows)
+    grid = [[_norm(c) for c in r] + [""] * (width - len(r)) for r in rows]
+    label_cols = min(2, width - 1)
+    header_rows, bindings = bind_columns(grid, label_cols, device_summary)
+    if not any(
+        b["part_number"] or (b.get("family_token") and re.search(r"\d", b["family_token"]) and (PART_TOKEN.search(b["family_token"]) or is_wildcard_token(b["family_token"])))
+        for b in bindings
+    ):
+        # No column header names a part or a series: not a device table
+        # (low-power mode matrices and the like slip through the census).
+        return None
+    data_cols = [b["column_index"] for b in bindings]
+
+    attribute_rows: list[dict[str, Any]] = []
+    carried = ""
+    for row_index in range(header_rows, len(grid)):
+        row = grid[row_index]
+        if row[0]:
+            carried = row[0]
+        sub = row[1] if label_cols > 1 else ""
+        # Second label column is sometimes the start of data (2-col label
+        # tables where col1 holds a value): treat as data when it has no label.
+        attributes = row_attributes(carried, sub)
+        if not attributes:
+            continue
+        label = " ".join(p for p in (carried, sub) if p)
+        unit = unit_from_label(label)
+        values: list[tuple[str, bool]] = []
+        carry_value = ""
+        for col in data_cols:
+            cell = row[col]
+            merged = False
+            if cell:
+                carry_value = cell
+            else:
+                merged = bool(carry_value)
+            values.append((cell if cell else carry_value, merged))
+        if not any(v for v, _ in values):
+            continue
+        values = _split_glued_runs(values)
+        attribute_rows.append(
+            {"row_index": row_index, "label": label, "attributes": attributes, "label_unit": unit, "values": values}
+        )
+    if len(attribute_rows) < 2:
+        return None
+    return {
+        "page": page,
+        "rows": len(rows),
+        "columns": width,
+        "label_columns": label_cols,
+        "header_rows": header_rows,
+        "bindings": bindings,
+        "attribute_rows": attribute_rows,
+        "census_attributes": attributes_in_label(" ".join(r["label"] for r in attribute_rows)),
+    }
+
+
+def _split_glued_runs(values: list[tuple[str, bool]]) -> list[tuple[str, bool]]:
+    """A cell like '2 2' or '1/1/1/1' that PyMuPDF glued across N columns is
+    N per-column values when the token count equals the run length. Anything
+    else is left as printed (and will surface as unknown)."""
+    out = list(values)
+    index = 0
+    while index < len(out):
+        text, merged = out[index]
+        if merged:
+            index += 1
+            continue
+        run_end = index + 1
+        while run_end < len(out) and out[run_end][1]:
+            run_end += 1
+        run = run_end - index
+        if run > 1 and _INT_TOKENS.match(_strip_footnotes(text)):
+            tokens = re.split(r"\s*[/ ]\s*", _strip_footnotes(text))
+            if len(tokens) == run:
+                for offset, token in enumerate(tokens):
+                    out[index + offset] = (token, False)
+        index = run_end
+    return out
+
+
+def _leaf_receipt(page: int, label: str, column: int, merged: bool) -> dict[str, Any]:
+    receipt = {"page": page, "row_label": label, "column_index": column}
+    if merged:
+        receipt["merged_cell"] = True
+    return receipt
+
+
+def _cell_leaves(verbatim: str, attributes: list[tuple[str, int | None]], label_unit: str | None) -> list[tuple[str, dict[str, Any]]]:
+    """Leaves for one cell: plain rows give one leaf; composite rows split the
+    value into components and give one leaf per component."""
+    composite = [a for a in attributes if a[1] is not None]
+    if not composite:
+        return [(attribute, parse_value(verbatim, attribute, label_unit)) for attribute, _ in attributes]
+    text = _strip_footnotes(_norm(verbatim))
+    extra = _EXTRA_CLAUSE.search(text)
+    if extra:
+        text = text[: extra.start()].strip()
+    components = split_composite_value(text, max(i for _, i in composite) + 1)
+    out: list[tuple[str, dict[str, Any]]] = []
+    for attribute, index in composite:
+        if components is None:
+            out.append((attribute, {"verbatim": _norm(verbatim), "status": "unknown", "reason": "composite_value_mismatch"}))
+            continue
+        leaf = parse_value(components[index], attribute, label_unit)
+        leaf["verbatim"] = _norm(verbatim)
+        leaf["component"] = components[index]
+        if extra:
+            leaf["note"] = extra.group(0).strip(" +")
+        out.append((attribute, leaf))
+    return out
+
+
+def build_family_record(
+    *,
+    source_path: Path,
+    document_sha256: str,
+    census_row: dict[str, Any],
+    tables: list[dict[str, Any]],
+    device_summary: dict[str, list[str]],
+) -> dict[str, Any]:
+    series_tokens = list(census_row.get("series_tokens") or [])
+    parts_named = [p["token"] for p in census_row.get("parts_named") or []]
+    family = None
+    if series_tokens:
+        family = _wildcard_base(series_tokens[0]).rstrip("x")
+    elif census_row.get("family_stems"):
+        family = census_row["family_stems"][0]
+
+    variants: dict[str, dict[str, Any]] = {}
+    unbound_columns: list[dict[str, Any]] = []
+    shared: dict[str, dict[str, Any]] = {}
+    unknown: list[dict[str, Any]] = []
+    conflicts: list[dict[str, Any]] = []
+    counts = {"cells_total": 0, "cells_typed": 0, "cells_verbatim": 0, "cells_unknown": 0}
+
+    def _count(leaf: dict[str, Any]) -> None:
+        counts["cells_total"] += 1
+        status = leaf["status"]
+        if status in ("typed", "boolean"):
+            counts["cells_typed"] += 1
+        elif status == "verbatim":
+            counts["cells_verbatim"] += 1
+        else:
+            counts["cells_unknown"] += 1
+
+    for table in tables:
+        page = table["page"]
+        bindings = table["bindings"]
+        for binding in bindings:
+            if binding["part_number"] is None:
+                unbound_columns.append(dict(binding, page=page))
+        for arow in table["attribute_rows"]:
+            label = arow["label"]
+            by_attribute: dict[str, list[tuple[dict[str, Any], dict[str, Any]]]] = {}
+            for binding, (verbatim, merged) in zip(bindings, arow["values"]):
+                if not verbatim:
+                    continue
+                for attribute, leaf in _cell_leaves(verbatim, arow["attributes"], arow["label_unit"]):
+                    leaf["receipt"] = _leaf_receipt(page, label, binding["column_index"], merged)
+                    by_attribute.setdefault(attribute, []).append((binding, leaf))
+            for attribute, cols in by_attribute.items():
+                for binding, leaf in cols:
+                    _count(leaf)
+                    if leaf["status"] == "unknown":
+                        unknown.append(
+                            {"attribute": attribute, "part_number": binding["part_number"], "column_index": binding["column_index"], "page": page, "row_label": label, "verbatim": leaf["verbatim"], "reason": leaf.get("reason")}
+                        )
+                distinct = {leaf["verbatim"] for _, leaf in cols}
+                if len(distinct) == 1 and len(cols) == len(bindings):
+                    if attribute not in shared:
+                        leaf = dict(cols[0][1])
+                        leaf["receipt"] = dict(leaf["receipt"], applies_to="all_variants")
+                        shared[attribute] = leaf
+                    continue
+                for binding, leaf in cols:
+                    for part in binding.get("part_numbers") or [binding["part_number"]]:
+                        key = part or f"column:{page}:{binding['column_index']}"
+                        variant = variants.setdefault(
+                            key,
+                            {"part_number": part, "family_token": binding["family_token"], "binding": binding["binding"], "column_index": binding["column_index"], "page": page, "attributes": {}},
+                        )
+                        if binding.get("also_covers"):
+                            variant["also_covers"] = binding["also_covers"]
+                        existing = variant["attributes"].get(attribute)
+                        if existing is not None:
+                            if existing["verbatim"] != leaf["verbatim"]:
+                                # Two rows of the same table landed in one
+                                # attribute with different values: the label
+                                # grammar could not separate them, so neither
+                                # value is trusted.
+                                conflicts.append(
+                                    {"part_number": part, "attribute": attribute, "values": [existing["verbatim"], leaf["verbatim"]], "labels": [existing["receipt"]["row_label"], label], "pages": [existing["receipt"]["page"], page], "kind": "repeated_row_disagrees"}
+                                )
+                                if existing["status"] in ("typed", "boolean"):
+                                    counts["cells_typed"] -= 1
+                                    counts["cells_unknown"] += 1
+                                elif existing["status"] == "verbatim":
+                                    counts["cells_verbatim"] -= 1
+                                    counts["cells_unknown"] += 1
+                                for k in ("typ", "min", "max", "value"):
+                                    existing.pop(k, None)
+                                existing["status"] = "unknown"
+                                existing["reason"] = "repeated_row_disagrees"
+                            continue
+                        variant["attributes"][attribute] = dict(leaf) if len(binding.get("part_numbers") or []) > 1 else leaf
+
+    # Derived: pin_count from the package cell when every package printed for
+    # the variant has one pin count. Kept separate from gpio_count.
+    def _derive_pins(attrs: dict[str, dict[str, Any]], receipt_extra: dict[str, Any]) -> None:
+        package = attrs.get("package")
+        if not package or "pin_count" in attrs:
+            return
+        pins = sorted({p["pin_count"] for p in package.get("packages", [])})
+        if len(pins) == 1:
+            attrs["pin_count"] = {"verbatim": package["verbatim"], "status": "typed", "typ": pins[0], "unit": "pins", "derived_from": "package", "receipt": dict(package["receipt"], **receipt_extra)}
+        elif len(pins) > 1:
+            attrs["pin_count"] = {"verbatim": package["verbatim"], "status": "unknown", "reason": "multiple_pin_counts", "receipt": dict(package["receipt"], **receipt_extra)}
+
+    _derive_pins(shared, {"applies_to": "all_variants"})
+    for variant in variants.values():
+        _derive_pins(variant["attributes"], {})
+
+    # Plausibility: channel/GPIO counts cannot exceed the package pin count.
+    def _plausible(attrs: dict[str, dict[str, Any]], part: str | None) -> None:
+        pins = (attrs.get("pin_count") or shared.get("pin_count") or {})
+        if pins.get("status") != "typed":
+            return
+        for attribute in ("gpio_count", "adc_channels"):
+            leaf = attrs.get(attribute)
+            if leaf and leaf.get("status") == "typed" and leaf["typ"] > pins["typ"]:
+                leaf["status"] = "unknown"
+                leaf["reason"] = f"exceeds_pin_count_{pins['typ']}"
+                leaf.pop("typ", None)
+                unknown.append({"attribute": attribute, "part_number": part, "column_index": leaf["receipt"]["column_index"], "page": leaf["receipt"]["page"], "row_label": leaf["receipt"]["row_label"], "verbatim": leaf["verbatim"], "reason": leaf["reason"]})
+                counts["cells_typed"] -= 1
+                counts["cells_unknown"] += 1
+
+    for variant in variants.values():
+        _plausible(variant["attributes"], variant["part_number"])
+
+    # Self-consistency: ST memory letter vs printed code flash.
+    consistency: list[dict[str, Any]] = []
+    for variant in variants.values():
+        part = variant["part_number"]
+        expected = st_flash_code_kb(part)
+        leaf = variant["attributes"].get("code_flash_kb") or shared.get("code_flash_kb")
+        if expected is None or leaf is None or leaf.get("status") != "typed":
+            continue
+        ok = leaf.get("typ") == expected
+        consistency.append({"part_number": part, "check": "st_flash_code_vs_printed_code_flash", "expected_kb": expected, "printed_kb": leaf.get("typ"), "ok": ok})
+        if not ok:
+            conflicts.append(
+                {"part_number": part, "attribute": "code_flash_kb", "values": [leaf.get("verbatim"), f"ordering code implies {expected} KB"], "pages": [leaf["receipt"]["page"]], "kind": "ordering_code_mismatch"}
+            )
+
+    bound_parts = sorted({v["part_number"] for v in variants.values() if v["part_number"]})
+    covered = sorted(set(parts_named) | set(bound_parts) | {p for ps in device_summary.values() for p in ps})
+    attributes_addressed = sorted(set(shared) | {a for v in variants.values() for a in v["attributes"]})
+    return {
+        "schema": MATRIX_SCHEMA,
+        "_meta": {
+            "extracted_by": EXTRACTED_BY,
+            "extracted_at": datetime.now(timezone.utc).isoformat(),
+            "document_sha256": document_sha256,
+            "source_path": str(source_path),
+            "datasheet_url": None,
+            "revision": None,
+            "device_table_pages": sorted({t["page"] for t in tables}),
+            "models_used": [],
+        },
+        "overview": {
+            "part_number": None,
+            "family": family,
+            "series_tokens": series_tokens,
+            "part_numbers_covered": covered,
+            "device_summary": device_summary,
+            "vendor": census_row.get("vendor"),
+        },
+        "shared": shared,
+        "variants": sorted(variants.values(), key=lambda v: (v["part_number"] is None, v["part_number"] or "", v["column_index"])),
+        "unbound_columns": unbound_columns,
+        "unknown": unknown,
+        "conflicts": conflicts,
+        "consistency": consistency,
+        "bogey": {
+            "parts_named": len(parts_named),
+            "variant_columns": sum(len(t["bindings"]) for t in tables),
+            "variants_bound": len(bound_parts),
+            "attributes_addressed": attributes_addressed,
+            **counts,
+        },
+    }
+
+
+def extract_family_matrix(path: Path, census_row: dict[str, Any]) -> dict[str, Any]:
+    import pymupdf
+
+    document = pymupdf.open(path)
+    sha = hashlib.sha256(path.read_bytes()).hexdigest()
+    census_pages = sorted({t["page"] for t in census_row.get("device_tables") or []})
+    front = list(range(1, min(document.page_count, 3) + 1))
+    device_summary = read_device_summary(document, front)
+
+    tables: list[dict[str, Any]] = []
+    for page_number in census_pages:
+        try:
+            found = document[page_number - 1].find_tables().tables
+        except Exception:  # noqa: BLE001
+            continue
+        for table in found:
+            try:
+                rows = table.extract()
+            except Exception:  # noqa: BLE001
+                continue
+            matrix = read_matrix_table(rows, page=page_number, device_summary=device_summary)
+            if matrix and len(matrix["attribute_rows"]) >= 3:
+                tables.append(matrix)
+    record = build_family_record(
+        source_path=path, document_sha256=sha, census_row=census_row, tables=tables, device_summary=device_summary
+    )
+    if sha != census_row.get("document_sha256"):
+        record["_meta"]["census_sha256_mismatch"] = census_row.get("document_sha256")
+    return record
