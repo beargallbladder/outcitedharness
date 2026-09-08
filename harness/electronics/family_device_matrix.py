@@ -453,10 +453,24 @@ def _join_wildcard(token: str, device_summary: dict[str, list[str]]) -> list[str
     return sorted(members)
 
 
+def _members_from_parts_named(token: str, parts_named: list[str]) -> list[str]:
+    """Concrete parts the document names elsewhere that instantiate a header
+    wildcard (STM32F479Vx -> STM32F479VG, STM32F479VI), ordered by the ST
+    memory letter when every member has one, else alphabetically. The
+    ordering-code self-check later confirms or rejects the binding."""
+    pattern = re.compile("^" + re.escape(_wildcard_base(token)) + r"[0-9A-Z]$")
+    members = sorted({p for p in parts_named if pattern.match(p)})
+    sizes = [st_flash_code_kb(p) for p in members]
+    if members and all(s is not None for s in sizes):
+        members.sort(key=lambda p: st_flash_code_kb(p) or 0)
+    return members
+
+
 def bind_columns(
     grid: list[list[str]],
     label_cols: int,
     device_summary: dict[str, list[str]] | None,
+    parts_named: list[str] | None = None,
 ) -> tuple[int, list[dict[str, Any]]]:
     """Bind each data column to a part number using only printed header text.
 
@@ -543,6 +557,20 @@ def bind_columns(
                     {"column_index": col, "part_number": members[offset], "family_token": token, "binding": "device_summary_join", "join_members": members}
                 )
                 continue
+        if token and is_wildcard_token(token) and parts_named:
+            members = _members_from_parts_named(token, parts_named)
+            span = counts[token]
+            if len(members) == span and span > 1:
+                offset = [c for c, t in zip(data_cols, tokens) if t == token].index(col)
+                bindings.append(
+                    {"column_index": col, "part_number": members[offset], "family_token": token, "binding": "parts_named_join", "join_members": members}
+                )
+                continue
+            if span == 1 and len(members) > 1:
+                bindings.append(
+                    {"column_index": col, "part_number": members[0], "part_numbers": members, "family_token": token, "binding": "parts_named_join", "members": [{"part_number": m, "token": m} for m in members]}
+                )
+                continue
         bindings.append(
             {"column_index": col, "part_number": None, "family_token": token or None, "binding": "unbound", "reason": "spanning_or_wildcard_header" if token else "empty_header"}
         )
@@ -593,11 +621,124 @@ def st_flash_code_kb(part_number: str | None) -> int | None:
     return ST_FLASH_CODE_KB.get(match.group(2))
 
 
+_GEO_CODE = re.compile(r"^_?([A-Z][0-9A-Z])/?$")
+_GEO_SUFFIX = re.compile(r"^(?:xx[A-Z]|_?[A-Z][0-9A-Z]xx[A-Z])/?$")
+
+
+def _column_ranges(table: Any, width: int) -> list[tuple[float, float]] | None:
+    """x-ranges of the extracted grid's columns from the table's cell boxes."""
+    xs: set[float] = set()
+    right = 0.0
+    for cell in getattr(table, "cells", None) or []:
+        if cell:
+            xs.add(round(cell[0], 1))
+            right = max(right, cell[2])
+    bounds = sorted(xs)
+    if len(bounds) != width:
+        return None
+    return [(bounds[i], bounds[i + 1] if i + 1 < width else right) for i in range(width)]
+
+
+def geometry_bindings(page: Any, table: Any, grid: list[list[str]], label_cols: int) -> list[dict[str, Any]] | None:
+    """Bind columns from the header's word positions when the header text is
+    a rotated code grid ("STM32G071_" over "_G8 _GB _K8 ..." with "xxN" pieces
+    stacked under some codes, or "F8 / FB" stacked in one column).
+
+    Only printed pieces are used: a code lands in the column whose x-range
+    contains the word's centre; a suffix piece attaches to the code directly
+    above it in the same column. Nothing is minted when a column shows no code.
+    """
+    width = len(grid[0])
+    ranges = _column_ranges(table, width)
+    if ranges is None:
+        return None
+    header_cells = [c for c in table.rows[0].cells if c]
+    if not header_cells:
+        return None
+    x0 = min(c[0] for c in header_cells)
+    y0 = min(c[1] for c in header_cells)
+    x1 = max(c[2] for c in header_cells)
+    y1 = max(c[3] for c in header_cells)
+    words = [w for w in page.get_text("words") if w[0] >= x0 - 1 and w[2] <= x1 + 1 and w[1] >= y0 - 1 and w[3] <= y1 + 1]
+    stem = None
+    for w in words:
+        token = w[4].strip("_")
+        if re.search(r"\d", token) and (PART_TOKEN.fullmatch(token) or is_wildcard_token(token)):
+            stem = token
+            break
+    if stem is None:
+        return None
+    base = _wildcard_base(stem)
+
+    def column_of(word: Any) -> int | None:
+        centre = (word[0] + word[2]) / 2
+        for index, (left, right) in enumerate(ranges):
+            if left <= centre < right:
+                return index
+        return None
+
+    per_column: dict[int, list[tuple[float, str, str, bool]]] = {}
+    for w in words:
+        text = w[4]
+        col = column_of(w)
+        if col is None or col < label_cols:
+            continue
+        rotated = (w[3] - w[1]) > (w[2] - w[0])
+        if _GEO_CODE.match(text):
+            per_column.setdefault(col, []).append((w[1], "code", _GEO_CODE.match(text).group(1), rotated))
+        elif _GEO_SUFFIX.match(text):
+            per_column.setdefault(col, []).append((w[1], "suffix", text.strip("_/"), rotated))
+    if not per_column:
+        return None
+
+    bindings: list[dict[str, Any]] = []
+    for col in range(label_cols, width):
+        raw = per_column.get(col, [])
+        # Horizontal words stack top-to-bottom; rotated (vertical) words read
+        # bottom-to-top. Either way the printed order is the order of the
+        # slash-separated values in the column's cells.
+        rotated_column = sum(1 for p in raw if p[3]) > len(raw) / 2
+        pieces = [(y, kind, text) for y, kind, text, _ in sorted(raw, key=lambda p: p[0], reverse=rotated_column)]
+        members: list[dict[str, Any]] = []
+        for y, kind, text in pieces:
+            if kind == "code":
+                members.append({"part_number": base + text, "token": base + text})
+            elif kind == "suffix":
+                if len(text) > 3:  # full 'F8xxN' word
+                    members.append({"part_number": None, "token": base + text})
+                elif members and members[-1]["part_number"]:
+                    # 'xxN' stacked under a code: the column is that ordering variant.
+                    members[-1] = {"part_number": None, "token": members[-1]["token"] + text}
+        if not members:
+            bindings.append({"column_index": col, "part_number": None, "family_token": stem, "binding": "unbound", "reason": "no_code_in_column"})
+            continue
+        concrete = [m["part_number"] for m in members if m["part_number"]]
+        binding = {
+            "column_index": col,
+            "part_number": concrete[0] if concrete else None,
+            "family_token": stem,
+            "binding": "header_geometry" if concrete else "unbound",
+            "members": members,
+        }
+        if len(members) > 1:
+            binding["part_numbers"] = concrete
+        if not concrete:
+            binding["reason"] = "ordering_suffix_variant"
+            binding["family_token"] = members[0]["token"]
+        bindings.append(binding)
+    if not any(b["part_number"] for b in bindings):
+        return None
+    return bindings
+
+
 def read_matrix_table(
     rows: list[list[Any]],
     *,
     page: int,
     device_summary: dict[str, list[str]] | None,
+    table: Any = None,
+    pdf_page: Any = None,
+    parts_named: list[str] | None = None,
 ) -> dict[str, Any] | None:
     description = classify_table(rows)
     if description is None or description["orientation"] != "parts_as_columns":
@@ -605,7 +746,12 @@ def read_matrix_table(
     width = max(len(r) for r in rows)
     grid = [[_norm(c) for c in r] + [""] * (width - len(r)) for r in rows]
     label_cols = min(2, width - 1)
-    header_rows, bindings = bind_columns(grid, label_cols, device_summary)
+    header_rows, bindings = bind_columns(grid, label_cols, device_summary, parts_named)
+    if table is not None and pdf_page is not None and not any(b["part_number"] for b in bindings):
+        geometry = geometry_bindings(pdf_page, table, grid, label_cols)
+        if geometry:
+            bindings = geometry
+            header_rows = 1
     if not any(
         b["part_number"] or (b.get("family_token") and re.search(r"\d", b["family_token"]) and (PART_TOKEN.search(b["family_token"]) or is_wildcard_token(b["family_token"])))
         for b in bindings
@@ -760,6 +906,22 @@ def build_family_record(
             for binding, (verbatim, merged) in zip(bindings, arow["values"]):
                 if not verbatim:
                     continue
+                members = binding.get("members")
+                if members and len(members) > 1 and not any(i is not None for _, i in arow["attributes"]):
+                    # Column names several parts ("F8 / FB") and the cell may
+                    # print one value per member ("64/128"); otherwise the one
+                    # value applies to all members.
+                    pieces = [p.strip() for p in re.split(r"\s*/\s*", _strip_footnotes(_norm(verbatim))) if p.strip()]
+                    per_member = pieces if len(pieces) == len(members) else [verbatim] * len(members)
+                    for member, piece in zip(members, per_member):
+                        sub_binding = {"column_index": binding["column_index"], "part_number": member["part_number"], "family_token": member["token"], "binding": binding["binding"] if member["part_number"] else "unbound"}
+                        for attribute, leaf in _cell_leaves(piece, arow["attributes"], arow["label_unit"]):
+                            leaf["verbatim"] = _norm(verbatim)
+                            if len(pieces) == len(members):
+                                leaf["component"] = piece
+                            leaf["receipt"] = _leaf_receipt(page, label, binding["column_index"], merged)
+                            by_attribute.setdefault(attribute, []).append((sub_binding, leaf))
+                    continue
                 for attribute, leaf in _cell_leaves(verbatim, arow["attributes"], arow["label_unit"]):
                     leaf["receipt"] = _leaf_receipt(page, label, binding["column_index"], merged)
                     by_attribute.setdefault(attribute, []).append((binding, leaf))
@@ -770,8 +932,9 @@ def build_family_record(
                         unknown.append(
                             {"attribute": attribute, "part_number": binding["part_number"], "column_index": binding["column_index"], "page": page, "row_label": label, "verbatim": leaf["verbatim"], "reason": leaf.get("reason")}
                         )
-                distinct = {leaf["verbatim"] for _, leaf in cols}
-                if len(distinct) == 1 and len(cols) == len(bindings):
+                distinct = {leaf.get("component", leaf["verbatim"]) for _, leaf in cols}
+                covered = {b["column_index"] for b, _ in cols}
+                if len(distinct) == 1 and covered == {b["column_index"] for b in bindings}:
                     if attribute not in shared:
                         leaf = dict(cols[0][1])
                         leaf["receipt"] = dict(leaf["receipt"], applies_to="all_variants")
@@ -852,7 +1015,17 @@ def build_family_record(
         if expected is None or leaf is None or leaf.get("status") != "typed":
             continue
         ok = leaf.get("typ") == expected
-        consistency.append({"part_number": part, "check": "st_flash_code_vs_printed_code_flash", "expected_kb": expected, "printed_kb": leaf.get("typ"), "ok": ok})
+        consistency.append({"part_number": part, "check": "st_flash_code_vs_printed_code_flash", "expected_kb": expected, "printed_kb": leaf.get("typ"), "ok": ok, "binding": variant["binding"]})
+        if not ok and variant["binding"] == "parts_named_join":
+            # The join ordered members by memory letter; the printed flash
+            # disagrees, so the binding was wrong. Revoke it, keep the column.
+            unbound_columns.append({"column_index": variant["column_index"], "part_number": None, "family_token": variant["family_token"], "binding": "unbound", "reason": "parts_named_join_failed_flash_check", "page": variant["page"], "attempted": part})
+            variant["part_number"] = None
+            variant["binding"] = "unbound"
+            variant["reason"] = "parts_named_join_failed_flash_check"
+            continue
+        if ok and variant["binding"] == "parts_named_join":
+            variant["join_verified_by"] = "st_flash_code"
         if not ok:
             conflicts.append(
                 {"part_number": part, "attribute": "code_flash_kb", "values": [leaf.get("verbatim"), f"ordering code implies {expected} KB"], "pages": [leaf["receipt"]["page"]], "kind": "ordering_code_mismatch"}
@@ -917,7 +1090,14 @@ def extract_family_matrix(path: Path, census_row: dict[str, Any]) -> dict[str, A
                 rows = table.extract()
             except Exception:  # noqa: BLE001
                 continue
-            matrix = read_matrix_table(rows, page=page_number, device_summary=device_summary)
+            matrix = read_matrix_table(
+                rows,
+                page=page_number,
+                device_summary=device_summary,
+                table=table,
+                pdf_page=document[page_number - 1],
+                parts_named=[p["token"] for p in census_row.get("parts_named") or []],
+            )
             if matrix and len(matrix["attribute_rows"]) >= 3:
                 tables.append(matrix)
     record = build_family_record(
