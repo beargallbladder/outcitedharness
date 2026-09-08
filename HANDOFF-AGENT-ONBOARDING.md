@@ -57,6 +57,15 @@ Things you need from Sam that are not in the repo:
    `scripts/harvest_teacher_batches.sh`. `git log --since=2026-09-03` is a
    good map of what each script exists for.
 
+## 2a. Mail (how we talk to CategoryRank)
+
+Inter-agent mail is files on the M5 drive, not in this repo. Your identity is
+`m5-opencode`; your inbox is `/Volumes/M5_4TB/agent-inbox/m5-opencode/`. Read
+`/Volumes/M5_4TB/AGENT_NETWORK.md` then
+`/Volumes/M5_4TB/MAIL_ONBOARDING_m5-opencode.md` before sending anything. The
+predecessor's inbox `agent-inbox/m5-cursor/` (62 mails) is the full history of
+the CR relationship. Send only via `send-message.ts` (CLI), never hand-written.
+
 ## 3. What this project is (mental model)
 
 Two independent lanes share the hardware.
