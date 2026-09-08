@@ -278,6 +278,42 @@ is still provisional: unsupported rows, combined physical identifiers,
 unresolved package scope, and disagreement with owned ground truth are
 quarantined rather than trained or imported.
 
+## Above-OPN family census (2026-09-08)
+
+CR's document-derived-knives PRD asks for per-part attributes mined from the
+family/series documents we already hold. Before any model reads one of those
+documents, the census establishes the bogey: what grain the document is, which
+parts it names, which package pin counts it prints, and which attributes its
+device-comparison table addresses. `scripts/census_family_documents.py`
+(logic in `harness/electronics/family_census.py`) is deterministic PyMuPDF
+over the corpus registry plus the page index; no model is involved and no
+wildcard is ever expanded into part numbers.
+
+Per document it records `grain` (`above_opn`, `single_opn`,
+`not_device_family`, `extraction_failed`), `above_opn_kind`
+(`family_matrix` = device table with >=2 variants and >=3 attributes;
+`manual`; `ordering_variants`; `wildcard_only`), `series_tokens` verbatim,
+`parts_named` with page receipts, `pin_bogeys` from printed package tokens,
+located `device_tables` with orientation and qualifier-anchored
+`attributes_addressed` (code flash is never data flash), and
+`denominator_cells` = parts-or-variants x attributes.
+
+First full pass (4,484 unique PDFs, 5.4 min, 8 workers): 720 `family_matrix`
+documents, 609 of them from MCU/SoC vendors (ST 254, TI 135, Microchip 92,
+GigaDevice 58, Silabs 41, NXP 6, Renesas 3), 67,201 denominator cells and
+7,290 named parts in that MCU set; 2,093 documents print package pin bogeys.
+`standby_current_ua` appears in only 3 device tables: standby current lives
+in electrical-characteristics tables, so CR's headline `lowpower_knives` test
+is a parametric-lane (lane 3) problem, not a device-matrix one. Known gaps:
+Renesas RA/RX and the newer ST layouts (STM32G4/H7/U3/WB/WL) print borderless
+device tables that the line-based finder misses; the `power` category's
+`ordering_variants` are mostly package/reel variants of one die and are not
+family documents in CR's sense.
+
+Bogeys are held by the verifier and scored against; they are never placed in
+an extractor prompt (padding to a known count was the failure the 2026-08-29
+"reject padded answers" fix closed).
+
 ## Runbook
 
 Build the corpus join:

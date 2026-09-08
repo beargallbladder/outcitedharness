@@ -213,3 +213,22 @@ through subagents. A fresh session should have a working shell.
 - v4 (round 4, from pristine base) promoted to dgx3/asus1/asus3 :8912 alias
   `qwen3-vl-30b-pin-gate-v4` (+ legacy 457 alias). CR holdout scoreboard: type
   regression was an instrument artifact, candidate promote-leaning -> promoted.
+
+## 2026-09-08 09:15 PT — CR knives PRD: step 1 (census) DONE, Sam green-lit the lane
+- CR mail `prd-document-derived-knives-v0-20260908` (in `agent-inbox/m5-cursor/`; PRD at
+  `exports/cr_requests/prd-document-derived-knives-20260908/`, sha verified). Discussed with
+  Sam; agreed: target is the document ABOVE the OPN (family/series/group), two outputs
+  (shared facts for content + per-variant matrix for knives), doc is primary and the 125k
+  vendor knife rows are a second source not ground truth, bogey/denominator first, bogey goes
+  to the verifier never the prompt. Sam: "GO FORTH". No mail sent to CR yet — Sam sees the
+  numbers first.
+- Built `harness/electronics/family_census.py` + `scripts/census_family_documents.py` +
+  tests (13); moved `read_scope` into `harness/electronics/document_scope.py` (script is a
+  thin wrapper now). Full corpus run: `results/family-census-20260908/` (gitignored), copy at
+  `/Volumes/M5_4TB/exports/family-census-20260908/` (census.jsonl sha
+  `185c98e5…a17d2`). Numbers in `DATASHEET_FACTORY.md` §Above-OPN family census.
+- Next (step 2, not started): deterministic device-table read for ST (254 matrix docs, best
+  feed overlap) emitting the CR conventions schema with `_meta` receipts; agreement report vs
+  CR knife rows per attribute; text-strategy table finder for Renesas/new-ST borderless tables.
+- New agent `m5-opencode` is live (sent CR a question overnight, got an answer). Coordinate:
+  this lane is mine unless Sam reassigns.
