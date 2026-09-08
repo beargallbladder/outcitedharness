@@ -253,3 +253,17 @@ def test_summary_counts_by_vendor_and_attribute() -> None:
     assert list(summary["by_vendor"]) == ["st", "ti"]
     assert summary["by_vendor"]["st"]["above_opn"] == 1
     assert summary["by_vendor"]["st"]["above_opn_kind"] == {"family_matrix": 1}
+
+
+def test_title_row_is_stripped_before_classification() -> None:
+    from harness.electronics.family_census import classify_table, strip_title_rows
+
+    rows = [
+        ["Table 1.12 Product list (1 of 2)", None, None, None],
+        ["Product part number", "Code flash", "SRAM", "Operating temperature"],
+        ["R7FA2E1A93CFM", "128", "16", "-40 to +105°C"],
+        ["R7FA2E1A72DFL", "64", "16", "-40 to +85°C"],
+    ]
+    assert len(strip_title_rows(rows)) == 3
+    described = classify_table(rows)
+    assert described is not None and described["orientation"] == "parts_as_rows"

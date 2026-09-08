@@ -138,3 +138,43 @@ def test_st_flash_code():
     assert st_flash_code_kb("STM32G0B1RE") == 512
     assert st_flash_code_kb("STM32F410RBI") == 128
     assert st_flash_code_kb("STM32WB15CC") is None
+
+
+def test_parts_as_rows_product_list_with_title_and_merged_cells():
+    rows = [
+        ["Table 1.12 Product list (1 of 2)", None, None, None, None],
+        ["Product part number", "Package code", "Code flash", "SRAM", "Operating\ntemperature"],
+        ["R7FA2E1A93CFM", "PLQP0064KB-C", "128", "16", "-40 to +105°C"],
+        ["R7FA2E1A93CFK", "PLQP0064GA-A", None, None, None],
+        ["R7FA2E1A72DFL", "PLQP0048KB-B", "64", None, "-40 to +85°C"],
+    ]
+    table = read_matrix_table(rows, page=8, device_summary={})
+    assert table is not None and table["orientation"] == "parts_as_rows"
+    assert [b["part_number"] for b in table["bindings"]] == ["R7FA2E1A93CFM", "R7FA2E1A93CFK", "R7FA2E1A72DFL"]
+    flash = next(r for r in table["attribute_rows"] if ("code_flash_kb", None) in r["attributes"])
+    assert flash["values"] == [("128", False), ("128", True), ("64", False)]
+    sram = next(r for r in table["attribute_rows"] if ("sram_kb", None) in r["attributes"])
+    assert sram["values"][2] == ("16", True)
+
+
+def test_boolean_with_qualifier_and_instance_count():
+    assert parse_value("Yes (6-Endpoints)", "usb", None) == {"verbatim": "Yes (6-Endpoints)", "status": "boolean", "value": True, "note": "6-Endpoints"}
+    assert parse_value("No", "usb", None)["value"] is False
+    assert parse_value("2", "usb", None)["value"] is True
+
+
+def test_composite_label_keeps_io_and_da_tokens():
+    from harness.electronics.family_device_matrix import split_composite_label
+
+    assert split_composite_label("I/O pins") == ["I/O pins"]
+    assert split_composite_label("Number of 12-bit D/A converters") == ["Number of 12-bit D/A converters"]
+    assert split_composite_label("SPI / I2S") == ["SPI", "I2S"]
+    assert split_composite_label("USART/ UART") == ["USART", "UART"]
+
+
+def test_label_rules_exclude_lookalikes():
+    assert ("timer_general_purpose", None) not in row_attributes("General-purpose input/outputs", "")
+    assert ("operating_voltage", None) not in row_attributes("Communication interfaces", "USB/(VDD USB)")
+    assert ("operating_voltage", None) not in row_attributes("16-bit SDADC operating voltage", "")
+    assert ("sram_kb", None) not in row_attributes("SRAM in Kbytes", "Instruction")
+    assert ("sram_kb", None) in row_attributes("SRAM in Kbytes", "System")
