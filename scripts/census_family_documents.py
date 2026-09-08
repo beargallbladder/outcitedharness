@@ -37,7 +37,13 @@ CATEGORY_PREFIXES = {"mcu", "power", "connector", "battery"}
 
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--corpus-registry", type=Path, required=True)
+    source = parser.add_mutually_exclusive_group(required=True)
+    source.add_argument("--corpus-registry", type=Path)
+    source.add_argument(
+        "--inventory",
+        type=Path,
+        help="jsonl with one document per line: {path, sha256[, title]} (CR cr-pdf-inventory shape)",
+    )
     parser.add_argument(
         "--page-index",
         type=Path,
@@ -112,6 +118,44 @@ def _work_items(
     return items
 
 
+_INVENTORY_VENDOR_HINTS: tuple[tuple[str, str], ...] = (
+    ("stm32", "st"), ("st_", "st"), ("rl78", "renesas"), ("renesas", "renesas"), ("ra_", "renesas"),
+    ("rx", "renesas"), ("msp", "ti"), ("tms", "ti"), ("tm4c", "ti"), ("spnu", "ti"), ("spms", "ti"),
+    ("ti_", "ti"), ("gd32", "gigadevice"), ("efm", "silabs"), ("efr", "silabs"), ("mcx", "nxp"),
+    ("lpc", "nxp"), ("imx", "nxp"), ("kl", "nxp"), ("k8", "nxp"), ("s32", "nxp"), ("nxp", "nxp"),
+    ("pic", "microchip"), ("sam", "microchip"), ("atmel", "microchip"), ("psoc", "infineon"),
+    ("xmc", "infineon"), ("infineon", "infineon"), ("nrf", "nordic"), ("esp", "espressif"),
+)
+
+
+def _inventory_items(path: Path, vendors: set[str] | None, maximum: int | None) -> list[dict[str, Any]]:
+    """Work items from a CR-style inventory (path + sha256). Vendor is a
+    filename hint only; the census reads vendor facts from the document."""
+    items: list[dict[str, Any]] = []
+    with path.open(encoding="utf-8") as handle:
+        for line in handle:
+            if not line.strip():
+                continue
+            row = json.loads(line)
+            name = Path(row["path"]).name.lower()
+            vendor = next((v for hint, v in _INVENTORY_VENDOR_HINTS if name.startswith(hint) or f"_{hint}" in name), "unknown")
+            if vendors and vendor not in vendors:
+                continue
+            items.append(
+                {
+                    "path": row["path"],
+                    "document_sha256": row.get("sha256") or row.get("document_sha256"),
+                    "lane_pages": None,
+                    "registry_stems": 0,
+                    "vendor": vendor,
+                    "category": "mcu",
+                }
+            )
+            if maximum and len(items) >= maximum:
+                break
+    return items
+
+
 def _run_one(item: dict[str, Any]) -> dict[str, Any]:
     try:
         row = census_document(
@@ -145,10 +189,15 @@ def main() -> int:
     out = args.output_directory
     if out.exists():
         raise SystemExit(f"output directory already exists: {out}")
-    registry = json.loads(args.corpus_registry.read_text(encoding="utf-8"))
     lane_pages = _load_lane_pages(args.page_index)
     vendors = {v.lower() for v in args.vendor} if args.vendor else None
-    items = _work_items(registry, lane_pages, vendors, args.maximum_documents)
+    if args.inventory:
+        items = _inventory_items(args.inventory, vendors, args.maximum_documents)
+        source_path, source_label = args.inventory, "inventory"
+    else:
+        registry = json.loads(args.corpus_registry.read_text(encoding="utf-8"))
+        items = _work_items(registry, lane_pages, vendors, args.maximum_documents)
+        source_path, source_label = args.corpus_registry, "corpus_registry"
     if not items:
         raise SystemExit("no documents selected")
     out.mkdir(parents=True)
@@ -178,8 +227,9 @@ def main() -> int:
         "schema": "harness.electronics-family-census-bundle.v1",
         "created_at": started.isoformat(),
         "finished_at": datetime.now(timezone.utc).isoformat(),
-        "corpus_registry": str(args.corpus_registry),
-        "corpus_registry_sha256": hashlib.sha256(args.corpus_registry.read_bytes()).hexdigest(),
+        "source_kind": source_label,
+        "corpus_registry": str(source_path),
+        "corpus_registry_sha256": hashlib.sha256(source_path.read_bytes()).hexdigest(),
         "page_index": str(args.page_index) if args.page_index else None,
         "vendors_filter": sorted(vendors) if vendors else None,
         "maximum_documents": args.maximum_documents,
