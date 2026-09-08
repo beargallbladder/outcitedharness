@@ -232,3 +232,34 @@ through subagents. A fresh session should have a working shell.
   CR knife rows per attribute; text-strategy table finder for Renesas/new-ST borderless tables.
 - New agent `m5-opencode` is live (sent CR a question overnight, got an answer). Coordinate:
   this lane is mine unless Sam reassigns.
+
+## 2026-09-08 12:10 PT — knives step 2 DONE: reader, agreement, promotion (Sam: "yes promote")
+- Reader `harness/electronics/family_device_matrix.py` + `scripts/extract_family_device_matrix.py`
+  (deterministic PyMuPDF only; parts_as_columns and parts_as_rows; header→column binding by
+  printed token / code list / stem+codes / device-summary join / parts-named join / word
+  geometry for rotated two-level headers / `PARTYxxxx` package-letter headers; merged-cell
+  fill-down flagged; composite rows `SPI/I2S`, `FLASH / SRAM (KB)`; tri-state `-`=0; ST
+  ordering-code flash self-check). Unknown on any ambiguity, never a guess. 42 tests.
+- Census v2 (`results/family-census-20260908b/`, `--page-index` REQUIRED or the lane pages are
+  lost): part-density page signal + product-list keywords + caption-row strip. family_matrix
+  720→834 docs, strictly monotone (no downgrades). ST 276, TI 168, power 144, Microchip 92,
+  GD 58, SiLabs 42, Renesas 13.
+- Yield (all vendors, `results/family-matrix-<vendor>-20260908/`, copy at
+  `/Volumes/M5_4TB/exports/family-matrix-20260908/` with SHA256SUMS): 3,790 distinct parts
+  bound. Unknown rate: ST 8.6 %, GD 4.3 %, SiLabs 4.9 %, Renesas 7.9 %, Microchip 16 %, TI 21 %
+  (TI residue is MSP430 "Timer A: 3, 2, 2, 2" instance lists and nominal-only voltages).
+- Agreement vs CR referee (`scripts/knife_agreement_report.py`, ST only, 1,188 parts,
+  `results/family-matrix-st-20260908/agreement/`): ≥95 % on code_flash 99.0, sram 95.1,
+  freq 99.5, can 98.6, usb 99.4, pin_count 99.4. Below: spi/usart/i2s/i2c (semantics — CR
+  counts SPI-capable I2S etc.; contract proposed and confirmed by CR), operating_voltage
+  (doc prints 1.8–3.6 with "down to 1.65 at power-down", feed prints 1.65), temp_range
+  (grain: doc prints grade set). gpio_count WITHDRAWN by CR (their field is "up to N").
+- Promotion `scripts/promote_document_knives.py`, two-source rule (Sam asked what a second
+  source is when the doc is the reference manual — answer in mail
+  `knives-st-v0-promoted-drop-20260908`): Tier A doc+feed, Tier B doc+vendor ordering-code
+  decode, Tier C single statement stays content-only. Drop at
+  `/Volumes/M5_4TB/exports/family-matrix-st-20260908/promoted/document_derived_knives_st_v0.json`
+  (1,100 parts, five approved attributes, per-value `_provenance`), `held_single_source.jsonl`.
+- Open: sram_kb passes at 95.08 % (borderline; 53 disagreements are CR 1000-vs-1024 and F7
+  system-vs-total SRAM) — not promoted yet, ask Sam. TI/Microchip agreement not run (no CR
+  referee for them yet). CR's 637-doc census on the reissued privacy-gated inventory pending.
