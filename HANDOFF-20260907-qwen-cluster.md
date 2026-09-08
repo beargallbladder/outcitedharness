@@ -263,3 +263,21 @@ through subagents. A fresh session should have a working shell.
 - sram_kb added to the drop 11:53 PT (Sam: "add it"); six attributes, 1,100 parts, drop sha
   `f01ee6f0…`. Open: TI/Microchip agreement not run (no CR
   referee for them yet). CR's 637-doc census on the reissued privacy-gated inventory pending.
+
+## 2026-09-08 12:40 PT — other brands: ordering-code decoders + second-document corroboration
+- `harness/electronics/ordering_codes.py`: part-number decoders for STM32, GD32 (same letter
+  tables), SiLabs EFM32/EFR32/EFM8, AVR Dx / tinyAVR / megaAVR-0, PIC32, PIC24FJ, Renesas RA.
+  `scripts/validate_ordering_codes.py` checks each against the documents: every scheme 100 %
+  (n 9…1262). ST pin letter is nominal (WLCSP12 under "D"=14) → corroborates only, never holds.
+  MSP430 / PIC16 / PIC18 deliberately undecodable (return {}), not guessed.
+- `scripts/promote_document_knives.py` rewritten: referee optional; Tier B = ordering code OR a
+  second document (different sha) printing the same value; ordering-code contradiction holds;
+  set-valued pins per package; `held.jsonl` with reasons.
+- ST drop refreshed (`…/family-matrix-st-20260908/promoted/`, sha `e25d0194…`): 1,166 parts,
+  3,770 Tier A + 251 Tier B values. Sent to CR? NOT YET for this refresh.
+- Other vendors, Tier B only, `approved_by` = PENDING Samson (six attributes approved for ST
+  only): GD 384 parts, SiLabs 349, Microchip 149, Renesas 129, TI 35. Files at
+  `/Volumes/M5_4TB/exports/family-matrix-20260908/<vendor>/promoted/`. TI needs CR's referee:
+  no decodable scheme and few duplicate documents → 741 flash values single-source.
+- Next: Sam's word on the non-ST drops; CR referee for TI/Microchip/GD/Renesas/SiLabs (asked);
+  adjudication queue for the frontier teacher.
