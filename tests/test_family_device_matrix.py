@@ -197,3 +197,17 @@ def test_composite_components_of_one_class_are_summed():
     leaves = _cell_leaves("1/1", [("can_count", 0), ("can_count", 1)], None)
     assert leaves == [("can_count", {"verbatim": "1/1", "status": "typed", "typ": 2, "unit": "count", "note": "sum of components", "components": ["1", "1"]})]
     assert ("package", None) not in row_attributes("Tamper pins (legacy/SMPS package)", "")
+
+
+def test_vendor_specific_count_forms():
+    from harness.electronics.family_device_matrix import _cell_leaves, split_composite_label, split_composite_value
+
+    assert parse_value("2×FD (0-1)", "can_count", None)["typ"] == 2
+    assert parse_value("DC – 40 MHz", "freq_mhz", None)["typ"] == 40
+    assert split_composite_value("3/2 (0-2)/(1-2)", 2) == ["3", "2"]
+    assert split_composite_label("I/O Pins(1)/ Peripheral Pin Select") == ["I/O Pins(1)", "Peripheral Pin Select"]
+    leaves = dict(_cell_leaves("12/Y", row_attributes("", "I/O Pins(1)/ Peripheral Pin Select"), None, 2))
+    assert leaves["gpio_count"]["typ"] == 12
+    header = dict(_cell_leaves("128 / 32", row_attributes("", "FLASH / SRAM (KB)"), "KB"))
+    assert (header["code_flash_kb"]["typ"], header["sram_kb"]["typ"]) == (128, 32)
+    assert ("temp_range", None) not in row_attributes("Temperature sensor", "")

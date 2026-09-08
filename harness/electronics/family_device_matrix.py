@@ -116,7 +116,7 @@ _LABEL_RULES: tuple[tuple[str, re.Pattern[str], re.Pattern[str] | None], ...] = 
     ("comparator_count", re.compile(r"\bcomparators?\b|\bcomp\b", re.I), None),
     ("opamp_count", re.compile(r"\bop[\s-]?amps?\b|\boperational\s+amplifier", re.I), None),
     ("operating_voltage", re.compile(r"\b(?:operating|supply|power\s+supply)\s+voltage\b|\bvdd\b", re.I), re.compile(r"temperature|\busb\b|adc|analog|\bvbat\b|\bvref\b|\bvdda\b|\bvddio", re.I)),
-    ("temp_range", re.compile(r"\btemperature", re.I), None),
+    ("temp_range", re.compile(r"\btemperature", re.I), re.compile(r"sensor|indicator|monitor|junction\s+only", re.I)),
     ("standby_current_ua", re.compile(r"\b(?:standby|stop|shutdown|deep\s*sleep|power[\s-]?down)\b.*?\b(?:current|consumption)\b", re.I), None),
     ("lpuart_count", re.compile(r"\blpuart\b|\blow[\s-]power\s+uart\b", re.I), None),
     ("usart_count", re.compile(r"\busart\b", re.I), None),
@@ -228,9 +228,9 @@ def split_composite_label(sub_label: str) -> list[str]:
     'USART/ UART' -> ['USART', 'UART']. Anything else -> [sub_label]."""
     # Only a slash between two multi-character names is a pairing; "I/O",
     # "D/A", "A/D", "R/W" are single names.
-    if not re.search(r"(?<=\w\w)\s*/\s*(?=\w\w)|\[", sub_label):
+    if not re.search(r"(?<=[\w)][\w)])\s*/\s*(?=\w\w)|\[", sub_label):
         return [sub_label]
-    parts = [p for p in re.split(r"(?<=\w\w)\s*/\s*(?=\w\w)|\s*\[\s*|\s*\]\s*", sub_label) if p]
+    parts = [p for p in re.split(r"(?<=[\w)][\w)])\s*/\s*(?=\w\w)|\s*\[\s*|\s*\]\s*", sub_label) if p]
     return parts if 2 <= len(parts) <= 3 else [sub_label]
 
 
@@ -239,7 +239,16 @@ def split_composite_value(text: str, count: int) -> list[str] | None:
     '4/1 FMP +' -> ['4', '1 FMP +']. None when the value does not carry
     exactly ``count`` components."""
     parts = [p.strip() for p in re.split(r"\s*/\s*|\s*\[\s*|\s*\]\s*", text) if p.strip()]
-    return parts if len(parts) == count else None
+    if len(parts) == count:
+        return parts
+    # "3/2 (0-2)/(1-2)": counts followed by instance lists in parentheses.
+    # The parentheticals are notes, not components.
+    bare = re.sub(r"\s*\([^)]*\)", "", text).strip()
+    if bare != text:
+        parts = [p.strip() for p in re.split(r"\s*/\s*|\s*\[\s*|\s*\]\s*", bare) if p.strip()]
+        if len(parts) == count:
+            return parts
+    return None
 
 
 def row_attributes(group_label: str, sub_label: str) -> list[tuple[str, int | None]]:
@@ -358,6 +367,16 @@ def parse_value(verbatim: str, attribute: str, label_unit: str | None) -> dict[s
         return leaf
     if _NO.match(text):
         leaf.update({"status": "boolean", "value": False})
+        return leaf
+    times = re.match(r"^(\d{1,3})\s*[×x]\s*([A-Za-z][\w.-]*)\s*(\([^)]*\))?$", text)
+    if times and unit == "count":
+        # "2×FD (0-1)": two instances of the named kind.
+        leaf.update({"status": "typed", "typ": int(times.group(1)), "unit": unit, "note": (times.group(2) + " " + (times.group(3) or "")).strip()})
+        return leaf
+    dc_to = re.match(r"^DC\s*[-–—to]+\s*(\d+(?:\.\d+)?)\s*MHz$", text, re.I)
+    if dc_to and attribute == "freq_mhz":
+        # "DC – 40 MHz": the maximum is the printed ceiling.
+        leaf.update({"status": "typed", "typ": float(dc_to.group(1)) if "." in dc_to.group(1) else int(dc_to.group(1)), "unit": unit, "note": "DC to maximum"})
         return leaf
     if _MULTI_VALUE.search(text) and not _BITWIDTH_GROUP.search(text):
         leaf["status"] = "unknown"
@@ -770,7 +789,7 @@ def _read_parts_as_rows(rows: list[list[Any]], *, page: int) -> dict[str, Any] |
     columns: list[tuple[int, list[tuple[str, int | None]], str | None, str]] = []
     for col in range(1, width):
         label = header[col]
-        attributes = row_attributes(label, "")
+        attributes = row_attributes("", label)
         if attributes:
             columns.append((col, attributes, unit_from_label(label), label))
     if len(columns) < 2:
@@ -807,7 +826,7 @@ def _read_parts_as_rows(rows: list[list[Any]], *, page: int) -> dict[str, Any] |
                 merged = bool(carry)
             values.append((cell if cell else carry, merged))
         if any(v for v, _ in values):
-            attribute_rows.append({"row_index": col, "label": label, "attributes": attributes, "label_unit": unit, "values": values})
+            attribute_rows.append({"row_index": col, "label": label, "attributes": attributes, "label_unit": unit, "values": values, "label_components": len(split_composite_label(label))})
     if len(attribute_rows) < 2:
         return None
     return {
@@ -884,7 +903,7 @@ def read_matrix_table(
             continue
         values = _split_glued_runs(values)
         attribute_rows.append(
-            {"row_index": row_index, "label": label, "attributes": attributes, "label_unit": unit, "values": values}
+            {"row_index": row_index, "label": label, "attributes": attributes, "label_unit": unit, "values": values, "label_components": len(split_composite_label(sub)) if sub else 1}
         )
     if len(attribute_rows) < 2:
         return None
@@ -931,7 +950,7 @@ def _leaf_receipt(page: int, label: str, column: int, merged: bool) -> dict[str,
     return receipt
 
 
-def _cell_leaves(verbatim: str, attributes: list[tuple[str, int | None]], label_unit: str | None) -> list[tuple[str, dict[str, Any]]]:
+def _cell_leaves(verbatim: str, attributes: list[tuple[str, int | None]], label_unit: str | None, label_components: int | None = None) -> list[tuple[str, dict[str, Any]]]:
     """Leaves for one cell: plain rows give one leaf; composite rows split the
     value into components and give one leaf per component."""
     composite = [a for a in attributes if a[1] is not None]
@@ -941,7 +960,12 @@ def _cell_leaves(verbatim: str, attributes: list[tuple[str, int | None]], label_
     extra = _EXTRA_CLAUSE.search(text)
     if extra:
         text = text[: extra.start()].strip()
-    components = split_composite_value(text, max(i for _, i in composite) + 1)
+    needed = max(i for _, i in composite) + 1
+    components = split_composite_value(text, needed)
+    if components is None and label_components and label_components > needed:
+        # The label names components that map to no attribute ("I/O Pins /
+        # Peripheral Pin Select": 12/Y); the value splits by position.
+        components = split_composite_value(text, label_components)
     out: list[tuple[str, dict[str, Any]]] = []
     repeated = {a for a in {a for a, _ in composite} if sum(1 for b, _ in composite if b == a) > 1}
     for attribute in sorted(repeated):
@@ -994,6 +1018,16 @@ def build_family_record(
     conflicts: list[dict[str, Any]] = []
     counts = {"cells_total": 0, "cells_typed": 0, "cells_verbatim": 0, "cells_unknown": 0}
 
+    def _uncount(leaf: dict[str, Any]) -> None:
+        counts["cells_total"] -= 1
+        status = leaf["status"]
+        if status in ("typed", "boolean"):
+            counts["cells_typed"] -= 1
+        elif status == "verbatim":
+            counts["cells_verbatim"] -= 1
+        else:
+            counts["cells_unknown"] -= 1
+
     def _count(leaf: dict[str, Any]) -> None:
         counts["cells_total"] += 1
         status = leaf["status"]
@@ -1026,14 +1060,14 @@ def build_family_record(
                     per_member = pieces if len(pieces) == len(members) else [verbatim] * len(members)
                     for member, piece in zip(members, per_member):
                         sub_binding = {"column_index": binding["column_index"], "part_number": member["part_number"], "family_token": member["token"], "binding": binding["binding"] if member["part_number"] else "unbound"}
-                        for attribute, leaf in _cell_leaves(piece, arow["attributes"], arow["label_unit"]):
+                        for attribute, leaf in _cell_leaves(piece, arow["attributes"], arow["label_unit"], arow.get("label_components")):
                             leaf["verbatim"] = _norm(verbatim)
                             if len(pieces) == len(members):
                                 leaf["component"] = piece
                             leaf["receipt"] = _leaf_receipt(page, label, binding["column_index"], merged)
                             by_attribute.setdefault(attribute, []).append((sub_binding, leaf))
                     continue
-                for attribute, leaf in _cell_leaves(verbatim, arow["attributes"], arow["label_unit"]):
+                for attribute, leaf in _cell_leaves(verbatim, arow["attributes"], arow["label_unit"], arow.get("label_components")):
                     leaf["receipt"] = _leaf_receipt(page, label, binding["column_index"], merged)
                     by_attribute.setdefault(attribute, []).append((binding, leaf))
             for attribute, cols in by_attribute.items():
@@ -1098,8 +1132,8 @@ def build_family_record(
                                 existing["value"] = True
                             existing["verbatim"] = f"{existing['verbatim']} | {leaf['verbatim']}"
                             existing.setdefault("rows", [existing["receipt"]["row_label"]]).append(label)
-                            counts["cells_total"] -= 1
-                            counts["cells_typed"] -= 1
+                            if part == (binding.get("part_numbers") or [binding["part_number"]])[0]:
+                                _uncount(leaf)
                             continue
                         if leaf["status"] == "unknown":
                             # A second, unparseable row (junction temperature
@@ -1116,8 +1150,8 @@ def build_family_record(
                             for p in leaf.get("packages", []):
                                 if (p["package_family"], p["pin_count"]) not in seen:
                                     existing.setdefault("packages", []).append(p)
-                            counts["cells_total"] -= 1
-                            counts["cells_verbatim"] -= 1
+                            if part == (binding.get("part_numbers") or [binding["part_number"]])[0]:
+                                _uncount(leaf)
                             continue
                         if (
                             attribute.startswith("timer_")
@@ -1131,8 +1165,8 @@ def build_family_record(
                             existing["verbatim"] = f"{existing['verbatim']} + {leaf['verbatim']}"
                             existing["note"] = "sum of bit-width rows"
                             existing.setdefault("rows", [existing["receipt"]["row_label"]]).append(label)
-                            counts["cells_total"] -= 1
-                            counts["cells_typed"] -= 1
+                            if part == (binding.get("part_numbers") or [binding["part_number"]])[0]:
+                                _uncount(leaf)
                             continue
                         if existing["verbatim"] != leaf["verbatim"]:
                             # Two rows of the same table landed in one
