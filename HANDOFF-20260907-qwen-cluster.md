@@ -260,6 +260,6 @@ through subagents. A fresh session should have a working shell.
   decode, Tier C single statement stays content-only. Drop at
   `/Volumes/M5_4TB/exports/family-matrix-st-20260908/promoted/document_derived_knives_st_v0.json`
   (1,100 parts, five approved attributes, per-value `_provenance`), `held_single_source.jsonl`.
-- Open: sram_kb passes at 95.08 % (borderline; 53 disagreements are CR 1000-vs-1024 and F7
-  system-vs-total SRAM) — not promoted yet, ask Sam. TI/Microchip agreement not run (no CR
+- sram_kb added to the drop 11:53 PT (Sam: "add it"); six attributes, 1,100 parts, drop sha
+  `f01ee6f0…`. Open: TI/Microchip agreement not run (no CR
   referee for them yet). CR's 637-doc census on the reissued privacy-gated inventory pending.
