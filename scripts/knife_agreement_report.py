@@ -39,8 +39,13 @@ MAPPING: dict[str, tuple[tuple[str, ...], str]] = {
     "usb": (("has_usb",), "boolean"),
     "operating_voltage": (("vdd_min", "vdd_max"), "range"),
     "temp_range": (("temp_min_c", "temp_max_c"), "range"),
-    "gpio_count": (("gpio_count",), "count"),
     "pin_count": (("pin_counts",), "member"),
+}
+# Referee fields the referee's owner has withdrawn (CR 2026-09-08: ST
+# gpio_count is a family "up to N" ceiling stamped per part; 540/1375 parts
+# exceed their package pin count). Still reported, never scored.
+WITHDRAWN: dict[str, tuple[tuple[str, ...], str]] = {
+    "gpio_count": (("gpio_count",), "count"),
 }
 
 
@@ -159,6 +164,13 @@ def main() -> int:
             attributes = dict(record["shared"])
             attributes.update(variant["attributes"])
             for attribute, leaf in attributes.items():
+                if attribute in WITHDRAWN:
+                    fields, kind = WITHDRAWN[attribute]
+                    ours = _our_value(leaf)
+                    if ours is not None:
+                        verdict, _ = _compare(kind, ours, leaf, ref, fields)
+                        tally[attribute]["withdrawn_" + verdict] += 1
+                    continue
                 if attribute not in MAPPING:
                     continue
                 fields, kind = MAPPING[attribute]
@@ -221,6 +233,7 @@ def main() -> int:
             "agreement_rate": round(total_agree / total_compared, 4) if total_compared else None,
         },
         "per_attribute": per_attribute,
+        "withdrawn_by_referee_owner": {attribute: dict(tally.get(attribute, Counter())) for attribute in WITHDRAWN},
         "disagreements_by_attribute": dict(disagreement_kinds),
         "adjudication_count": len(adjudication),
         "method": "Overlap only: a value is compared when we typed it from the document and the referee has the key (explicit 0/False counts). Exact equality for numbers and ranges; booleans vs has_*; our presence flags in count rows compared against count>0; pin_count as membership in the referee's pin_counts set. Nothing is promoted by this report.",
