@@ -45,6 +45,7 @@ from harness.electronics.family_census import (
     is_concrete_part_token,
     is_wildcard_token,
     packages_from_text,
+    strip_title_rows,
 )
 
 MATRIX_SCHEMA = "harness.electronics-family-device-matrix.v1"
@@ -94,13 +95,13 @@ _LABEL_RULES: tuple[tuple[str, re.Pattern[str], re.Pattern[str] | None], ...] = 
     ("data_flash_kb", re.compile(r"\bdata\s*(?:flash|area|memory)\b", re.I), None),
     ("eeprom_kb", re.compile(r"\beeprom\b", re.I), None),
     ("code_flash_kb", re.compile(r"\bflash\b|\bprogram\s+memory\b|\bcode\s+(?:area|memory)\b", re.I), re.compile(r"\bdata\b|\bexternal\b|\boption\b|\bsector\b|\bpage\b|\bbank|\bfs?mc\b|\bnand\b|\bnor\b|controller|\becc\b|protection|interface|\botfdec\b|\bxspi\b|\bqspi\b|\bospi\b", re.I)),
-    ("sram_kb", re.compile(r"\bs?ram\b", re.I), re.compile(r"\bbackup\b|\bcache\b|\bparity\b\s*only|\bdma\b|\bfs?mc\b|controller|\bexternal\b|\bpsram\b|\bsdram\b|\becc\b|\bsram\d\b|\baxi\b|\bahb\b|\bd\d\s+domain\b|\bitcm\b|\bdtcm\b|\btcm\b|\bccm\b|\bretention\b", re.I)),
+    ("sram_kb", re.compile(r"\bs?ram\b", re.I), re.compile(r"\bbackup\b|\bcache\b|\bparity\b\s*only|\bdma\b|\bfs?mc\b|controller|\bexternal\b|\bpsram\b|\bsdram\b|\becc\b|\bsram\d\b|\baxi\b|\bahb\b|\bd\d\s+domain\b|\bitcm\b|\bdtcm\b|\btcm\b|\bccm\b|\bretention\b|instruction|flexible", re.I)),
     ("freq_mhz", re.compile(r"\b(?:frequency|freq\.?|clock\s+speed|cpu\s+speed|speed)\b|\bmhz\b", re.I), re.compile(r"\badc\b|\bbus\b|\bexternal\b", re.I)),
     ("core", re.compile(r"\b(?:core|cpu|cortex)\b", re.I), re.compile(r"frequen|speed|mhz|\bram\b", re.I)),
     ("package", re.compile(r"\bpackages?\b", re.I), None),
     ("gpio_count", re.compile(r"\bgpios?\b|\bi/os?\b|\bgeneral[\s-]purpose\s+i/?os?\b|\bio\s+pins?\b", re.I), re.compile(r"\bwakeup\b|\btamper\b|\bfast\b|\bnormal\b|\bfs?mc\b|tolerant|\b5\s*v\b|\btc\b|\btta?\b|\bft\b|\bhigh[\s-]sink\b|\bmultiplexed\b", re.I)),
     ("timer_advanced", re.compile(r"\btimers?\b.*\badvanced\b|\badvanced[\s-]control\b", re.I), None),
-    ("timer_general_purpose", re.compile(r"\btimers?\b.*\bgeneral\b|\bgeneral\s*-?\s*purpose\b", re.I), re.compile(r"\bi/?o", re.I)),
+    ("timer_general_purpose", re.compile(r"\btimers?\b.*\bgeneral\b|\bgeneral\s*-?\s*purpose\b", re.I), re.compile(r"\bi/?os?\b|input|output|gpio", re.I)),
     ("timer_basic", re.compile(r"\btimers?\b.*\bbasic\b", re.I), None),
     ("timer_low_power", re.compile(r"\btimers?\b.*\blow[\s-]power\b|\blptim\b", re.I), None),
     ("timer_systick", re.compile(r"\bsystick\b", re.I), None),
@@ -114,7 +115,7 @@ _LABEL_RULES: tuple[tuple[str, re.Pattern[str], re.Pattern[str] | None], ...] = 
     ("dac_count", re.compile(r"\bdacs?\b", re.I), re.compile(r"channel|resolution|bit\b", re.I)),
     ("comparator_count", re.compile(r"\bcomparators?\b|\bcomp\b", re.I), None),
     ("opamp_count", re.compile(r"\bop[\s-]?amps?\b|\boperational\s+amplifier", re.I), None),
-    ("operating_voltage", re.compile(r"\b(?:operating|supply|power\s+supply)\s+voltage\b|\bvdd\b", re.I), re.compile(r"temperature", re.I)),
+    ("operating_voltage", re.compile(r"\b(?:operating|supply|power\s+supply)\s+voltage\b|\bvdd\b", re.I), re.compile(r"temperature|\busb\b|adc|analog|\bvbat\b|\bvref\b|\bvdda\b|\bvddio", re.I)),
     ("temp_range", re.compile(r"\btemperature", re.I), None),
     ("standby_current_ua", re.compile(r"\b(?:standby|stop|shutdown|deep\s*sleep|power[\s-]?down)\b.*?\b(?:current|consumption)\b", re.I), None),
     ("lpuart_count", re.compile(r"\blpuart\b|\blow[\s-]power\s+uart\b", re.I), None),
@@ -225,9 +226,11 @@ def label_attribute(label: str) -> str | None:
 def split_composite_label(sub_label: str) -> list[str]:
     """'SPI / I2S' -> ['SPI', 'I2S']; 'SPI [I2S]' -> ['SPI', 'I2S'];
     'USART/ UART' -> ['USART', 'UART']. Anything else -> [sub_label]."""
-    if not re.search(r"/|\[", sub_label):
+    # Only a slash between two multi-character names is a pairing; "I/O",
+    # "D/A", "A/D", "R/W" are single names.
+    if not re.search(r"(?<=\w\w)\s*/\s*(?=\w\w)|\[", sub_label):
         return [sub_label]
-    parts = [p for p in _COMPOSITE_LABEL.split(sub_label) if p]
+    parts = [p for p in re.split(r"(?<=\w\w)\s*/\s*(?=\w\w)|\s*\[\s*|\s*\]\s*", sub_label) if p]
     return parts if 2 <= len(parts) <= 3 else [sub_label]
 
 
@@ -278,7 +281,21 @@ def parse_value(verbatim: str, attribute: str, label_unit: str | None) -> dict[s
     if attribute in BOOLEAN_ATTRIBUTES:
         if _YES_NO.match(text):
             leaf["status"] = "boolean"
-            leaf["value"] = text.lower() in {"yes", "y", "✓"}
+            leaf["value"] = text.lower() in {"yes", "y", "✓", "x"}
+            return leaf
+        lead = re.match(r"^(yes|no)\b[\s:(,-]*(.*)$", text, re.I)
+        if lead:
+            # "Yes (6-Endpoints)", "No (see note)": the flag plus a qualifier.
+            leaf["status"] = "boolean"
+            leaf["value"] = lead.group(1).lower() == "yes"
+            if lead.group(2).strip(" )"):
+                leaf["note"] = lead.group(2).strip(" )")
+            return leaf
+        if _NUMBER.match(text) or re.match(r"^\d+\s", text):
+            # "1", "2 (FS + HS)": instances printed where a flag was expected.
+            leaf["status"] = "boolean"
+            leaf["value"] = float(text.split()[0]) > 0
+            leaf["note"] = text
             return leaf
         leaf["status"] = "verbatim"
         return leaf
@@ -731,6 +748,70 @@ def geometry_bindings(page: Any, table: Any, grid: list[list[str]], label_cols: 
     return bindings
 
 
+def _read_parts_as_rows(rows: list[list[Any]], *, page: int) -> dict[str, Any] | None:
+    """Selection-guide / product-list layout: one part per row, attributes
+    across the header. Transposed into the same shape as parts_as_columns so
+    the record builder does not care. A blank cell under a value in the same
+    column is a merged cell (fill-down) and is flagged as such."""
+    width = max(len(r) for r in rows)
+    grid = [[_norm(c) for c in r] + [""] * (width - len(r)) for r in rows]
+    header = grid[0]
+    columns: list[tuple[int, list[tuple[str, int | None]], str | None, str]] = []
+    for col in range(1, width):
+        label = header[col]
+        attributes = row_attributes(label, "")
+        if attributes:
+            columns.append((col, attributes, unit_from_label(label), label))
+    if len(columns) < 2:
+        return None
+    bindings: list[dict[str, Any]] = []
+    carried = ""
+    body: list[list[str]] = []
+    for row_index, row in enumerate(grid[1:], start=1):
+        token = _header_token(row[0]) if row[0] else ""
+        if token:
+            carried = token
+        part = carried
+        if not part:
+            continue
+        if is_concrete_part_token(part):
+            bindings.append({"column_index": row_index, "part_number": part, "family_token": part, "binding": "row_token"})
+        elif is_wildcard_token(part):
+            bindings.append({"column_index": row_index, "part_number": None, "family_token": part, "binding": "unbound", "reason": "wildcard_row"})
+        else:
+            continue
+        body.append(row)
+    if len(bindings) < 2:
+        return None
+    attribute_rows: list[dict[str, Any]] = []
+    for col, attributes, unit, label in columns:
+        values: list[tuple[str, bool]] = []
+        carry = ""
+        for row in body:
+            cell = row[col]
+            merged = False
+            if cell:
+                carry = cell
+            else:
+                merged = bool(carry)
+            values.append((cell if cell else carry, merged))
+        if any(v for v, _ in values):
+            attribute_rows.append({"row_index": col, "label": label, "attributes": attributes, "label_unit": unit, "values": values})
+    if len(attribute_rows) < 2:
+        return None
+    return {
+        "page": page,
+        "rows": len(rows),
+        "columns": width,
+        "label_columns": 1,
+        "header_rows": 1,
+        "orientation": "parts_as_rows",
+        "bindings": bindings,
+        "attribute_rows": attribute_rows,
+        "census_attributes": attributes_in_label(" ".join(r["label"] for r in attribute_rows)),
+    }
+
+
 def read_matrix_table(
     rows: list[list[Any]],
     *,
@@ -740,9 +821,12 @@ def read_matrix_table(
     pdf_page: Any = None,
     parts_named: list[str] | None = None,
 ) -> dict[str, Any] | None:
+    rows = strip_title_rows(rows)
     description = classify_table(rows)
-    if description is None or description["orientation"] != "parts_as_columns":
+    if description is None:
         return None
+    if description["orientation"] == "parts_as_rows":
+        return _read_parts_as_rows(rows, page=page)
     width = max(len(r) for r in rows)
     grid = [[_norm(c) for c in r] + [""] * (width - len(r)) for r in rows]
     label_cols = min(2, width - 1)
@@ -894,7 +978,8 @@ def build_family_record(
         else:
             counts["cells_unknown"] += 1
 
-    for table in tables:
+    pending: list[dict[str, Any]] = []
+    for table_index, table in enumerate(tables):
         page = table["page"]
         bindings = table["bindings"]
         for binding in bindings:
@@ -934,43 +1019,111 @@ def build_family_record(
                         )
                 distinct = {leaf.get("component", leaf["verbatim"]) for _, leaf in cols}
                 covered = {b["column_index"] for b, _ in cols}
-                if len(distinct) == 1 and covered == {b["column_index"] for b in bindings}:
-                    if attribute not in shared:
-                        leaf = dict(cols[0][1])
-                        leaf["receipt"] = dict(leaf["receipt"], applies_to="all_variants")
-                        shared[attribute] = leaf
-                    continue
-                for binding, leaf in cols:
-                    for part in binding.get("part_numbers") or [binding["part_number"]]:
-                        key = part or f"column:{page}:{binding['column_index']}"
-                        variant = variants.setdefault(
-                            key,
-                            {"part_number": part, "family_token": binding["family_token"], "binding": binding["binding"], "column_index": binding["column_index"], "page": page, "attributes": {}},
-                        )
-                        if binding.get("also_covers"):
-                            variant["also_covers"] = binding["also_covers"]
-                        existing = variant["attributes"].get(attribute)
-                        if existing is not None:
-                            if existing["verbatim"] != leaf["verbatim"]:
-                                # Two rows of the same table landed in one
-                                # attribute with different values: the label
-                                # grammar could not separate them, so neither
-                                # value is trusted.
-                                conflicts.append(
-                                    {"part_number": part, "attribute": attribute, "values": [existing["verbatim"], leaf["verbatim"]], "labels": [existing["receipt"]["row_label"], label], "pages": [existing["receipt"]["page"], page], "kind": "repeated_row_disagrees"}
-                                )
-                                if existing["status"] in ("typed", "boolean"):
-                                    counts["cells_typed"] -= 1
-                                    counts["cells_unknown"] += 1
-                                elif existing["status"] == "verbatim":
-                                    counts["cells_verbatim"] -= 1
-                                    counts["cells_unknown"] += 1
-                                for k in ("typ", "min", "max", "value"):
-                                    existing.pop(k, None)
-                                existing["status"] = "unknown"
-                                existing["reason"] = "repeated_row_disagrees"
+                whole_table = len(distinct) == 1 and covered == {b["column_index"] for b in bindings}
+                pending.append({"attribute": attribute, "table": table_index, "page": page, "label": label, "cols": cols, "whole_table": whole_table, "value": next(iter(distinct)) if whole_table else None})
+
+    # Shared only when every table in the document prints the same single
+    # value across all of its columns; a value common to one table but
+    # different in another is per-variant, not family-wide.
+    by_attr: dict[str, list[dict[str, Any]]] = {}
+    for entry in pending:
+        by_attr.setdefault(entry["attribute"], []).append(entry)
+
+    def _table_parts(index: int) -> set[str]:
+        out: set[str] = set()
+        for b in tables[index]["bindings"]:
+            for m in b.get("members") or [{"part_number": b["part_number"], "token": b.get("family_token")}]:
+                out.add(m["part_number"] or f"column:{tables[index]['page']}:{b['column_index']}")
+            for p in b.get("part_numbers") or []:
+                out.add(p)
+        return out
+
+    all_parts = set().union(*(_table_parts(i) for i in range(len(tables)))) if tables else set()
+    for attribute, entries in by_attr.items():
+        covered_parts = set().union(*(_table_parts(e["table"]) for e in entries))
+        if all(e["whole_table"] for e in entries) and len({e["value"] for e in entries}) == 1 and covered_parts == all_parts:
+            leaf = dict(entries[0]["cols"][0][1])
+            leaf["receipt"] = dict(leaf["receipt"], applies_to="all_variants")
+            shared[attribute] = leaf
+            continue
+        for entry in entries:
+            page = entry["page"]
+            label = entry["label"]
+            for binding, leaf in entry["cols"]:
+                for part in binding.get("part_numbers") or [binding["part_number"]]:
+                    key = part or f"column:{page}:{binding['column_index']}"
+                    variant = variants.setdefault(
+                        key,
+                        {"part_number": part, "family_token": binding["family_token"], "binding": binding["binding"], "column_index": binding["column_index"], "page": page, "attributes": {}},
+                    )
+                    if binding.get("also_covers"):
+                        variant["also_covers"] = binding["also_covers"]
+                    existing = variant["attributes"].get(attribute)
+                    if existing is not None:
+                        if attribute in BOOLEAN_ATTRIBUTES and existing["status"] == "boolean" and leaf["status"] == "boolean":
+                            # Several rows for one flag (USB OTG FS, USB OTG
+                            # HS): present if any row says so; keep both
+                            # verbatims and labels.
+                            if leaf["value"] and not existing["value"]:
+                                existing["value"] = True
+                            existing["verbatim"] = f"{existing['verbatim']} | {leaf['verbatim']}"
+                            existing.setdefault("rows", [existing["receipt"]["row_label"]]).append(label)
+                            counts["cells_total"] -= 1
+                            counts["cells_typed"] -= 1
                             continue
-                        variant["attributes"][attribute] = dict(leaf) if len(binding.get("part_numbers") or []) > 1 else leaf
+                        if leaf["status"] == "unknown":
+                            # A second, unparseable row (junction temperature
+                            # under "Operating temperatures") does not unseat a
+                            # parsed one; it is already in the unknown list.
+                            continue
+                        if existing["status"] == "unknown" and existing.get("reason") != "repeated_row_disagrees":
+                            variant["attributes"][attribute] = dict(leaf) if len(binding.get("part_numbers") or []) > 1 else leaf
+                            continue
+                        if attribute == "package" and existing["verbatim"] != leaf["verbatim"]:
+                            # Packages printed on several rows: union.
+                            existing["verbatim"] = f"{existing['verbatim']} | {leaf['verbatim']}"
+                            seen = {(p["package_family"], p["pin_count"]) for p in existing.get("packages", [])}
+                            for p in leaf.get("packages", []):
+                                if (p["package_family"], p["pin_count"]) not in seen:
+                                    existing.setdefault("packages", []).append(p)
+                            counts["cells_total"] -= 1
+                            counts["cells_verbatim"] -= 1
+                            continue
+                        if (
+                            attribute.startswith("timer_")
+                            and existing["status"] == "typed" and leaf["status"] == "typed"
+                            and existing["receipt"]["row_label"] != label
+                            and re.search(r"\bbits?\b", existing["receipt"]["row_label"] + " " + label, re.I)
+                        ):
+                            # "General purpose (32-bit)" + "General purpose (16-bit)":
+                            # two rows of one timer class, printed by width. Sum.
+                            existing["typ"] = existing["typ"] + leaf["typ"]
+                            existing["verbatim"] = f"{existing['verbatim']} + {leaf['verbatim']}"
+                            existing["note"] = "sum of bit-width rows"
+                            existing.setdefault("rows", [existing["receipt"]["row_label"]]).append(label)
+                            counts["cells_total"] -= 1
+                            counts["cells_typed"] -= 1
+                            continue
+                        if existing["verbatim"] != leaf["verbatim"]:
+                            # Two rows of the same table landed in one
+                            # attribute with different values: the label
+                            # grammar could not separate them, so neither
+                            # value is trusted.
+                            conflicts.append(
+                                {"part_number": part, "attribute": attribute, "values": [existing["verbatim"], leaf["verbatim"]], "labels": [existing["receipt"]["row_label"], label], "pages": [existing["receipt"]["page"], page], "kind": "repeated_row_disagrees"}
+                            )
+                            if existing["status"] in ("typed", "boolean"):
+                                counts["cells_typed"] -= 1
+                                counts["cells_unknown"] += 1
+                            elif existing["status"] == "verbatim":
+                                counts["cells_verbatim"] -= 1
+                                counts["cells_unknown"] += 1
+                            for k in ("typ", "min", "max", "value"):
+                                existing.pop(k, None)
+                            existing["status"] = "unknown"
+                            existing["reason"] = "repeated_row_disagrees"
+                        continue
+                    variant["attributes"][attribute] = dict(leaf) if len(binding.get("part_numbers") or []) > 1 else leaf
 
     # Derived: pin_count from the package cell when every package printed for
     # the variant has one pin count. Kept separate from gpio_count.

@@ -45,7 +45,7 @@ CENSUS_SCHEMA = "harness.electronics-family-census.v1"
 
 FRONT_PAGES = 3
 KEYWORD_SCAN_PAGES = 40
-MAX_TABLE_PAGES = 15
+MAX_TABLE_PAGES = 20
 
 # Pages worth scanning for a device table or an ordering list, by printed
 # heading. Matched on page text, whitespace-normalized.
@@ -54,7 +54,8 @@ DEVICE_TABLE_KEYWORDS = re.compile(
     r"selection|features?)|ordering\s+information|product\s+(?:selection|"
     r"line|matrix|table|overview)|family\s+(?:overview|comparison|features?)|"
     r"part\s+number\s+(?:table|list|matrix)|feature\s+(?:comparison|summary)|"
-    r"memory\s+(?:size|configuration)",
+    r"memory\s+(?:size|configuration)|product\s+(?:list|lineup|line-up)|"
+    r"peripheral\s+counts?|features?\s+and\s+peripheral",
     re.IGNORECASE,
 )
 
@@ -258,6 +259,23 @@ def _cell(value: Any) -> str:
     return _normalize(str(value)) if value is not None else ""
 
 
+_TITLE_ROW = re.compile(r"^(?:table|tab\.)\s*\d", re.I)
+
+
+def strip_title_rows(rows: list[list[Any]]) -> list[list[Any]]:
+    """Drop leading rows that are a table caption merged into the grid
+    ("Table 1.12 Product list (1 of 2)" spanning every column)."""
+    out = list(rows)
+    while out:
+        cells = [_cell(c) for c in out[0]]
+        filled = [c for c in cells if c]
+        if len(filled) == 1 and _TITLE_ROW.match(filled[0]):
+            out = out[1:]
+            continue
+        break
+    return out
+
+
 def classify_table(rows: list[list[Any]]) -> dict[str, Any] | None:
     """Return a device-table description or None when the table is not one.
 
@@ -265,6 +283,7 @@ def classify_table(rows: list[list[Any]]) -> dict[str, Any] | None:
     column(s) (parts_as_columns: GD32/ST/Microchip style) or across its
     header row (parts_as_rows: selection-guide style) and >=2 variants.
     """
+    rows = strip_title_rows(rows)
     if len(rows) < 3 or not rows[0] or len(rows[0]) < 3:
         return None
     width = max(len(row) for row in rows)
@@ -368,7 +387,12 @@ def _candidate_pages(
         if text is None:
             text = document[index].get_text()
             page_texts[index + 1] = text
-        if DEVICE_TABLE_KEYWORDS.search(_normalize(text)):
+        normalized = _normalize(text)
+        if DEVICE_TABLE_KEYWORDS.search(normalized):
+            pages.append(index + 1)
+        elif len(parts_from_text(normalized, None)) >= 3:
+            # A page naming three or more concrete parts is a device table,
+            # an ordering list or a product list whatever its heading says.
             pages.append(index + 1)
     ordered: list[int] = []
     for page in pages:
