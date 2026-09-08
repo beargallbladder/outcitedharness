@@ -236,3 +236,11 @@ def test_shared_module_rows_apply_to_every_protocol():
     assert row_attributes("eUSCI B: _ SPI, I2C", "") == [("spi_count", None), ("i2c_count", None)]
     assert row_attributes("eUSCI A: _ UART, IrDA, SPI", "") == [("uart_count", None), ("spi_count", None)]
     assert row_attributes("Communication interfaces", "SPI/I2S") == [("spi_count", 0), ("i2s_count", 1)]
+
+
+def test_qualified_numbers_keep_the_printed_words():
+    leaf = parse_value("Up to 2 Mbytes", "code_flash_kb", None)
+    assert (leaf["status"], leaf["typ"], leaf["qualifier"]) == ("typed", 2048, "Up to")
+    assert "direction" not in leaf
+    assert parse_value("Max. 4", "spi_count", None)["qualifier"] == "Max."
+    assert parse_value("81", "gpio_count", None).get("qualifier") is None

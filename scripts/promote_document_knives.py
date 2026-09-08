@@ -92,6 +92,7 @@ def main() -> int:
 
     # Pass 1: every typed statement per (part, attribute), keyed by document.
     statements: dict[tuple[str, str], list[dict]] = defaultdict(list)
+    tally: Counter[str] = Counter()
     for record in records:
         meta = record["_meta"]
         for variant in record["variants"]:
@@ -105,10 +106,14 @@ def main() -> int:
                 if not leaf:
                     continue
                 ours = _our_value(leaf)
+                if leaf.get("qualifier"):
+                    # "Up to N" is a bound, not this part's value. It belongs
+                    # to the family-grain set (elimination-only), never here.
+                    tally[f"{attribute}:qualified_bound_not_a_value"] += 1
+                    continue
                 statements[(part, attribute)].append({"value": ours, "leaf": leaf, "meta": meta})
 
     by_part: dict[str, dict] = {}
-    tally: Counter[str] = Counter()
     held: list[dict] = []
 
     def _promote(part: str, attribute: str, typed: list[dict], field: str, render: str) -> None:

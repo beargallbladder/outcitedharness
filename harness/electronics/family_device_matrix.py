@@ -191,6 +191,7 @@ _ST_PART = re.compile(
     r"^STM32(?:[A-Z]\d[A-Z0-9]\d|[A-Z]{2}\d{2}|[A-Z]{3}\d{1,2}|[A-Z]{3}\d)([A-Z])([0-9A-Z])(?:[A-Z0-9]*)$"
 )
 _HEADER_LIST_SPLIT = re.compile(r"\s*[,/]\s*")
+_QUALIFIER_LEAD = re.compile(r"^(up\s+to|max(?:imum|\.)?|at\s+least|min(?:imum|\.)?)\s*:?\s*(.+)$", re.I)
 
 
 def _norm(text: Any) -> str:
@@ -347,6 +348,19 @@ def parse_value(verbatim: str, attribute: str, label_unit: str | None) -> dict[s
         return leaf
 
     unit = label_unit or NUMERIC_ATTRIBUTES[attribute]
+
+    # A printed qualifier ("Up to 2 Mbytes", "at least 4") bounds the number
+    # rather than stating it. The number is typed and the exact words travel
+    # with it, so no consumer can read a bound as a part value by accident.
+    qualified = _QUALIFIER_LEAD.match(text)
+    if qualified and attribute not in {"operating_voltage", "temp_range"}:
+        inner = parse_value(qualified.group(2), attribute, label_unit)
+        if inner["status"] == "typed":
+            # Verbatim words only; what a qualifier licenses is the knife
+            # owner's call, not the reader's.
+            inner["verbatim"] = raw
+            inner["qualifier"] = qualified.group(1)
+            return inner
 
     if attribute in {"operating_voltage", "temp_range"}:
         cleaned = text.replace("−", "-").replace("–", "-").replace("—", "-").replace("º", "°")
