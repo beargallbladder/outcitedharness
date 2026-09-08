@@ -483,6 +483,9 @@ def _members_from_parts_named(token: str, parts_named: list[str]) -> list[str]:
     return members
 
 
+_PART_PACKAGE_SUFFIX = re.compile(r"^([A-Z]{2,}[0-9][A-Z0-9]{3,}?)([A-Z])[xX]{2,4}$")
+
+
 def bind_columns(
     grid: list[list[str]],
     label_cols: int,
@@ -554,6 +557,14 @@ def bind_columns(
     for col, token in zip(data_cols, tokens):
         if token and is_concrete_part_token(token) and counts[token] == 1:
             bindings.append({"column_index": col, "part_number": token, "family_token": token, "binding": "header_token"})
+            continue
+        packaged = _PART_PACKAGE_SUFFIX.match(token or "")
+        if packaged and counts[token] == 1 and is_concrete_part_token(packaged.group(1)):
+            # "STM32U3C5VIYxxxx": the concrete part followed by its package
+            # letter and the ordering wildcards. One part, one package column.
+            bindings.append(
+                {"column_index": col, "part_number": packaged.group(1), "family_token": token, "binding": "header_token_package", "package_letter": packaged.group(2)}
+            )
             continue
         if token and counts[token] == 1 and _HEADER_LIST_SPLIT.search(token):
             # Several parts named for one column ("STM32L552CE,STM32L552CC/
@@ -1052,10 +1063,14 @@ def build_family_record(
             for binding, leaf in entry["cols"]:
                 for part in binding.get("part_numbers") or [binding["part_number"]]:
                     key = part or f"column:{page}:{binding['column_index']}"
+                    if part and binding.get("package_letter"):
+                        key = f"{part}/{binding['package_letter']}"
                     variant = variants.setdefault(
                         key,
                         {"part_number": part, "family_token": binding["family_token"], "binding": binding["binding"], "column_index": binding["column_index"], "page": page, "attributes": {}},
                     )
+                    if binding.get("package_letter"):
+                        variant["package_letter"] = binding["package_letter"]
                     if binding.get("also_covers"):
                         variant["also_covers"] = binding["also_covers"]
                     existing = variant["attributes"].get(attribute)

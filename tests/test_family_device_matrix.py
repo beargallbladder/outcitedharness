@@ -178,3 +178,14 @@ def test_label_rules_exclude_lookalikes():
     assert ("operating_voltage", None) not in row_attributes("16-bit SDADC operating voltage", "")
     assert ("sram_kb", None) not in row_attributes("SRAM in Kbytes", "Instruction")
     assert ("sram_kb", None) in row_attributes("SRAM in Kbytes", "System")
+
+
+def test_bind_part_with_package_letter_and_ordering_wildcards():
+    grid = [
+        ["Peripherals", "", "STM32U3C5CI", "STM32U3C5VIYxxxx", "STM32U3C5VITxxxx"],
+        ["Flash memory (Mbytes)", "", "2", "2", "2"],
+        ["SRAM in Kbytes", "", "640", "640", "640"],
+        ["Max. CPU frequency", "", "96 MHz", "96 MHz", "96 MHz"],
+    ]
+    _, bindings = bind_columns(grid, 2, {})
+    assert [(b["part_number"], b.get("package_letter")) for b in bindings] == [("STM32U3C5CI", None), ("STM32U3C5VI", "Y"), ("STM32U3C5VI", "T")]
