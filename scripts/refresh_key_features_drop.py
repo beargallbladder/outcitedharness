@@ -78,6 +78,32 @@ def main() -> None:
         for r in rows:
             if r.get("section") == "io_by_package":
                 f.write(json.dumps(r, ensure_ascii=False) + "\n")
+    # stated - listed per document and package. CR (io-pins-and-supply-source-
+    # 20260909): port_pins_listed is bounded by the pin table, stated is a
+    # claim; their difference is the defect detector that can retire the
+    # gpio_count quarantine. Emitted as rows so nobody has to derive it.
+    by_pkg: dict[tuple, dict[str, dict]] = {}
+    for r in rows:
+        if r.get("section") == "io_by_package" and r.get("package_qualifier"):
+            pq = r["package_qualifier"]
+            key = (r.get("document_sha256"), pq.get("pin_count"), pq.get("package"))
+            by_pkg.setdefault(key, {})[r.get("quantity_qualifier")] = r
+    deltas = 0
+    with (out / "io_delta.jsonl").open("w") as f:
+        for (sha, pin_count, package), sides in sorted(by_pkg.items(), key=lambda kv: (str(kv[0][0]), kv[0][1] or 0)):
+            stated, listed = sides.get("stated"), sides.get("port_pins_listed")
+            if not (stated and listed):
+                continue
+            delta = int(stated["value"]) - int(listed["value"])
+            f.write(json.dumps({
+                "document_sha256": sha, "source_artifact": stated.get("source_artifact"), "vendor": stated.get("vendor"),
+                "scope_as_printed": stated.get("scope_as_printed"), "pin_count": pin_count, "package": package,
+                "io_pins_stated": stated["value"], "io_port_pins_listed": listed["value"], "delta": delta,
+                "listed_exceeds_pin_count": bool(pin_count and int(listed["value"]) > int(pin_count)),
+                "stated_exceeds_pin_count": bool(pin_count and int(stated["value"]) > int(pin_count)),
+                "stated_pages": stated.get("source_pages"), "listed_pages": listed.get("source_pages"),
+            }, ensure_ascii=False) + "\n")
+            deltas += 1
     with (out / "quantity_qualified_rows.jsonl").open("w") as f:
         for r in rows:
             if r.get("quantity_qualifier"):
@@ -94,7 +120,7 @@ def main() -> None:
         for name in names:
             f.write(f"{hashlib.sha256((out / name).read_bytes()).hexdigest()}  {name}\n")
     grid_rows = sum(1 for r in rows if r["tier"] == "grid")
-    print(f"documents {len(grids)}  grid rows {grid_rows}  typed facts {typed}  quantity-qualified {sum(1 for r in rows if r.get('quantity_qualifier'))}  io_by_package {sum(1 for r in rows if r.get('section') == 'io_by_package')}  -> {out}")
+    print(f"documents {len(grids)}  grid rows {grid_rows}  typed facts {typed}  quantity-qualified {sum(1 for r in rows if r.get('quantity_qualifier'))}  io_by_package {sum(1 for r in rows if r.get('section') == 'io_by_package')}  io_delta {deltas}  -> {out}")
 
 
 if __name__ == "__main__":
