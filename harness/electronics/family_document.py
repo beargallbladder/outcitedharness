@@ -806,6 +806,189 @@ def read_description_facts(page_texts: dict[int, str], max_pages: int = 14) -> l
     return out[:60]
 
 
+# Renesas MPU "List of Specifications": Item | Description, often borderless so
+# find_tables returns nothing. The text stream still has Item names and • / —
+# description lines. Do not count chapter-3 ballout figures here.
+_SPEC_LIST_OPEN = re.compile(r"\bList of Specifications\b", re.I)
+_SPEC_LIST_STOP = re.compile(r"^\s*\d{1,2}\.\d{1,2}\s+Power Supply\b", re.I | re.M)
+_SPEC_SECTION = re.compile(r"^\s*\d{1,2}(?:\.\d{1,2}){1,2}\s+([A-Z].+)$")
+_SPEC_SKIP = re.compile(
+    r"^(?:RZ/G\w*|R01UH\w+|Rev\.?\s*\d|Item|Description|Others|"
+    r"List of Specifications|[A-Z][a-z]{2}\s+\d{1,2},\s*\d{4}|"
+    r"\d{1,2}-\d{1,3}|Notes?:.*|Figure\s+\d|1\.\s*Overview)\s*$",
+    re.I,
+)
+_SPEC_DESC_CONT = re.compile(
+    r"^(?:the|a|an|when|this|there|it|they|supports?|wait|connectable|period|"
+    r"number|target modules|function of|enable and|on/off|note:?|ready|"
+    r"allocation|area|space|i/f|byte-control|also|as well|selected|"
+    r"includes?|transfer|address|maximum number|minimum number|data packing|"
+    r"memory write|peripheral \(|auto-|deep-|ddr |jedec)\b",
+    re.I,
+)
+_INCLUDES_LEAD = re.compile(r"\bincludes\s*:\s*$", re.I | re.M)
+_TOC_LEADERS = re.compile(r"\.{4,}")
+_SHORT_SPEC_ITEMS = frozenset({"package", "process", "jtag", "qspi"})
+
+
+def _looks_like_spec_item(line: str) -> bool:
+    """A left-column Item name, not a wrapped description sentence."""
+    if len(line) > 70 or _SPEC_SKIP.match(line) or _SPEC_DESC_CONT.match(line):
+        return False
+    if line.endswith(":") and "(" not in line:
+        return False
+    if re.search(r"\.\s", line):
+        return False
+    if re.search(r"\([A-Z][A-Z0-9/]{1,16}\)\s*$", line):
+        return True
+    if re.match(
+        r"^(?:System CPU|ARM debugger|Package|Process|JTAG|QSPI|Memory connections|"
+        r"Operating clock|Local bus|External bus|General-purpose I/O|Thermal sensor|"
+        r"Pin function|Serial communication|Clock-synchronized|High-speed serial|"
+        r"PWM timer|Boot Function|Reset)\b",
+        line,
+        re.I,
+    ):
+        return True
+    return len(line) <= 36 and line[0].isupper() and " " in line
+
+
+def _looks_like_item_wrap(line: str) -> bool:
+    if re.search(r"\([A-Z][A-Z0-9/]{1,16}\)\s*$", line) and not re.search(r"\d{2,}", line):
+        return True
+    return bool(line) and line[0].islower()
+
+
+def _spec_item_complete(parts: list[str]) -> bool:
+    name = _norm(" ".join(parts))
+    if name.lower() in _SHORT_SPEC_ITEMS:
+        return True
+    return bool(re.search(r"\([A-Z][A-Z0-9/]{1,16}\)\s*$", name))
+
+
+def read_includes_list(page_texts: dict[int, str], max_pages: int = 20) -> list[dict[str, Any]]:
+    """Cover introduction 'The <part> includes:' bullets (RZ/G product card)."""
+    out: list[dict[str, Any]] = []
+    for pno in sorted(page_texts):
+        if pno > max_pages:
+            break
+        text = page_texts.get(pno) or ""
+        lead = _INCLUDES_LEAD.search(text)
+        if not lead:
+            continue
+        for item in _bullet_items(text[lead.end():]):
+            body = item["text"].rstrip(" ,;")
+            if len(body) < 4:
+                continue
+            row = _feature(body, pno, section="Introduction", level=item.get("level"), parent=item.get("parent"))
+            row["source"] = "includes_list"
+            out.append(row)
+        break
+    return out[:40]
+
+
+def read_item_description_specs(page_texts: dict[int, str], max_pages: int = 40) -> list[dict[str, Any]]:
+    """Item / Description specification list as printed, via text (no tables)."""
+    out: list[dict[str, Any]] = []
+    in_list = False
+    section: str | None = None
+    item_parts: list[str] = []
+    had_bullets = False
+    prose_parts: list[str] = []
+
+    def item_name() -> str | None:
+        name = _norm(" ".join(item_parts))
+        return name or None
+
+    def emit_text(text: str, page: int, *, level: int, parent: str | None = None) -> None:
+        body = text.strip(" ,;")
+        if len(body) < 3 or _SPEC_SKIP.match(body):
+            return
+        row = _feature(body, page, section=item_name() or section, level=level, parent=parent)
+        row["source"] = "item_description"
+        out.append(row)
+
+    def flush_prose(page: int) -> None:
+        if item_name() and prose_parts:
+            emit_text(_norm(" ".join(prose_parts)), page, level=1)
+            prose_parts.clear()
+
+    for pno in sorted(page_texts):
+        if pno > max_pages:
+            break
+        text = page_texts.get(pno) or ""
+        if _TOC_LEADERS.search(text) and re.search(r"^\s*Contents\b", text, re.I | re.M):
+            continue  # TOC cites the spec list; it is not the list
+        if _SPEC_LIST_OPEN.search(text):
+            in_list = True
+        if not in_list:
+            continue
+        if _SPEC_LIST_STOP.search(text) and in_list and (item_parts or out):
+            flush_prose(pno)
+            break
+        lines = [ln.rstrip() for ln in text.splitlines()]
+        i = 0
+        while i < len(lines):
+            raw = lines[i]
+            line = raw.strip()
+            if not line:
+                i += 1
+                continue
+            if _SPEC_SKIP.match(line):
+                i += 1
+                continue
+            if _SPEC_LIST_STOP.match(line):
+                flush_prose(pno)
+                in_list = False
+                break
+            numbered = _SPEC_SECTION.match(line)
+            if numbered and not _GLYPH_LINE.match(line) and not _DASH_LINE.match(line):
+                section = _norm(numbered.group(1))
+                i += 1
+                continue
+            glyph = _GLYPH_LINE.match(raw)
+            dash = _DASH_LINE.match(raw)
+            if glyph or dash:
+                body = (glyph.group(2) if glyph else dash.group(1) or "").strip()
+                if not body:
+                    nxt = i + 1
+                    while nxt < len(lines) and not lines[nxt].strip():
+                        nxt += 1
+                    if nxt < len(lines):
+                        body = lines[nxt].strip()
+                        i = nxt
+                if body:
+                    parent = None
+                    level = 1
+                    if dash and had_bullets and out and out[-1].get("source") == "item_description":
+                        parent = out[-1].get("label")
+                        level = 2
+                    emit_text(body, pno, level=level, parent=parent)
+                    had_bullets = True
+                    prose_parts = []
+                i += 1
+                continue
+            if had_bullets:
+                if _looks_like_spec_item(line):
+                    item_parts = [line]
+                    had_bullets = False
+                    prose_parts = []
+            elif item_parts and _looks_like_item_wrap(line):
+                item_parts.append(line)
+            elif item_parts and _looks_like_spec_item(line) and (prose_parts or _spec_item_complete(item_parts)):
+                flush_prose(pno)
+                item_parts = [line]
+            elif item_parts:
+                prose_parts.append(line)
+            elif _looks_like_spec_item(line):
+                item_parts = [line]
+            i += 1
+        if len(out) >= 200:
+            break
+    flush_prose(max(page_texts) if page_texts else 1)
+    return out[:200]
+
+
 def _singular_acronyms(text: str) -> str:
     """"three SPIs, two I2Cs, two CANs" -> "SPI", "I2C", "CAN" for classification only."""
     return re.sub(r"\b([A-Z][A-Z0-9]{1,7})s\b", r"\1", text)
@@ -944,6 +1127,9 @@ def read_prose_facts(page_texts: dict[int, str], max_pages: int = 160) -> list[d
 
 
 _PKG_WORD = r"(?:LFQFP|TFLGA|PLQP|PTLG|PWQN|PLBG|PVQN|LQFP|UFQFPN|UFBGA|TFBGA|WLCSP|LFBGA|QFN|VQFN|HWQFN|TQFP|VFQFPN|EWLCSP|LGA|TSSOP|SOIC|SSOP|DIP|PDIP|VSSOP|HVQFN|HTQFP|nFBGA|PLCC|CSP|HLQFP|WQFN|DFN|UDFN|LQFN|QFP|BGA|WFLGA|WLBGA|VFBGA)"
+# Renesas MPU house style: "FC-BGA2727-831" is 27 mm × 27 mm, 831 balls.
+_FC_BGA = re.compile(r"\bFC-?BGA\s*(\d{2})(\d{2})-(\d{2,4})\b", re.I)
+_STATED_GPIO_PORTS = re.compile(r"General-purpose\s+I/O\s+ports?\s*:\s*(\d+)\s+ports?", re.I)
 # Renesas RA/RX house style: "I/O ports for the 100-pin LQFP" ... "I/O pins: 80".
 _IO_FOR_PACKAGE = re.compile(
     rf"I/O\s+ports?\s+for\s+the\s+(?P<pins>\d{{2,3}})-pin\s+(?P<pkg>{_PKG_WORD})[^\n]*\n(?:[^\n]*\n){{0,2}}?[–\-\s]*I/O\s+pins?\s*[:：]\s*(?P<io>\d{{1,3}})",
@@ -976,6 +1162,32 @@ def read_io_by_package(page_texts: dict[int, str]) -> list[dict[str, Any]]:
                     continue
                 seen.add(key)
                 out.append({"pin_count": pins, "package": pkg, "io_count": io, "pattern": kind, "verbatim": _norm(match.group(0))[:200], "receipt": {"page": pno}})
+    # RZ/G: GPIO count is in the Item/Description spec list; the only package
+    # is named later as FC-BGAxxxx-N. Pair them. Do not count the ch.3 ballout
+    # figure (locator: definition tables, never ballout figures).
+    gpio_by_count: dict[int, tuple[int, str]] = {}
+    pkg_by_key: dict[tuple[str, int], tuple[int, str]] = {}
+    for pno, text in page_texts.items():
+        for match in _STATED_GPIO_PORTS.finditer(text):
+            gpio_by_count.setdefault(int(match.group(1)), (pno, _norm(match.group(0))))
+        for match in _FC_BGA.finditer(text):
+            pins = int(match.group(3))
+            pkg_by_key.setdefault(("FCBGA", pins), (pno, match.group(0).replace(" ", "")))
+    if len(gpio_by_count) == 1 and len(pkg_by_key) == 1:
+        io, (gp_page, gp_verb) = next(iter(gpio_by_count.items()))
+        (pkg, pins), (pkg_page, pkg_verb) = next(iter(pkg_by_key.items()))
+        if 4 <= io < pins:
+            key = (pins, pkg, io)
+            if key not in seen:
+                seen.add(key)
+                out.append({
+                    "pin_count": pins,
+                    "package": pkg,
+                    "io_count": io,
+                    "pattern": "stated_gpio_and_fcbga",
+                    "verbatim": f"{gp_verb}; {pkg_verb}",
+                    "receipt": {"page": gp_page, "pages": [gp_page, pkg_page]},
+                })
     return out[:40]
 
 
@@ -1145,7 +1357,13 @@ def read_family_document(path: Path, *, vendor: str | None = None, max_text_page
     identity = read_identity(document, page_texts)
     chapters = read_chapters(document, page_texts)
     instances = read_instances(page_texts)
-    features = read_features(page_texts) + read_features_table(document, page_texts) + read_description_facts(page_texts)
+    features = (
+        read_features(page_texts)
+        + read_features_table(document, page_texts)
+        + read_description_facts(page_texts)
+        + read_includes_list(page_texts)
+        + read_item_description_specs(page_texts)
+    )
     chapter_features = read_chapter_features(page_texts, chapters, document.page_count)
     memory = read_memory(document, page_texts, chapters)
     prose_facts = read_prose_facts(page_texts)

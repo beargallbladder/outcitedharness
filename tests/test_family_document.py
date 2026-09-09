@@ -186,3 +186,98 @@ def test_description_paragraph_reads_counted_sized_and_named_facts() -> None:
     assert any(l.startswith("–40 to +85") for l in by_label)
     # The verb "can" is not the bus; marketing sentences are not facts.
     assert not any("configured" in l or "suitable" in l for l in by_label)
+
+
+def test_includes_list_reads_rzg_product_card() -> None:
+    from harness.electronics.family_document import read_includes_list
+
+    pages = {
+        9: (
+            "1.1 Introduction\n"
+            "The RZ/G1H includes:\n"
+            "•\n"
+            "Four 1.4-GHz ARM Cortex®-A15 MPCore® cores,\n"
+            "•\n"
+            "Four 780-MHz ARM Cortex®-A7 MPCore® cores,\n"
+            "•\n"
+            "3 channels Display Output,\n"
+            "1.2 System Configuration Diagram\n"
+        )
+    }
+    rows = read_includes_list(pages)
+    texts = [r["verbatim"] for r in rows]
+    assert any("1.4-GHz" in t and "Cortex" in t and "A15" in t for t in texts)
+    assert any("780-MHz" in t and "A7" in t for t in texts)
+    assert any("Display Output" in t for t in texts)
+    assert all(r["source"] == "includes_list" for r in rows)
+
+
+def test_item_description_specs_read_cores_cache_and_gpio() -> None:
+    from harness.electronics.family_document import read_item_description_specs
+
+    pages = {
+        7: (
+            "Contents\n"
+            "1.3 List of Specifications ......................................................... 1-3\n"
+            "1.4 Power Supply Voltages and Temperature Range ............. 1-24\n"
+        ),
+        11: (
+            "1.3 List of Specifications\n"
+            "1.3.1 ARM Core\n"
+            "Item\n"
+            "Description\n"
+            "System CPU Cortex-A15\n"
+            "• ARM Cortex-A15 Quad MPCore 1.4 GHz\n"
+            "• L1 I/D cache 32/32 KBytes, L2 cache 2 MBytes\n"
+            "System CPU Cortex-A7\n"
+            "• ARM Cortex-A7 Quad MPCore 780 MHz\n"
+            "• L1 I/D cache 32/32 KBytes, L2 cache 512 KBytes\n"
+        ),
+        12: (
+            "Item\n"
+            "Description\n"
+            "General-purpose I/O (GPIO)\n"
+            "• General-purpose I/O ports: 188 ports\n"
+            "• Supports GPIO interrupts.\n"
+        ),
+        31: (
+            "Item\n"
+            "Description\n"
+            "Process\n"
+            "28-nm Si-CMOS\n"
+            "Package\n"
+            "FC-BGA2727-831\n"
+        ),
+        32: "1.4 Power Supply Voltages and Temperature Range\n• Temperature range\n",
+    }
+    rows = read_item_description_specs(pages)
+    texts = [r["verbatim"] for r in rows]
+    assert any("Cortex-A15 Quad MPCore 1.4 GHz" in t for t in texts)
+    assert any("L2 cache 2 MBytes" in t for t in texts)
+    assert any("Cortex-A7 Quad MPCore 780 MHz" in t for t in texts)
+    assert any("L2 cache 512 KBytes" in t for t in texts)
+    assert any("188 ports" in t for t in texts)
+    assert any("FC-BGA2727-831" in t for t in texts)
+    a15 = next(r for r in rows if "Cortex-A15 Quad" in r["verbatim"])
+    assert a15["vendor_section"] == "System CPU Cortex-A15"
+    assert "cpu_core" in a15["classes"]
+
+
+def test_stated_gpio_pairs_with_fc_bga_not_ballout() -> None:
+    from harness.electronics.family_document import read_io_by_package
+
+    pages = {
+        12: "General-purpose I/O (GPIO)\n• General-purpose I/O ports: 188 ports\n",
+        31: "Package\nFC-BGA2727-831\n",
+        35: (
+            "3.1 Top View (Left)\n"
+            "A1 A2 A3 B1 B2 B3\n"
+            "VSS VDD GPIO0 GPIO1\n"
+        ),
+    }
+    rows = read_io_by_package(pages)
+    assert len(rows) == 1
+    assert rows[0]["pattern"] == "stated_gpio_and_fcbga"
+    assert rows[0]["io_count"] == 188
+    assert rows[0]["pin_count"] == 831
+    assert rows[0]["package"] == "FCBGA"
