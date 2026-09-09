@@ -510,9 +510,15 @@ def build_grid(record: dict[str, Any], vendor_by_sha: dict[str, str] | None = No
     # 5b. Package-qualified I/O counts. One row per (pin count, package); the
     #     I/O number is a value only under that package qualifier. CR: never a
     #     scalar, never expanded to members. `varies_by_part` is forced on.
+    #     Two quantities, kept apart: a count the document states ("I/O pins:
+    #     80") and a count of the port pins its pinout table lists for that
+    #     package. They differ where a vendor counts remappable oscillator or
+    #     debug pins as I/O; both are emitted so the merge can see it.
     for row in record.get("io_by_package", []):
-        label = f"{row['io_count']} I/O ({row['pin_count']}-pin {row['package']})"
-        emit("io_package_environment", "gpio", label, pages=[row["receipt"]["page"]], verbatim=row["verbatim"], tier="grid", value=row["io_count"], unit="I/O", section="io_by_package", flags={"package_qualifier": {"pin_count": row["pin_count"], "package": row["package"]}, "varies_by_part": True, "pattern": row["pattern"]})
+        counted = row["pattern"] == "pin_table_count"
+        label = f"{row['io_count']} {'port pins listed' if counted else 'I/O'} ({row['pin_count']}-pin {row['package']})"
+        pages = row["receipt"].get("pages") or [row["receipt"]["page"]]
+        emit("io_package_environment", "gpio", label, pages=pages, verbatim=row["verbatim"], tier="grid", value=row["io_count"], unit="I/O", section="io_by_package", flags={"package_qualifier": {"pin_count": row["pin_count"], "package": row["package"]}, "varies_by_part": True, "pattern": row["pattern"], "quantity_qualifier": "port_pins_listed" if counted else "stated"})
 
     # 6. Chapter presence: asserted present, with location. Never absence.
     presence = []
@@ -526,7 +532,7 @@ def build_grid(record: dict[str, Any], vendor_by_sha: dict[str, str] | None = No
 
     rows = _dedupe(rows)
     for row in rows:
-        row["quantity_qualifier"] = quantity_qualifier(row)
+        row["quantity_qualifier"] = row.get("quantity_qualifier") or quantity_qualifier(row)
         facts = typed_facts(row)
         if facts:
             row["typed"] = facts

@@ -979,6 +979,137 @@ def read_io_by_package(page_texts: dict[int, str]) -> list[dict[str, Any]]:
     return out[:40]
 
 
+# Port-pin names across vendors: PA0 (ST/GD/AVR/Tiva/EFM32), PTA0 (Kinetis),
+# PA00 (SAM), RA0 (PIC), P1.0 (MSP430/EFM8/XMC), P000 (Renesas RA/RX),
+# PIO0_0 / P0_0 (LPC), GPIO0 (C2000).
+_PORT_PIN = re.compile(r"\b(?:P[A-K]\d{1,2}|PT[A-E]\d{1,2}|P[A-C]\d{2}|R[A-G]\d|P\d\.\d{1,2}|P\d{3}|PIO\d_\d{1,2}|P\d_\d{1,2}|GPIO\d{1,3})\b")
+_PKG_CELL = re.compile(
+    rf"(?P<pkg1>{_PKG_WORD})\s?-?\s?(?P<pins1>\d{{2,3}})\b|\b(?P<pins2>\d{{2,3}})\s?-?\s?(?:pin|lead)s?\s+(?P<pkg2>{_PKG_WORD})\b|\b(?P<pins3>\d{{2,3}})\s*(?P<pkg3>{_PKG_WORD})\b",
+    re.I,
+)
+_PIN_TABLE_CAPTION_BARE = re.compile(r"signals?\s+by\s+pin\s+number|\bpin\s+definitions?\b|\bpinout\s+(?:table|description)|\bpin\s+assignments?\s+(?:table|for)\b", re.I)
+# A pin-name cell is the port pin, possibly with its alternate names
+# ("PC13-TAMPER-RTC", "PA0/WKUP"); a mux cell "PF3 (7)/PB5 (7)" is not.
+_PIN_NAME_CELL = re.compile(rf"^\s*{_PORT_PIN.pattern}(?:\(\d\))?(?:\s*[-/_]\s*[A-Za-z0-9_+.\-]+(?:\s?(?:IN|OUT))?(?:\(\d\))?)*\s*_?\s*$")
+_PIN_TABLE_CAPTION = re.compile(
+    rf"(?:(?P<pkg>{_PKG_WORD})\s?-?\s?(?P<pins>\d{{2,3}})|(?P<pins_b>\d{{2,3}})\s?-?\s?(?:pin|lead)\s+(?P<pkg_b>{_PKG_WORD}))\s+(?:pin\s+(?:definitions?|assignments?|descriptions?|out|functions?)|pinout|signals?\s+by\s+pin)",
+    re.I,
+)
+
+
+_PINOUT_PAGE = re.compile(r"pin\s*(?:out|definitions?|assignments?|descriptions?|functions?|list|map)|signals?\s+by\s+pin|pin\s+multiplexing|\bmultiplexing\b|pin\s+configuration", re.I)
+
+
+def _pin_name_in_cell(cell: str) -> str | None:
+    """The port pin a pin-name cell names: a strict pin-name cell, or a
+    "Default: OSCIN / Remap: PD0" cell naming exactly one port pin. A mux list
+    "PF3 (7)/PB5 (7)" names several and is not a pin-name cell."""
+    joined = cell.replace("\n", "")
+    if _PIN_NAME_CELL.match(joined):
+        return _PORT_PIN.search(joined).group(0)
+    names = set(_PORT_PIN.findall(joined))
+    if len(names) == 1 and not re.search(r"\(\d\)\s*/", joined) and len(joined) <= 40:
+        return next(iter(names))
+    return None
+
+
+def _package_in_cell(cell: str) -> tuple[str, int] | None:
+    m = _PKG_CELL.search(cell.replace("\n", " "))
+    if not m:
+        return None
+    for pkg, pins in (("pkg1", "pins1"), ("pkg2", "pins2"), ("pkg3", "pins3")):
+        if m.group(pkg):
+            return m.group(pkg).upper(), int(m.group(pins))
+    return None
+
+
+def read_io_from_pin_tables(document: Any, page_texts: dict[int, str]) -> list[dict[str, Any]]:
+    """I/O per package counted from the pinout table itself: the distinct
+    port-pin names that have a pin number in a package's column (ST/Renesas/
+    SAM shape: one column per package) or in a table captioned with the
+    package (GD32/TI shape: one table per package). The count is what the
+    document lists, not a statement it makes; pattern says so."""
+    per_package: dict[tuple[str, int], dict[str, Any]] = {}
+    layout: tuple[int, dict[int, tuple[str, int]], int] | None = None  # (page, pkg columns, pin column)
+    caption_layout: tuple[int, tuple[str, int], int, int] | None = None  # (page, package, width, pin column)
+    # A document that names one package throughout (TI Tiva "64LQFP") owns
+    # an uncaptioned pinout table.
+    named = Counter(p for text in page_texts.values() for m in _PKG_CELL.finditer(text) if (p := _package_in_cell(m.group(0))))
+    ranked = named.most_common(2)
+    single_package = ranked[0][0] if ranked and ranked[0][1] >= 5 and (len(ranked) == 1 or ranked[0][1] >= 5 * ranked[1][1]) else None
+    for pno in range(1, document.page_count + 1):
+        text = page_texts.get(pno) or ""
+        if len(_PORT_PIN.findall(text)) < 5:
+            layout = caption_layout = None
+            continue
+        if not _PINOUT_PAGE.search(text) and not (layout and layout[0] == pno - 1) and not (caption_layout and caption_layout[0] == pno - 1):
+            continue
+        try:
+            tables = document[pno - 1].find_tables().tables
+        except Exception:
+            continue
+        caption = _PIN_TABLE_CAPTION.search(text)
+        caption_pkg = None
+        if caption:
+            caption_pkg = ((caption.group("pkg") or caption.group("pkg_b")).upper(), int(caption.group("pins") or caption.group("pins_b")))
+        elif single_package and _PIN_TABLE_CAPTION_BARE.search(text):
+            caption_pkg = single_package
+        for table in tables:
+            rows = [[(c or "").strip() for c in row] for row in table.extract()]
+            if len(rows) < 6:
+                continue
+            width = len(rows[0])
+            # Header: the first two rows, looking for package cells.
+            pkg_cols: dict[int, tuple[str, int]] = {}
+            header_rows = 0
+            for hi in range(min(2, len(rows))):
+                found = {i: p for i, c in enumerate(rows[hi]) if (p := _package_in_cell(c))}
+                if found:
+                    pkg_cols = found
+                    header_rows = hi + 1
+                    break
+            # Pin-name column: the one with the most port-pin cells.
+            counts = [sum(1 for r in rows[header_rows:] if i < len(r) and _PIN_NAME_CELL.match(r[i].replace("\n", ""))) for i in range(width)]
+            pin_col = max(range(width), key=lambda i: counts[i]) if width else 0
+            if counts[pin_col] < 5:
+                continue
+            if not pkg_cols and layout and layout[0] == pno - 1 and layout[2] == pin_col and width >= max(layout[1]) + 1:
+                pkg_cols = layout[1]  # continuation page of the same table
+            if pkg_cols:
+                layout = (pno, pkg_cols, pin_col)
+                for col, (pkg, pins) in pkg_cols.items():
+                    entry = per_package.setdefault((pkg, pins), {"pins": set(), "pages": set()})
+                    for r in rows[header_rows:]:
+                        if col >= len(r) or pin_col >= len(r):
+                            continue
+                        name = _pin_name_in_cell(r[pin_col])
+                        cell = r[col].strip()
+                        if name and cell and cell not in ("-", "—", "–", "N/A", "NC"):
+                            entry["pins"].add(name)
+                            entry["pages"].add(pno)
+            else:
+                pkg_key = caption_pkg
+                if pkg_key is None and caption_layout and caption_layout[0] == pno - 1:
+                    pkg_key = caption_layout[1]  # the captioned table continues on this page
+                if pkg_key is None:
+                    continue
+                caption_layout = (pno, pkg_key, width, pin_col)
+                entry = per_package.setdefault(pkg_key, {"pins": set(), "pages": set()})
+                for r in rows[header_rows:]:
+                    name = _pin_name_in_cell(r[pin_col]) if pin_col < len(r) else None
+                    if name:
+                        entry["pins"].add(name)
+                        entry["pages"].add(pno)
+    out: list[dict[str, Any]] = []
+    for (pkg, pins), entry in sorted(per_package.items(), key=lambda kv: kv[0][1]):
+        io = len(entry["pins"])
+        if io < 6 or io >= pins - 1:
+            continue  # a package always spends pins on supply; equality means the table was not a pinout
+        pages = sorted(entry["pages"])
+        out.append({"pin_count": pins, "package": pkg, "io_count": io, "pattern": "pin_table_count", "verbatim": f"{io} port pins listed with a pin number for {pkg}{pins} in the pinout table", "receipt": {"page": pages[0], "pages": pages[:8]}})
+    return out[:24]
+
+
 def read_memory(document: Any, page_texts: dict[int, str], chapters: dict[str, Any]) -> list[dict[str, Any]]:
     """Rows naming a memory region with a size, from memory-map/flash/SRAM chapter pages and the cover."""
     pages: list[int] = [1, 2, 3]
@@ -1019,6 +1150,10 @@ def read_family_document(path: Path, *, vendor: str | None = None, max_text_page
     memory = read_memory(document, page_texts, chapters)
     prose_facts = read_prose_facts(page_texts)
     io_by_package = read_io_by_package(page_texts)
+    for row in read_io_from_pin_tables(document, page_texts):
+        # A counted pinout complements a stated count; when both exist for
+        # the same package, keep both so a disagreement is visible downstream.
+        io_by_package.append(row)
     chapters.pop("all_entries", None)
     return {
         "schema": SCHEMA,
