@@ -1,0 +1,814 @@
+"""Power datasheet reader: electrical characteristics tables to typed facts.
+
+A power part (MOSFET, regulator, gate driver, ...) is described by tables whose
+header row names the axes -- Symbol / Parameter / Test conditions / Min / Typ /
+Max / Unit -- and whose rows name the quantity. This module reads those tables
+with the page geometry, not the text stream, because the text stream loses
+exactly the two things that matter:
+
+  * subscripts (``V`` + small ``GS`` -> ``VGS``) fall to the end of the line, so
+    ``VGS = 0 V, ID = 250 uA`` reads as ``V = 0 V, I = 250 uA GS D``;
+  * merged cells (``1.7 2.0 2.4`` in one MIN cell) hide which column each
+    number sat in.
+
+Both are recovered from span positions and font sizes: every span is placed
+in the header column whose x-range contains its centre, and spans whose font is
+smaller than the row's body font are glued to the token before them.
+
+The emitted grid has the same shape as the MCU Key Features grid
+(``harness.electronics-key-features-grid.v1``) so the same gold scorer runs on
+it unchanged; the groups follow the device class (CR power-gold-fixtures-
+20260909): ``switching``, ``regulation``, ``package_environment``, with
+``thermal`` and ``other`` for facts the fixtures do not ask about yet.
+
+Three independent axes on every row, per the agreed contract:
+``quantity_qualifier`` (which bound: minimum/typical/maximum/rated/
+absolute_maximum), ``qualifier_verbatim`` (the document's own hedge), and
+``condition_verbatim`` (the test condition as printed, ``VGS = 10 V``).
+Nothing is interpreted; a range is kept as ``[lo, hi]``.
+"""
+
+from __future__ import annotations
+
+import hashlib
+import re
+from collections import Counter
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any
+
+SCHEMA = "harness.electronics-key-features-grid.v1"
+READER = "power_datasheet.v1"
+
+GROUPS: tuple[tuple[str, str], ...] = (
+    ("switching", "Switching"),
+    ("regulation", "Regulation"),
+    ("package_environment", "Package & environment"),
+    ("thermal", "Thermal"),
+    ("other", "Other characteristics"),
+)
+
+# Header vocabulary -> column role.
+_ROLE = (
+    (re.compile(r"^\s*(?:test\s+)?conditions?\s*(?:\(\d\))?\s*$|^\s*test\s+condition", re.I), "conditions"),
+    (re.compile(r"^\s*parameter", re.I), "parameter"),
+    (re.compile(r"^\s*(?:symbol|sym\.?)\s*$", re.I), "symbol"),
+    (re.compile(r"^\s*min(?:imum)?\.?\s*(?:\(\d\))?\s*$", re.I), "min"),
+    (re.compile(r"^\s*(?:typ(?:ical)?\.?|nom(?:inal)?\.?|typical\s+value)\s*(?:\(\d\))?\s*$", re.I), "typ"),
+    (re.compile(r"^\s*max(?:imum)?\.?\s*(?:\(\d\))?\s*$", re.I), "max"),
+    (re.compile(r"^\s*(?:value|rating|ratings)s?\s*$", re.I), "value"),
+    (re.compile(r"^\s*units?\b", re.I), "unit"),
+    (re.compile(r"\blimits?\b", re.I), "limit"),  # "LM2577-12 Limit": a bound whose direction the row decides
+    (re.compile(r"^\s*thermal\s+metric", re.I), "parameter"),
+)
+_VALUE_ROLES = ("min", "typ", "max", "value", "limit", "value_unit")
+_VALUE_UNIT = re.compile(r"^[-−–+±]?\s?\d+(?:\.\d+)?\s?[pnuµμmkM]?(?:Ω|Ohm|V|A|W|°C|ºC|C|Hz|s|F|H|J|%)(?:\s*(?:to|–|-)\s*[-−–+]?\d+(?:\.\d+)?\s?[pnuµμmkM]?(?:Ω|Ohm|V|A|W|°C|ºC|C|Hz|s|F|H|J|%))?(?:\s*\(\d\))?$")
+_HEADER_CONDITION = re.compile(r"\b(T[AJC]|V[A-Z]{1,3})\s*=\s*[-+]?\d", re.I)
+
+_TITLE_ABS_MAX = re.compile(r"absolute\s+maximum|abs\.?\s*max", re.I)
+_TITLE_RECOMMENDED = re.compile(r"recommended\s+operating|operating\s+conditions|operating\s+range", re.I)
+_TITLE_THERMAL = re.compile(r"thermal\s+(?:information|characteristics|resistance|data)", re.I)
+_TITLE_SUMMARY = re.compile(r"product\s+summary|key\s+(?:specifications|parameters)|summary", re.I)
+_TITLE_EC = re.compile(r"electrical\s+characteristics|electrical\s+specifications|static\s+characteristics|dynamic\s+characteristics|characteristics", re.I)
+_TITLE_ORDER = re.compile(r"ordering|package\s+information|packaging|device\s+information|revision\s+history|pin\s+(?:functions?|configuration)", re.I)
+
+_SYMBOL_LEAD = re.compile(r"^\s*([A-Z][A-Za-z]{0,3}(?:\([A-Za-z0-9. ]{1,8}\))?(?:[A-Za-z0-9]{0,4}))\s+(?=[A-Z(])")
+_NUMBER = re.compile(r"^[-–−+±]?\s?\d+(?:[.,]\d+)?$")
+_RANGE = re.compile(r"^([-–−+]?\d+(?:\.\d+)?)\s*(?:to|–|-|—|\.\.\.)\s*([-–−+]?\d+(?:\.\d+)?)$")
+_UNIT_TOKEN = re.compile(r"^(?:[pnuµμmkMG]?(?:Ω|Ohm|ohm|V|A|C|W|F|H|Hz|s|J|C/W|°C|°C/W|%|nC|dB|ppm/°C|mV/V|V/µs|A/µs))$")
+
+# Symbol -> group. Order matters; first match wins. Symbols are compared with
+# subscripts glued and case-folded, e.g. "rds(on)", "v(br)dss", "tj", "vin".
+_GROUP_BY_SYMBOL: tuple[tuple[re.Pattern[str], str], ...] = (
+    (re.compile(r"^(?:v\(?br\)?dss|vdss|vds|vdsmax|bvdss|vgs|vgs\(th\)|vgsth|vsd|id|idm|ids|is|ism|rds\(?on\)?|rdson|qg|qgs|qgd|qgtot|qoss|qrr|ciss|coss|crss|gfs|td\(?on\)?|td\(?off\)?|tr|tf|trr|eas|iar|ear|pd)$"), "switching"),
+    (re.compile(r"^(?:vin|vi|vcc|vdd|vbat|vsupply|vout|vo|vref|vfb|iout|io|iload|iq|ishdn|isd|isupply|fsw|fosc|f|iin|vdo|vdrop|vuvlo|vovp|ilim|iocp|ton|toff|dmax|eff|η|vripple|psrr|vline|vload)$"), "regulation"),
+    (re.compile(r"^(?:ta|tj|tstg|tstorage|tl|top|tamb|tc|tcase|θja|rθja|rthja|θjc|rθjc|rthjc|θjb|rθjb|ψjt|ψjb|rθ|rth|rthjc\(?top\)?|rθjc\(?top\)?|rθjc\(?bot\)?)$"), "package_environment"),
+)
+_PARAM_GROUP: tuple[tuple[re.Pattern[str], str], ...] = (
+    (re.compile(r"drain|gate\s+charge|on[- ]?resistance|avalanche|reverse\s+recovery|capacitance|source", re.I), "switching"),
+    (re.compile(r"input\s+voltage|output\s+voltage|output\s+current|quiescent|switching\s+frequency|dropout|reference|feedback|current\s+limit|undervoltage|overvoltage|efficiency|line\s+regulation|load\s+regulation", re.I), "regulation"),
+    (re.compile(r"junction|ambient|storage|operating\s+(?:free-air\s+)?temperature|lead\s+temperature|case\s+temperature", re.I), "package_environment"),
+    (re.compile(r"thermal", re.I), "thermal"),
+)
+_THERMAL_SYMBOL = re.compile(r"^(?:r|ψ|θ)?(?:θ|th|ψ)", re.I)
+
+
+def _norm_symbol(symbol: str) -> str:
+    s = symbol.strip().lower().replace(" ", "").replace("_", "")
+    s = s.replace("θ", "θ").replace("ψ", "ψ")
+    return s
+
+
+_CANONICAL: tuple[tuple[re.Pattern[str], str], ...] = (
+    (re.compile(r"junction\s+temperature|operating\s+junction", re.I), "TJ"),
+    (re.compile(r"free-air\s+temperature|ambient\s+temperature|operating\s+temperature", re.I), "TA"),
+    (re.compile(r"storage\s+temperature", re.I), "Tstg"),
+    (re.compile(r"\binput\s+voltage|supply\s+voltage", re.I), "VIN"),
+    (re.compile(r"\boutput\s+voltage", re.I), "VOUT"),
+    (re.compile(r"\boutput\s+current|load\s+current", re.I), "IOUT"),
+    (re.compile(r"drain[- ]to[- ]source\s+on[- ]?(?:state\s+)?resistance|on[- ]resistance", re.I), "RDS(on)"),
+    (re.compile(r"drain[- ]to[- ]source\s+(?:breakdown\s+)?voltage|drain[- ]source\s+voltage", re.I), "VDS"),
+    (re.compile(r"continuous\s+drain\s+current", re.I), "ID"),
+    (re.compile(r"total\s+gate\s+charge|gate\s+charge\s+total", re.I), "Qg"),
+)
+
+
+def canonical_symbols(parameter: str) -> list[str]:
+    """Normalised symbol beside the vendor's words: "Junction Temperature Range" -> TJ."""
+    return [sym for pattern, sym in _CANONICAL if pattern.search(parameter or "")]
+
+
+def classify(symbol: str, parameter: str, section: str) -> str:
+    if not symbol.strip() and parameter and " " not in parameter.strip() and len(parameter.strip()) <= 10:
+        symbol, parameter = parameter, ""  # the symbol landed in the parameter column
+    sym = _norm_symbol(symbol)
+    if sym and _THERMAL_SYMBOL.match(sym) and not sym.startswith(("tj", "ta", "tstg", "tc")):
+        return "thermal"  # RθJA and friends: resistance, not a rating
+    for pattern, group in _GROUP_BY_SYMBOL:
+        if sym and pattern.match(sym):
+            return group
+    # "Operating junction temperature range, TJ": the symbol trails the text.
+    trailing = re.search(r",\s*([A-Za-z]{1,2}[A-Za-z()]{0,6})\s*$", symbol + " " + parameter)
+    if trailing:
+        for pattern, group in _GROUP_BY_SYMBOL:
+            if pattern.match(_norm_symbol(trailing.group(1))):
+                return group
+    hay = f"{symbol} {parameter} {section}"
+    for pattern, group in _PARAM_GROUP:
+        if pattern.search(hay):
+            return group
+    return "other"
+
+
+# ---------------------------------------------------------------------------
+# Span geometry
+# ---------------------------------------------------------------------------
+
+def _page_spans(page: Any) -> list[dict[str, Any]]:
+    spans: list[dict[str, Any]] = []
+    for block in page.get_text("dict").get("blocks", []):
+        for line in block.get("lines", []):
+            for span in line.get("spans", []):
+                text = span["text"]
+                if not text.strip():
+                    continue
+                x0, y0, x1, y1 = span["bbox"]
+                spans.append({"text": text, "size": round(span["size"], 1), "x0": x0, "x1": x1, "y0": y0, "y1": y1, "cx": (x0 + x1) / 2, "cy": (y0 + y1) / 2})
+    spans.sort(key=lambda s: (round(s["cy"]), s["x0"]))
+    return spans
+
+
+def _lines(spans: list[dict[str, Any]], tol: float = 2.5) -> list[list[dict[str, Any]]]:
+    """Cluster spans into visual lines by centre-y; subscripts sit ~2pt low and
+    must land on the line of the token they belong to."""
+    lines: list[list[dict[str, Any]]] = []
+    for span in sorted(spans, key=lambda s: (s["cy"], s["x0"])):
+        for line in lines:
+            ref = line[0]
+            if abs(span["cy"] - ref["cy"]) <= tol or (span["size"] < ref["size"] and ref["y0"] - 1 <= span["cy"] <= ref["y1"] + 2):
+                line.append(span)
+                break
+        else:
+            lines.append([span])
+    for line in lines:
+        line.sort(key=lambda s: s["x0"])
+    return lines
+
+
+def _render(line: list[dict[str, Any]]) -> tuple[str, str]:
+    """(glued, marked): 'VGS = 0 V' and 'V_{GS} = 0 V'."""
+    if not line:
+        return "", ""
+    body = max(s["size"] for s in line)
+    glued: list[str] = []
+    marked: list[str] = []
+    prev_x1 = None
+    for span in line:
+        text = span["text"]
+        sub = span["size"] <= body - 1.0
+        gap = (span["x0"] - prev_x1) if prev_x1 is not None else 0.0
+        if sub:
+            glued.append(text.strip())
+            marked.append("_{" + text.strip() + "}")
+        else:
+            if prev_x1 is not None and gap > 1.5 and not text.startswith(" ") and glued and not glued[-1].endswith(" "):
+                glued.append(" ")
+                marked.append(" ")
+            glued.append(text)
+            marked.append(text)
+        prev_x1 = span["x1"]
+    g = re.sub(r"\s+", " ", "".join(glued)).strip()
+    m = re.sub(r"\s+", " ", "".join(marked)).strip()
+    return g, m
+
+
+# ---------------------------------------------------------------------------
+# Tables
+# ---------------------------------------------------------------------------
+
+def _roles_for_header(names: list[str], cells: list[tuple | None]) -> tuple[dict[int, str], str | None]:
+    """Column index -> role; and a table-level condition printed in the header
+    ("TA = 25°C" standing where SYMBOL/PARAMETER would be)."""
+    roles: dict[int, str] = {}
+    header_condition = None
+    for i, name in enumerate(names):
+        name = (name or "").replace("\n", " ").strip()
+        if not name:
+            continue
+        if _HEADER_CONDITION.search(name) and not any(p.search(name) for p, _ in _ROLE):
+            header_condition = name
+            continue
+        for pattern, role in _ROLE:
+            if pattern.search(name):
+                roles[i] = role
+                break
+    return roles, header_condition
+
+
+def _is_characteristics_header(roles: dict[int, str]) -> bool:
+    values = set(roles.values())
+    return ("unit" in values and bool(values & set(_VALUE_ROLES))) or "value_unit" in values
+
+
+_TITLE_ANY = re.compile(r"ratings?|characteristics|conditions|specifications|summary|thermal|information|parameters", re.I)
+_TITLE_ESD = re.compile(r"\bESD\b|electrostatic", re.I)
+
+
+def _title_above(page_lines: list[list[dict[str, Any]]], bbox: tuple[float, float, float, float]) -> str:
+    """Nearest line above the table that reads like a table title; footnotes of
+    the previous table are skipped by preferring a line the vocabulary knows.
+    Returns the chosen title, with nearer non-title lines appended after ' | '
+    so a subtitle such as "(TJ = 25°C unless otherwise noted)" is kept."""
+    x0, y0, x1, _ = bbox
+    candidates = []
+    for line in page_lines:
+        cy = line[0]["cy"]
+        if y0 - 150 <= cy < y0 - 1 and line[-1]["x1"] > x0 - 5 and line[0]["x0"] < x1 + 5:
+            text, _ = _render(line)
+            if text and not _NUMBER.match(text):
+                candidates.append((cy, text))
+    candidates.sort(reverse=True)
+    nearest = [t for _, t in candidates[:7]]
+    for i, text in enumerate(nearest):
+        if _kind_of(text) is not None and len(text) < 160:
+            return " | ".join([text, *nearest[:i]])
+    return nearest[0] if nearest else ""
+
+
+def _kind_of(title: str) -> str | None:
+    if _TITLE_ESD.search(title):
+        return "esd"
+    if _TITLE_ABS_MAX.search(title):
+        return "absolute_maximum"
+    if _TITLE_RECOMMENDED.search(title):
+        return "recommended"
+    if _TITLE_THERMAL.search(title):
+        return "thermal"
+    if _TITLE_SUMMARY.search(title):
+        return "summary"
+    if _TITLE_EC.search(title):
+        return "characteristics"
+    return None
+
+
+def _table_kind(title: str) -> str:
+    for part in title.split(" | "):
+        kind = _kind_of(part)
+        if kind is not None:
+            return kind
+    return "characteristics"
+
+
+def _header_columns(table: Any, spans: list[dict[str, Any]]) -> list[tuple[float, float, str]]:
+    """Header columns as (x0, x1, name), merging cells that one header span
+    straddles ("TYPICAL VA" + "LUE" -> "TYPICAL VALUE")."""
+    cells = [c for c in table.header.cells if c]
+    if not cells:
+        return []
+    hy0 = min(c[1] for c in cells)
+    hy1 = max(c[3] for c in cells)
+    head_spans = [s for s in spans if hy0 - 1 <= s["cy"] <= hy1 + 1 and table.bbox[0] - 2 <= s["cx"] <= table.bbox[2] + 2]
+    groups: list[list[tuple]] = [[c] for c in sorted(cells, key=lambda c: c[0])]
+    for s in head_spans:
+        hit = [gi for gi, g in enumerate(groups) if min(s["x1"], max(c[2] for c in g)) - max(s["x0"], min(c[0] for c in g)) > 2.0]
+        if len(hit) > 1:
+            merged = [c for gi in hit for c in groups[gi]]
+            groups = [g for gi, g in enumerate(groups) if gi not in hit]
+            groups.append(merged)
+            groups.sort(key=lambda g: min(c[0] for c in g))
+    columns = []
+    for g in groups:
+        x0, x1 = min(c[0] for c in g), max(c[2] for c in g)
+        inside = sorted([s for s in head_spans if x0 - 0.5 <= s["cx"] <= x1 + 0.5], key=lambda s: s["x0"])
+        # One cell carrying several role words ("MAX UNIT") is several columns
+        # whose rule the table detector missed; split at the span midpoints.
+        role_spans = [s for s in inside if any(p.search(s["text"].strip()) for p, _ in _ROLE)]
+        if len(role_spans) >= 2 and len(role_spans) == len([s for s in inside if s["text"].strip()]):
+            for k, s in enumerate(role_spans):
+                left = x0 if k == 0 else (role_spans[k - 1]["x1"] + s["x0"]) / 2
+                right = x1 if k == len(role_spans) - 1 else (s["x1"] + role_spans[k + 1]["x0"]) / 2
+                columns.append((left, right, s["text"].strip()))
+            continue
+        name = " ".join(t for t, _ in (_render(l) for l in _lines(inside))).strip()
+        columns.append((x0, x1, name))
+    return columns
+
+
+def _column_edges(table: Any) -> list[float]:
+    edges: set[float] = set()
+    for row in table.rows:
+        for cell in row.cells:
+            if cell:
+                edges.add(round(cell[0], 1))
+                edges.add(round(cell[2], 1))
+    return sorted(edges)
+
+
+def _row_as_header(table: Any, spans: list[dict[str, Any]], row_index: int) -> tuple[list[tuple[float, float, str]], int]:
+    """Read table.rows[row_index] as a header row: (columns, next data row)."""
+    if row_index >= len(table.rows):
+        return [], row_index
+    row = table.rows[row_index]
+    cells = [c for c in row.cells if c]
+    if not cells:
+        return [], row_index
+    ry0, ry1 = row.bbox[1], row.bbox[3]
+    in_row = [s for s in spans if ry0 - 1 <= s["cy"] <= ry1 + 1 and table.bbox[0] - 2 <= s["cx"] <= table.bbox[2] + 2]
+    columns = []
+    for c in sorted(cells, key=lambda c: c[0]):
+        inside = [s for s in in_row if c[0] - 0.5 <= s["cx"] <= c[2] + 0.5]
+        name = " ".join(t for t, _ in (_render(l) for l in _lines(inside))).strip()
+        columns.append((c[0], c[2], name))
+    return columns, row_index + 1
+
+
+def _infer_columns_by_content(table: Any, spans: list[dict[str, Any]], data_start: int) -> tuple[list[tuple[float, float, str]], dict[int, str], int]:
+    """No usable header: columns are the union of cell edges, and a column is
+    the value column when most of its cells are numbers, the unit column when
+    most are unit tokens, the parameter column when it is the leftmost text."""
+    edges = _column_edges(table)
+    if len(edges) < 3:
+        return [], {}, data_start
+    columns = [(edges[i], edges[i + 1], "") for i in range(len(edges) - 1)]
+    rows = table.rows[data_start:]
+    stats = [[0, 0, 0, 0] for _ in columns]  # numeric, unit, text, value+unit
+    for row in rows:
+        ry0, ry1 = row.bbox[1], row.bbox[3]
+        in_row = [s for s in spans if ry0 - 1 <= s["cy"] <= ry1 + 1]
+        for ci, (x0, x1, _) in enumerate(columns):
+            inside = [s for s in in_row if x0 - 0.5 <= s["cx"] <= x1 + 0.5]
+            if not inside:
+                continue
+            text, _ = _render(sorted(inside, key=lambda s: s["x0"]))
+            if _parse_number(text) is not None or all(_parse_number(p) is not None for p in text.split() if p):
+                stats[ci][0] += 1
+            elif _UNIT_TOKEN.match(text.strip()) or re.fullmatch(r"[pnuµμmkM]?(?:Ω|Ohm|V|A|W|°C|C|Hz|s|F|H|J|%|dB|C/W|°C/W)(?:\s*/\s*[°]?[CW])?", text.strip()):
+                stats[ci][1] += 1
+            elif _VALUE_UNIT.match(text.strip()):
+                stats[ci][3] += 1
+            else:
+                stats[ci][2] += 1
+    roles: dict[int, str] = {}
+    n = max(1, len(rows))
+    value_cols = [ci for ci, (num, _, _, _) in enumerate(stats) if num / n >= 0.4]
+    unit_cols = [ci for ci, (_, unit, _, _) in enumerate(stats) if unit / n >= 0.3]
+    vu_cols = [ci for ci, (_, _, _, vu) in enumerate(stats) if vu / n >= 0.4]
+    if not value_cols and vu_cols:
+        # "−0.3V to 32V" in one cell: value and unit together, no unit column.
+        text_cols = [ci for ci, (num, unit, text, vu) in enumerate(stats) if ci not in vu_cols and text > 0]
+        roles[vu_cols[0]] = "value_unit"
+        if text_cols:
+            roles[text_cols[0]] = "parameter"
+            for ci in text_cols[1:]:
+                roles[ci] = "conditions"
+        return columns, roles, data_start
+    if not value_cols or not unit_cols:
+        return [], {}, data_start
+    text_cols = [ci for ci, (num, unit, text, _) in enumerate(stats) if ci not in value_cols and ci not in unit_cols and text > 0]
+    if len(value_cols) == 1:
+        roles[value_cols[0]] = "value"
+    elif len(value_cols) == 2:
+        roles[value_cols[0]], roles[value_cols[1]] = "min", "max"
+    else:
+        roles[value_cols[0]], roles[value_cols[1]], roles[value_cols[2]] = "min", "typ", "max"
+    roles[unit_cols[-1]] = "unit"
+    if text_cols:
+        roles[text_cols[0]] = "parameter"
+        for ci in text_cols[1:]:
+            roles[ci] = "conditions" if ci < min(value_cols) else f"col{ci}"
+    return columns, roles, data_start
+
+
+def _parse_number(text: str) -> float | list[float] | None:
+    t = text.strip().replace("−", "-").replace("–", "-").replace(",", "")
+    t = re.sub(r"\(\d\)$", "", t).strip()
+    m = _RANGE.match(t)
+    if m:
+        return [float(m.group(1)), float(m.group(2))]
+    if _NUMBER.match(t):
+        t = t.replace("±", "").replace(" ", "")
+        try:
+            return float(t)
+        except ValueError:
+            return None
+    return None
+
+
+def read_characteristic_tables(document: Any) -> list[dict[str, Any]]:
+    facts: list[dict[str, Any]] = []
+    for pno in range(document.page_count):
+        page = document[pno]
+        try:
+            tables = page.find_tables().tables
+        except Exception:  # pragma: no cover - PyMuPDF internals
+            continue
+        if not tables:
+            continue
+        spans = _page_spans(page)
+        page_lines = _lines(spans)
+        for table in tables:
+            if table.header is None or not table.header.names:
+                continue
+            header = _header_columns(table, spans)
+            if not header:
+                continue
+            roles, header_condition = _roles_for_header([n for _, _, n in header], [(x0, 0, x1, 0) for x0, x1, _ in header])
+            title_in_table = None
+            data_start = 1 if not table.header.external else 0
+            if not _is_characteristics_header(roles):
+                # Older TI layout: the title is the table's first row
+                # ("ABSOLUTE MAXIMUM RATINGS" spanning every column) and the
+                # column header is the next row, or there is none and the
+                # columns are told apart by what they hold. The same fallback
+                # runs when the page title above says this is a
+                # characteristics table but the detector's header row is not.
+                names = [n for _, _, n in header if n.strip()]
+                in_table = len(names) == 1 and (_kind_of(re.sub(r"^\(\d\)\s*", "", names[0])) or re.match(r"over\s+operating", names[0], re.I))
+                above = _title_above(page_lines, table.bbox)
+                if in_table:
+                    title_in_table = re.sub(r"^\(\d\)\s*", "", names[0])
+                elif not (_kind_of(above.split(" | ")[0]) and len(table.rows) >= 3):
+                    continue
+                if in_table:
+                    header2, next_start = _row_as_header(table, spans, data_start)
+                    if header2:
+                        roles2, hc2 = _roles_for_header([n for _, _, n in header2], [(x0, 0, x1, 0) for x0, x1, _ in header2])
+                        if _is_characteristics_header(roles2):
+                            header, roles, header_condition, data_start = header2, roles2, hc2, next_start
+                if not _is_characteristics_header(roles):
+                    header, roles, data_start = _infer_columns_by_content(table, spans, data_start)
+                if not header or not _is_characteristics_header(roles):
+                    continue
+            title = title_in_table or _title_above(page_lines, table.bbox)
+            if _TITLE_ORDER.search(title) and not _TITLE_EC.search(title):
+                continue
+            kind = _table_kind(title)
+            if kind == "esd":
+                continue
+            # Columns left of the first value column that the header does not
+            # name (or names with a table-level condition such as "TA = 25°C")
+            # are the symbol and parameter columns, in that order; a single one
+            # is the parameter.
+            first_value_x = min([header[i][0] for i in roles if roles[i] in _VALUE_ROLES], default=None)
+            if first_value_x is None:
+                continue
+            unnamed = [i for i, (x0, _, _) in enumerate(header) if x0 < first_value_x and roles.get(i) not in ("symbol", "parameter", "conditions", "unit")]
+            has_symbol = "symbol" in roles.values()
+            has_parameter = "parameter" in roles.values()
+            parameter_x = min([header[i][0] for i in roles if roles[i] == "parameter"], default=None)
+            for k, i in enumerate(unnamed):
+                cell_x = header[i][0]
+                if not has_symbol and k == 0 and (len(unnamed) > 1 or (has_parameter and parameter_x is not None and cell_x < parameter_x)):
+                    roles[i] = "symbol"
+                    has_symbol = True
+                else:
+                    roles[i] = "parameter"  # unnamed cells are parameter text
+            columns: list[tuple[float, float, str]] = [(x0, x1, roles.get(i) or f"col{i}") for i, (x0, x1, _) in enumerate(header)]
+
+            def column_of(x: float) -> str | None:
+                for x0, x1, role in columns:
+                    if x0 - 0.5 <= x <= x1 + 0.5:
+                        return role
+                return None
+
+            section = ""
+            last_unit = None
+            last_symbol = ""
+            last_parameter = ""
+            data_rows = table.rows[data_start:]
+            consumed: set[int] = set()
+            for row in data_rows:
+                ry0, ry1 = row.bbox[1], row.bbox[3]
+                in_row = [s for s in spans if id(s) not in consumed and ry0 - 1.0 <= s["cy"] <= ry1 + 1.0 and table.bbox[0] - 2 <= s["cx"] <= table.bbox[2] + 2]
+                if not in_row:
+                    continue
+                consumed.update(id(s) for s in in_row)
+                by_role: dict[str, list[dict[str, Any]]] = {}
+                for s in in_row:
+                    role = column_of(s["cx"])
+                    if role is None:
+                        continue
+                    by_role.setdefault(role, []).append(s)
+                # A section row: one text run spanning the table with no numbers in value columns.
+                has_value = any(r in by_role for r in _VALUE_ROLES)
+                non_empty_cells = [c for c in row.cells if c]
+                if not has_value and len(non_empty_cells) <= 1:
+                    text, _ = _render(sorted(in_row, key=lambda s: s["x0"]))
+                    if text and len(text) < 80:
+                        section = text
+                    continue
+                if not has_value:
+                    continue
+
+                def col_lines(role: str) -> list[tuple[str, str]]:
+                    return [_render(l) for l in _lines(by_role.get(role, []))]
+
+                if "symbol" not in by_role and by_role.get("parameter"):
+                    # One merged column holding both. The symbol hugs the left
+                    # edge and the parameter text is indented; when both
+                    # indentations occur in the row, the left-edge spans are
+                    # the symbol.
+                    col_x0 = next((x0 for x0, _, role in columns if role == "parameter"), None)
+                    if col_x0 is not None:
+                        left = [s for s in by_role["parameter"] if s["x0"] <= col_x0 + 8]
+                        rest = [s for s in by_role["parameter"] if s["x0"] > col_x0 + 8]
+                        body_rest = [s["x0"] for s in rest if s["size"] >= max((x["size"] for x in left), default=0) - 0.5] if left else []
+                        if left and body_rest and min(body_rest) - col_x0 >= 25:
+                            # Subscripts of the symbol sit just right of it; pull them back.
+                            sym_x1 = max(s["x1"] for s in left)
+                            subs = [s for s in rest if s["x0"] <= sym_x1 + 3 and s["size"] < max(x["size"] for x in left)]
+                            by_role["symbol"] = left + subs
+                            by_role["parameter"] = [s for s in rest if s not in subs]
+                sym_lines = col_lines("symbol")
+                par_lines = col_lines("parameter")
+                symbol = " ".join(t for t, _ in sym_lines).strip()
+                symbol_marked = " ".join(m for _, m in sym_lines).strip()
+                parameter = " ".join(t for t, _ in par_lines).strip()
+                if symbol and " " in symbol and len(symbol) > 14 and len(parameter) <= 14:
+                    # TI's newer layout puts the parameter text in the first
+                    # column and the symbol (or pin list) in the second.
+                    symbol, parameter = parameter, symbol
+                    symbol_marked = symbol
+                if not symbol and parameter:
+                    m = _SYMBOL_LEAD.match(parameter)
+                    if m:
+                        symbol, parameter = m.group(1), parameter[m.end():].strip()
+                if not symbol and not parameter:
+                    symbol, parameter = last_symbol, last_parameter  # continuation row (second condition line)
+                else:
+                    last_symbol, last_parameter = symbol, parameter
+                unit_tokens = [t for t, _ in col_lines("unit") if t.strip()]
+                unit_text = " ".join(dict.fromkeys(unit_tokens)).strip()  # "mΩ mΩ" -> "mΩ"; distinct units stay listed
+                unit = unit_text or last_unit
+                if unit_text:
+                    last_unit = unit_text
+                cond_lines = col_lines("conditions")
+                value_lines = {role: col_lines(role) for role in _VALUE_ROLES if role in by_role}
+                n_lines = max([len(cond_lines)] + [len(v) for v in value_lines.values()] + [1])
+                # Pair condition lines with value lines when the counts agree; else one fact with all conditions.
+                paired = len(cond_lines) == n_lines and n_lines > 1 and all(len(v) in (n_lines, 1) for v in value_lines.values())
+                line_params: list[str] | None = None
+                if not paired and n_lines > 1 and not cond_lines and len(par_lines) >= n_lines and all(len(v) in (n_lines, 1) for v in value_lines.values()):
+                    # No conditions column: the per-line conditions are the
+                    # trailing lines of the parameter cell ("Continuous Drain
+                    # Current" / "TC = 25°C" / "TA = 25°C" ...).
+                    tail = par_lines[len(par_lines) - n_lines:]
+                    head = par_lines[: len(par_lines) - n_lines]
+                    if all(_HEADER_CONDITION.search(t) or re.search(r"=|\bat\b|pulse|steady|\bt\s*[<≤]", t, re.I) for t, _ in tail):
+                        cond_lines = tail
+                        parameter = " ".join(t for t, _ in head).strip()
+                        paired = True
+                    elif not head:
+                        line_params = [t for t, _ in tail]  # several parameters share one row: "VIN / PVIN / EN"
+                        parameter = ""
+                        paired = True
+                if not paired and n_lines > 1 and all(len(v) in (n_lines, 1) for v in value_lines.values()):
+                    # Several values, one label, no way to tell the lines apart:
+                    # one fact per value line, all carrying the full label.
+                    paired = True
+                    cond_lines = [(" ; ".join(t for t, _ in cond_lines), "")] * n_lines if cond_lines else []
+                for k in range(n_lines if paired else 1):
+                    condition = cond_lines[k][0] if paired and cond_lines else (" ; ".join(t for t, _ in cond_lines) if not paired else "")
+                    row_parameter = parameter if not line_params else " ".join(p for p in (parameter, line_params[k]) if p)
+                    cells: dict[str, Any] = {}
+                    verbatim_parts = []
+                    for role, lines in value_lines.items():
+                        if paired:
+                            text = lines[k][0] if len(lines) == n_lines else (lines[0][0] if lines else "")
+                        else:
+                            text = " ".join(t for t, _ in lines)
+                        if not text:
+                            continue
+                        verbatim_parts.append(text)
+                        if role == "value_unit":
+                            m_vu = _VALUE_UNIT.match(text.strip())
+                            if not m_vu:
+                                continue
+                            unit_hits = re.findall(r"[pnuµμmkM]?(?:Ω|Ohm|V|A|W|°C|ºC|C|Hz|s|F|H|J|%)(?=\s|$|\s*\(|\s*to|\s*–|\s*-)", text)
+                            nums_vu = [float(x.replace("−", "-").replace("–", "-")) for x in re.findall(r"[-−–]?\d+(?:\.\d+)?", re.sub(r"\(\d\)$", "", text))]
+                            if unit_hits:
+                                unit = unit_hits[-1]
+                            if len(nums_vu) == 2:
+                                cells["value"] = nums_vu
+                            elif len(nums_vu) == 1:
+                                cells["value"] = nums_vu[0]
+                            continue
+                        parsed = _parse_number(text)
+                        if parsed is None and role in ("min", "max", "value"):
+                            # "1.7 2.0 2.4" or "-40 150" that the geometry could not split:
+                            nums = [_parse_number(p) for p in text.split()]
+                            nums = [n for n in nums if isinstance(n, float)]
+                            if len(nums) == 2 and role in ("min", "value"):
+                                parsed = nums
+                            elif len(nums) == 3 and role == "min":
+                                cells["min"], cells["typ"], cells["max"] = nums
+                                continue
+                        if parsed is not None:
+                            cells[role] = parsed
+                        else:
+                            cells[f"{role}_text"] = text
+                    if not any(k2 in cells for k2 in _VALUE_ROLES):
+                        continue
+                    facts.append({
+                        "page": pno + 1,
+                        "table_title": title,
+                        "table_kind": kind,
+                        "table_condition": header_condition,
+                        "section": section,
+                        "symbol": symbol,
+                        "symbol_as_printed": symbol_marked or symbol,
+                        "parameter": row_parameter,
+                        "condition_verbatim": condition or None,
+                        "unit": unit,
+                        **cells,
+                        "verbatim": " | ".join(p for p in [symbol, row_parameter, condition, *verbatim_parts, unit or ""] if p),
+                    })
+    return facts
+
+
+# ---------------------------------------------------------------------------
+# Front-page prose (Features / Description)
+# ---------------------------------------------------------------------------
+# Regulators state their headline ranges as bullets, not table rows:
+# "4.5-V to 17-V input voltage range", "adjustable output voltage from 0.8 V
+# to 15 V", "6-A continuous output current". These are family-grain claims
+# and the fixtures (vendor parametrics) are built from exactly them.
+
+_NUM = r"(\d+(?:\.\d+)?)"
+_V = r"\s*-?\s*V(?:olts?)?"
+_TO = r"\s*(?:to|–|-|—|\.\.\.)\s*"
+_PROSE_PATTERNS: tuple[tuple[re.Pattern[str], str, str], ...] = (
+    # VIN ranges
+    (re.compile(rf"{_NUM}{_V}{_TO}{_NUM}{_V}\s+(?:wide\s+)?(?:input|supply|VIN|operating\s+input)", re.I), "vin_range", "VIN"),
+    (re.compile(rf"(?:input|supply|VIN)\s+(?:voltage\s+)?(?:range|operating\s+range)?\s*(?:of|from|:)?\s*{_NUM}{_V}{_TO}{_NUM}{_V}", re.I), "vin_range", "VIN"),
+    (re.compile(rf"(?:wide\s+)?(?:input|supply)\s+(?:voltage\s+)?range\s*(?:of|from|:)?\s*{_NUM}{_V}{_TO}{_NUM}{_V}", re.I), "vin_range", "VIN"),
+    (re.compile(rf"operat(?:es|ing|ion)\s+(?:from|over|with)\s+(?:an?\s+)?(?:input\s+)?(?:voltage\s+)?(?:range\s+)?(?:of\s+)?{_NUM}{_V}{_TO}{_NUM}{_V}", re.I), "vin_range", "VIN"),
+    # VOUT ranges
+    (re.compile(rf"(?:adjustable\s+)?output\s+(?:voltage\s+)?(?:range\s+)?(?:adjustable\s+)?(?:from|of|:)?\s*{_NUM}{_V}{_TO}{_NUM}{_V}", re.I), "vout_range", "VOUT"),
+    (re.compile(rf"{_NUM}{_V}{_TO}{_NUM}{_V}\s+(?:adjustable\s+)?output", re.I), "vout_range", "VOUT"),
+    (re.compile(rf"adjustable\s+(?:from\s+)?{_NUM}{_V}{_TO}{_NUM}{_V}", re.I), "vout_range", "VOUT"),
+    # IOUT
+    (re.compile(rf"{_NUM}\s*-?\s*A\s+(?:continuous\s+|maximum\s+|max\.?\s+|peak\s+)?(?:output|load|rated)\s+current", re.I), "iout_max", "IOUT"),
+    (re.compile(rf"(?:up\s+to|supports?|delivers?|provides?|capable\s+of)\s+{_NUM}\s*-?\s*A\b", re.I), "iout_max", "IOUT"),
+    (re.compile(rf"(?:output|load)\s+current\s+(?:of\s+|up\s+to\s+)?{_NUM}\s*-?\s*A\b", re.I), "iout_max", "IOUT"),
+    (re.compile(rf"{_NUM}\s*-?\s*A\s+(?:synchronous\s+|step-down\s+|buck\s+|boost\s+|LDO\s+|linear\s+)+(?:converter|regulator)", re.I), "iout_max", "IOUT"),
+)
+_PROSE_STOP = re.compile(r"absolute\s+maximum\s+ratings|pin\s+configuration|electrical\s+characteristics|specifications", re.I)
+
+
+def read_front_page_facts(document: Any, max_pages: int = 3) -> list[dict[str, Any]]:
+    facts: list[dict[str, Any]] = []
+    seen: set[tuple] = set()
+    for pno in range(min(max_pages, document.page_count)):
+        text = document[pno].get_text()
+        text = re.sub(r"[ \t]+", " ", text)
+        text = text.replace("\u2013", "-").replace("\u2212", "-").replace("\u00a0", " ")
+        # Bullets and sentences; join soft line breaks inside a bullet.
+        flat = re.sub(r"\n(?![•\u2022\-\u25a0\u25aa\u2013]|\d+\s)", " ", text)
+        for pattern, kind, symbol in _PROSE_PATTERNS:
+            for m in pattern.finditer(flat):
+                nums = [float(g) for g in m.groups() if g is not None]
+                if not nums:
+                    continue
+                if kind.endswith("_range"):
+                    if len(nums) < 2 or nums[0] >= nums[1] or nums[1] > 2000:
+                        continue
+                    value: Any = [nums[0], nums[1]]
+                else:
+                    if nums[0] > 1000:
+                        continue
+                    value = nums[0]
+                key = (kind, str(value))
+                if key in seen:
+                    continue
+                seen.add(key)
+                start = max(0, m.start() - 40)
+                facts.append({
+                    "page": pno + 1,
+                    "table_title": "front-page prose",
+                    "table_kind": "prose",
+                    "table_condition": None,
+                    "section": "features",
+                    "symbol": symbol,
+                    "symbol_as_printed": symbol,
+                    "parameter": {"vin_range": "Input voltage range", "vout_range": "Output voltage range", "iout_max": "Output current"}[kind],
+                    "condition_verbatim": None,
+                    "unit": "V" if kind.endswith("_range") else "A",
+                    "value": value,
+                    "prose_kind": kind,
+                    "verbatim": flat[start:m.end() + 20].strip(),
+                })
+    return facts
+
+
+# ---------------------------------------------------------------------------
+# Grid
+# ---------------------------------------------------------------------------
+
+def _rows_from_fact(fact: dict[str, Any], base: dict[str, Any]) -> list[dict[str, Any]]:
+    group = classify(fact["symbol"], fact["parameter"] or (fact.get("condition_verbatim") or "" if not fact["symbol"] else ""), fact["section"])
+    label_head = " ".join(p for p in (fact["symbol"], fact["parameter"]) if p).strip()
+    kind = fact["table_kind"]
+    rows: list[dict[str, Any]] = []
+
+    def row(value: Any, qq: str | None) -> dict[str, Any]:
+        unit = fact.get("unit")
+        shown = f"{value[0]} to {value[1]}" if isinstance(value, list) else f"{value:g}"
+        label = f"{label_head} {shown}{' ' + unit if unit else ''}"
+        if fact.get("condition_verbatim"):
+            label += f" ({fact['condition_verbatim']})"
+        return {
+            **base,
+            "group": group,
+            "peripheral_class": None,
+            "label": label,
+            "instances": None,
+            "value": value,
+            "unit": unit,
+            "qualifier_verbatim": None,
+            "quantity_qualifier": qq,
+            "condition_verbatim": fact.get("condition_verbatim"),
+            "table_condition": fact.get("table_condition"),
+            "symbol": fact["symbol"],
+            "symbol_as_printed": fact["symbol_as_printed"],
+            "parameter": fact["parameter"],
+            "section": fact["section"] or None,
+            "table_title": fact["table_title"] or None,
+            "table_kind": kind,
+            "verbatim": fact["verbatim"][:240],
+            "source_pages": [fact["page"]],
+            "varies_by_part": False,
+            "tier": "grid",
+            "also_printed": [c for c in canonical_symbols(f"{fact['parameter']} {fact.get('condition_verbatim') or '' if not fact['parameter'] else fact['parameter']}") if _norm_symbol(c) != _norm_symbol(fact["symbol"])],
+            "typed": [],
+        }
+
+    if kind == "prose":
+        rows.append(row(fact["value"], "rated" if isinstance(fact["value"], list) else "maximum"))
+    elif kind == "absolute_maximum":
+        for role in ("value", "max", "min"):
+            if role in fact:
+                v = fact[role]
+                if role == "min" and "max" in fact and not isinstance(v, list):
+                    v = [fact["min"], fact["max"]]
+                rows.append(row(v, "absolute_maximum"))
+                break
+    elif kind == "recommended":
+        if "min" in fact and "max" in fact and not isinstance(fact["min"], list):
+            rows.append(row([fact["min"], fact["max"]], "rated"))
+        else:
+            for role in ("value", "min", "max", "typ"):
+                if role in fact:
+                    rows.append(row(fact[role], "rated" if role != "typ" else "typical"))
+                    break
+    else:
+        if "value" in fact:
+            rows.append(row(fact["value"], "typical" if kind == "summary" else None))
+        for role, qq in (("min", "minimum"), ("typ", "typical"), ("max", "maximum"), ("limit", "limit")):
+            if role in fact:
+                rows.append(row(fact[role], qq))
+    return rows
+
+
+def build_power_grid(path: Path, *, vendor: str | None = None, part_numbers: list[str] | None = None, aisle: str | None = None, sha256: str | None = None) -> dict[str, Any]:
+    import pymupdf
+
+    data = path.read_bytes()
+    sha = sha256 or hashlib.sha256(data).hexdigest()
+    document = pymupdf.open(stream=data, filetype="pdf")
+    facts = read_characteristic_tables(document)
+    facts.extend(read_front_page_facts(document))
+    base = {"vendor": vendor, "vendor_basis": "manifest" if vendor else None, "grain": "part", "scope_as_printed": ", ".join(part_numbers or []) or None, "source_artifact": path.name, "document_sha256": sha}
+    rows: list[dict[str, Any]] = []
+    for fact in facts:
+        rows.extend(_rows_from_fact(fact, base))
+    populated = {r["group"] for r in rows}
+    return {
+        "schema": SCHEMA,
+        "_meta": {**base, "aisle": aisle, "page_count": document.page_count, "reader": READER, "extracted_at": datetime.now(timezone.utc).isoformat(), "models_used": [], "tables_read": len({(f["page"], f["table_title"]) for f in facts}), "facts": len(facts)},
+        "groups": [{"key": k, "label": l} for k, l in GROUPS],
+        "groups_populated": len(populated),
+        "rows": rows,
+        "rows_by_group": dict(Counter(r["group"] for r in rows)),
+        "typed_facts_by_group": {},
+    }
