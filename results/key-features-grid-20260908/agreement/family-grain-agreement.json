@@ -1,16 +1,16 @@
 {
   "schema": "harness.electronics-family-grain-agreement-report.v1",
-  "generated_at": "2026-09-09T07:02:48.242234+00:00",
+  "generated_at": "2026-09-09T15:07:59.212603+00:00",
   "grids": "results/key-features-grid-20260908/grids.jsonl",
-  "grids_sha256": "d25ba5efd229be430e9d3f71763abf2f40f321db22a3ded2e3ef2d4e71a422c6",
-  "documents": 549,
-  "documents_with_family_key": 371,
-  "family_keys_with_two_or_more_documents": 96,
-  "pairs_compared": 76,
+  "grids_sha256": "28195dd125318b0311ec1652a82393c0a01f48f6d79efbed61df639e4f5cc163",
+  "documents": 587,
+  "documents_with_family_key": 379,
+  "family_keys_with_two_or_more_documents": 98,
+  "pairs_compared": 79,
   "overall": {
-    "compared": 871,
-    "agree": 837,
-    "agreement_rate": 0.961
+    "compared": 886,
+    "agree": 844,
+    "agreement_rate": 0.9526
   },
   "per_attribute": {
     "adc_instances": {
@@ -36,15 +36,16 @@
       }
     },
     "can_instances": {
-      "compared": 35,
+      "compared": 36,
       "agree": 35,
-      "disagree": 0,
-      "agreement_rate": 1.0,
+      "disagree": 1,
+      "agreement_rate": 0.9722,
       "passes_95": true,
       "instance_sets": {
         "equal": 27,
         "a_subset": 1,
-        "b_subset": 7
+        "b_subset": 7,
+        "conflict": 1
       }
     },
     "comparator_instances": {
@@ -60,11 +61,11 @@
       }
     },
     "core": {
-      "compared": 6,
-      "agree": 6,
-      "disagree": 0,
-      "agreement_rate": 1.0,
-      "passes_95": true
+      "compared": 9,
+      "agree": 7,
+      "disagree": 2,
+      "agreement_rate": 0.7778,
+      "passes_95": false
     },
     "crypto_instances": {
       "compared": 38,
@@ -159,14 +160,15 @@
       }
     },
     "i2c_instances": {
-      "compared": 37,
+      "compared": 38,
       "agree": 37,
-      "disagree": 0,
-      "agreement_rate": 1.0,
+      "disagree": 1,
+      "agreement_rate": 0.9737,
       "passes_95": true,
       "instance_sets": {
         "equal": 21,
-        "b_subset": 16
+        "b_subset": 16,
+        "conflict": 1
       }
     },
     "i3c_instances": {
@@ -196,6 +198,16 @@
       "disagree": 3,
       "agreement_rate": 0.5,
       "passes_95": false
+    },
+    "lin_instances": {
+      "compared": 1,
+      "agree": 0,
+      "disagree": 1,
+      "agreement_rate": 0.0,
+      "passes_95": false,
+      "instance_sets": {
+        "conflict": 1
+      }
     },
     "lptim_instances": {
       "compared": 33,
@@ -242,13 +254,14 @@
       "passes_95": true
     },
     "rtc_instances": {
-      "compared": 22,
+      "compared": 24,
       "agree": 22,
-      "disagree": 0,
-      "agreement_rate": 1.0,
-      "passes_95": true,
+      "disagree": 2,
+      "agreement_rate": 0.9167,
+      "passes_95": false,
       "instance_sets": {
-        "equal": 22
+        "equal": 22,
+        "conflict": 2
       }
     },
     "safety_count": {
@@ -259,13 +272,13 @@
       "passes_95": true
     },
     "safety_instances": {
-      "compared": 36,
-      "agree": 36,
+      "compared": 37,
+      "agree": 37,
       "disagree": 0,
       "agreement_rate": 1.0,
       "passes_95": true,
       "instance_sets": {
-        "equal": 36
+        "equal": 37
       }
     },
     "sdmmc_instances": {
@@ -287,15 +300,16 @@
       "passes_95": false
     },
     "spi_instances": {
-      "compared": 55,
-      "agree": 55,
-      "disagree": 0,
-      "agreement_rate": 1.0,
+      "compared": 58,
+      "agree": 57,
+      "disagree": 1,
+      "agreement_rate": 0.9828,
       "passes_95": true,
       "instance_sets": {
-        "equal": 29,
+        "equal": 30,
         "a_subset": 1,
-        "b_subset": 25
+        "b_subset": 26,
+        "conflict": 1
       }
     },
     "sram_kb_max": {
@@ -328,15 +342,15 @@
       "passes_95": false
     },
     "timer_instances": {
-      "compared": 71,
-      "agree": 69,
+      "compared": 72,
+      "agree": 70,
       "disagree": 2,
-      "agreement_rate": 0.9718,
+      "agreement_rate": 0.9722,
       "passes_95": true,
       "instance_sets": {
         "equal": 27,
         "a_subset": 4,
-        "b_subset": 38,
+        "b_subset": 39,
         "conflict": 2
       }
     },
@@ -358,15 +372,15 @@
       "passes_95": false
     },
     "usart_instances": {
-      "compared": 65,
-      "agree": 58,
+      "compared": 67,
+      "agree": 60,
       "disagree": 7,
-      "agreement_rate": 0.8923,
+      "agreement_rate": 0.8955,
       "passes_95": false,
       "instance_sets": {
-        "equal": 20,
+        "equal": 21,
         "a_subset": 2,
-        "b_subset": 36,
+        "b_subset": 37,
         "conflict": 7
       }
     },
@@ -413,16 +427,16 @@
       }
     }
   },
-  "adjudication_count": 34,
+  "adjudication_count": 42,
   "method": "Two documents pair when they share a family key (from scope, title, filename) and vendor, and differ in content hash. Only facts both grids type are compared, exactly; cores and pin counts agree on intersection; instance-name sets agree when one contains the other (a manual names the family's full set, a datasheet its parts'); a scalar maximum agrees when the manual's is at least the datasheet's (reported as manual_envelope); package-qualified I/O compares only under the same package and the same quantity qualifier (stated vs port pins listed). Nothing is promoted by this report.",
   "pairs_by_scope_relation": {
     "equal": 10,
-    "overlap": 43,
+    "overlap": 46,
     "disjoint_as_printed": 23
   },
   "pairs_by_genre": {
     "datasheet/manual": 70,
-    "manual/manual": 2,
-    "datasheet/datasheet": 4
+    "manual/manual": 3,
+    "datasheet/datasheet": 6
   }
 }

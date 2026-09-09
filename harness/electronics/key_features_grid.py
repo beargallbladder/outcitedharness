@@ -930,8 +930,15 @@ def quantity_qualifier(row: dict[str, Any]) -> str | None:
             return "rated"
         return None
     if memory_row:
-        if _QQ_EEPROM.search(text) and not re.search(r"emulat", text, re.I):
-            return None  # true EEPROM is neither flash kind; the emulated one is data flash
+        if _QQ_EEPROM.search(text) and re.search(r"emulat|high[- ]cycl|to use for data|use as|used as", text, re.I):
+            return "data_flash"  # flash region used as EEPROM (ST "high cycling ... (EEPROM emulation)")
+        if _QQ_EEPROM.search(text):
+            # Its own kind (CR: eeprom_kb is a dictionary attribute); emulated EEPROM
+            # is data flash. A prose row that also sizes flash or SRAM carries more
+            # than one quantity, so no single qualifier is honest.
+            if re.search(r"\bflash\b|\bs?ram\b", text, re.I):
+                return None
+            return "eeprom"
         if _QQ_DATA_FLASH.search(text):
             return "data_flash"
         if _QQ_CODE_FLASH.search(text):

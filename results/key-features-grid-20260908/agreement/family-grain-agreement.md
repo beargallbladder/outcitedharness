@@ -1,16 +1,16 @@
 # Second source at family grain
 
-Documents: 549; with a family key: 371; family keys with two or more documents: 96; pairs compared: 76.
+Documents: 587; with a family key: 379; family keys with two or more documents: 98; pairs compared: 79.
 
-Overall: 837/871 agree (0.961). Adjudication rows: 34.
+Overall: 844/886 agree (0.9526). Adjudication rows: 42.
 
 | attribute | compared | agree | disagree | rate | >=95% | instance sets (equal/subset/conflict) |
 |---|---:|---:|---:|---:|---|---|
 | adc_instances | 17 | 17 | 0 | 1.0 | True | 7/10/0 |
 | audio_instances | 23 | 23 | 0 | 1.0 | True | 23/0/0 |
-| can_instances | 35 | 35 | 0 | 1.0 | True | 27/8/0 |
+| can_instances | 36 | 35 | 1 | 0.9722 | True | 27/8/1 |
 | comparator_instances | 31 | 31 | 0 | 1.0 | True | 11/20/0 |
-| core | 6 | 6 | 0 | 1.0 | True |  |
+| core | 9 | 7 | 2 | 0.7778 | False |  |
 | crypto_instances | 38 | 37 | 1 | 0.9737 | True | 14/23/1 |
 | dac_instances | 17 | 17 | 0 | 1.0 | True | 4/13/0 |
 | display_instances | 25 | 25 | 0 | 1.0 | True | 21/4/0 |
@@ -20,35 +20,36 @@ Overall: 837/871 agree (0.961). Adjudication rows: 34.
 | flash_kb_max | 24 | 23 | 1 | 0.9583 | True | manual envelope: 10 |
 | fmc_instances | 35 | 35 | 0 | 1.0 | True | 17/18/0 |
 | hrtim_instances | 5 | 5 | 0 | 1.0 | True | 5/0/0 |
-| i2c_instances | 37 | 37 | 0 | 1.0 | True | 21/16/0 |
+| i2c_instances | 38 | 37 | 1 | 0.9737 | True | 21/16/1 |
 | i3c_instances | 6 | 6 | 0 | 1.0 | True | 5/1/0 |
 | interrupts_instances | 1 | 1 | 0 | 1.0 | True | 1/0/0 |
 | io_by_package_port_pins_listed | 6 | 3 | 3 | 0.5 | False |  |
+| lin_instances | 1 | 0 | 1 | 0.0 | False | 0/0/1 |
 | lptim_instances | 33 | 33 | 0 | 1.0 | True | 29/4/0 |
 | max_freq_mhz | 39 | 38 | 1 | 0.9744 | True | manual envelope: 4 |
 | opamp_instances | 16 | 16 | 0 | 1.0 | True | 15/1/0 |
 | pin_counts | 3 | 3 | 0 | 1.0 | True |  |
 | rtc_count | 1 | 1 | 0 | 1.0 | True |  |
-| rtc_instances | 22 | 22 | 0 | 1.0 | True | 22/0/0 |
+| rtc_instances | 24 | 22 | 2 | 0.9167 | False | 22/0/2 |
 | safety_count | 1 | 1 | 0 | 1.0 | True |  |
-| safety_instances | 36 | 36 | 0 | 1.0 | True | 36/0/0 |
+| safety_instances | 37 | 37 | 0 | 1.0 | True | 37/0/0 |
 | sdmmc_instances | 25 | 25 | 0 | 1.0 | True | 21/4/0 |
 | spi_count | 2 | 1 | 1 | 0.5 | False |  |
-| spi_instances | 55 | 55 | 0 | 1.0 | True | 29/26/0 |
+| spi_instances | 58 | 57 | 1 | 0.9828 | True | 30/27/1 |
 | sram_kb_max | 4 | 4 | 0 | 1.0 | True | manual envelope: 2 |
 | supply_v | 34 | 25 | 9 | 0.7353 | False |  |
 | temp_max_c | 4 | 3 | 1 | 0.75 | False |  |
 | timer_count | 2 | 1 | 1 | 0.5 | False |  |
-| timer_instances | 71 | 69 | 2 | 0.9718 | True | 27/42/2 |
+| timer_instances | 72 | 70 | 2 | 0.9722 | True | 27/43/2 |
 | touch_instances | 16 | 16 | 0 | 1.0 | True | 16/0/0 |
 | usart_count | 1 | 0 | 1 | 0.0 | False |  |
-| usart_instances | 65 | 58 | 7 | 0.8923 | False | 20/38/7 |
+| usart_instances | 67 | 60 | 7 | 0.8955 | False | 21/39/7 |
 | usb_instances | 37 | 31 | 6 | 0.8378 | False | 21/10/6 |
 | watchdog_count | 1 | 1 | 0 | 1.0 | True |  |
 | watchdog_instances | 64 | 64 | 0 | 1.0 | True | 51/13/0 |
 | xspi_instances | 12 | 12 | 0 | 1.0 | True | 12/0/0 |
 
-Pairs by genre: {'datasheet/manual': 70, 'manual/manual': 2, 'datasheet/datasheet': 4}; by printed scope: {'equal': 10, 'overlap': 43, 'disjoint_as_printed': 23}. A manual usually covers a superset of the datasheet's parts, so a count it gives is the family maximum; disagreements on counts under 'overlap' or 'disjoint_as_printed' are mostly that.
+Pairs by genre: {'datasheet/manual': 70, 'manual/manual': 3, 'datasheet/datasheet': 6}; by printed scope: {'equal': 10, 'overlap': 46, 'disjoint_as_printed': 23}. A manual usually covers a superset of the datasheet's parts, so a count it gives is the family maximum; disagreements on counts under 'overlap' or 'disjoint_as_printed' are mostly that.
 
 ## Pairs
 
@@ -63,6 +64,8 @@ Pairs by genre: {'datasheet/manual': 70, 'manual/manual': 2, 'datasheet/datashee
 | infineon.com | CY8C63X6 | PSOC™ 6 MCU with Bluetooth LE_ CY8C63x6, CY8C63x | PSOC™_ 63 MCU with Bluetooth_ LE_ CY8C63x6, CY8C | manual/manual | overlap | 7 | 6 |
 | infineon.com | XMC4000 | Infineon_XMC4400_DS_v01_03_EN-2323407 (2).pdf | infns28105_1-2271076.pdf | datasheet/datasheet | equal | 11 | 11 |
 | microchip.com | PIC32MK | PIC32MK-GP-MC-Family-Data-Sheet-DS60001402H.pdf | PIC32MK-General-Purpose-and-Motor-Control-With-C | datasheet/datasheet | equal | 16 | 13 |
+| microchip.com | PIC32MK | PIC32MK-GP-MC-Family-Data-Sheet-DS60001402H.pdf | 70005316A.pdf | datasheet/datasheet | overlap | 4 | 2 |
+| microchip.com | PIC32MK | PIC32MK-General-Purpose-and-Motor-Control-With-C | 70005316A.pdf | datasheet/datasheet | overlap | 5 | 2 |
 | nxp.com | IMXRT1170 | IMXRT1170AEC.pdf | iMXRT1170CrossoverProcessorsDataSheetforAutomoti | datasheet/datasheet | overlap | 10 | 9 |
 | nxp.com | IMXRT1170 | IMXRT1170CEC-2402383.pdf | iMXRT1170CrossoverProcessorsDataSheetforAutomoti | datasheet/datasheet | overlap | 10 | 9 |
 | nxp.com | KL25P80M48SF0 | KL25P80M48SF0 (1).pdf | KL25P80M48SF0RM.pdf | datasheet/manual | disjoint_as_printed | 13 | 9 |
@@ -130,3 +133,4 @@ Pairs by genre: {'datasheet/manual': 70, 'manual/manual': 2, 'datasheet/datashee
 | ti.com | MSPM0G-SERIES | slau846e.pdf | mcu_ti_mspm0g1106.pdf | manual/manual | equal | 12 | 12 |
 | ti.com | RM46 | spnu514c.pdf | spnz200f.pdf | manual/datasheet | equal | 4 | 4 |
 | ti.com | RM48 | spnu503c.pdf | spnz223b.pdf | manual/datasheet | equal | 4 | 4 |
+| ti.com | TMS570LS04 | spnu517c.pdf | spnu552b.pdf | manual/manual | overlap | 6 | 3 |
