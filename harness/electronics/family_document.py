@@ -89,13 +89,14 @@ CHAPTER_VOCAB: tuple[tuple[str, re.Pattern[str]], ...] = (
     ("display", re.compile(r"\bltdc|\blcd\b|\bdsi\b|\bdisplay|\bgfxmmu|\bdma2d|\bchrom-?art|\bgpu\b|\bneochrom", re.I)),
     ("dcmi", re.compile(r"\bdcmi|\bcamera|\bpssi\b|\bcsi\b", re.I)),
     ("audio", re.compile(r"\bsai\b|\bspdif|\bdfsdm|\bmdf\b|\badf\b|\bpdm\b", re.I)),
-    ("touch", re.compile(r"\btsc\b|\btouch sensing|\bcaptivate", re.I)),
+    ("touch", re.compile(r"\btsc\b|\btouch sensing|\bcaptivate|\bctsu\b|\bptc\b|peripheral touch controller|capacitive touch|\btouch\s+(?:controller|sensor|key|button)", re.I)),
     ("hrtim", re.compile(r"\bhrtim|\bhigh-resolution timer", re.I)),
     ("lptim", re.compile(r"\blow[- ]power timer|\blptim", re.I)),
     ("rtc", re.compile(r"\breal[- ]time clock|\brtc\b", re.I)),
     ("watchdog", re.compile(r"\bwatchdog|\biwdg|\bwwdg|\bwdt\b", re.I)),
-    ("adc", re.compile(r"\badc|analog[- ]to[- ]digital", re.I)),
-    ("dac", re.compile(r"\bdac|digital[- ]to[- ]analog", re.I)),
+    ("adc", re.compile(r"\badc|analog[- ]to[- ]digital|\bA/D\b|\bS12AD|\bsigma[- ]delta\s+(?:adc|converter)|\bSDADC", re.I)),
+    ("dac", re.compile(r"\bdac|digital[- ]to[- ]analog|\bD/A\b", re.I)),
+    ("temp_sensor", re.compile(r"temperature\s+sensor|\bTSN\b|\bTEMPSENSOR\b", re.I)),
     ("opamp", re.compile(r"\bop-?amp|\boperational amplifier|\bpga\b", re.I)),
     ("comparator", re.compile(r"\bcomp(?:arator)?s?\b", re.I)),
     ("crypto", re.compile(r"\baes\b|\bcryp\b|\bhash\b|\bpka\b|\bsaes\b|\brng\b|\btrng|\bcryptograph|\bsecurity\b|\bsecure\b|\bhsm\b|\bmathacl", re.I)),
@@ -165,7 +166,7 @@ INSTANCE_GRAMMAR: tuple[tuple[str, re.Pattern[str]], ...] = (
     ("OPAMP", re.compile(r"\bOPAMP(\d)\b")),
     ("DMA", re.compile(r"\b(?:GP|B|M)?DMA(\d)\b")),
     ("GPIO", re.compile(r"\bGPIO([A-Z])\b")),
-    ("USB", re.compile(r"\b(USB_OTG_FS|USB_OTG_HS|USB_DRD_FS|OTG_FS|OTG_HS|USBFS|USBHS)\b")),
+    ("USB", re.compile(r"\b(USB_OTG_FS|USB_OTG_HS|USB_DRD_FS|OTG_FS|OTG_HS|USBFS|USBHS|USB0|USB1|USBOTG|USBFSH|USBHSD|USBHSH)\b")),
     ("ETH", re.compile(r"\bETH(\d)\b")),
     ("SDMMC", re.compile(r"\bSDMMC(\d)\b")),
     ("OCTOSPI", re.compile(r"\b(?:OCTO|X|HSPI|QUAD)SPI(\d)\b")),
@@ -176,12 +177,39 @@ INSTANCE_GRAMMAR: tuple[tuple[str, re.Pattern[str]], ...] = (
     ("LTDC", re.compile(r"\b(LTDC|DSI|DMA2D|GFXMMU|DCMI|PSSI)\b")),
     ("UCPD", re.compile(r"\bUCPD(\d)\b")),
     ("TSC", re.compile(r"\b(TSC)\b")),
+    # NXP Kinetis / LPC / MCX / i.MX RT house names. `USB0`, `ADC0`, `I2C0`,
+    # `SPI0`, `UART0` also count from zero; the generic rules above take the
+    # digit, so only the Kinetis-only stems are listed here.
+    ("TPM", re.compile(r"\bTPM(\d)\b")),
+    ("FTM", re.compile(r"\bFTM(\d)\b")),
+    ("PIT", re.compile(r"\b(PIT)\b")),
+    ("LPTMR", re.compile(r"\bLPTMR(\d)\b")),
+    ("LPIT", re.compile(r"\bLPIT(\d)\b")),
+    ("CTIMER", re.compile(r"\bCTIMER(\d)\b")),
+    ("SCTIMER", re.compile(r"\b(SCT\d?|SCTimer)\b")),
+    ("TSI", re.compile(r"\bTSI(\d)\b")),
+    ("CMP", re.compile(r"\bCMP(\d)\b")),
+    ("LPI2C", re.compile(r"\bLPI2C(\d)\b")),
+    ("LPSPI", re.compile(r"\bLPSPI(\d)\b")),
+    ("FLEXCOMM", re.compile(r"\b(?:FLEXCOMM|Flexcomm)\s?(\d{1,2})\b")),
+    ("FLEXCAN", re.compile(r"\bFlexCAN(\d)\b")),
+    ("ENET", re.compile(r"\b(ENET\d?)\b")),
+    ("SDHC", re.compile(r"\b(SDHC|uSDHC\d?|USDHC\d?)\b")),
+    ("FLEXIO", re.compile(r"\b(?:FLEXIO|FlexIO)(\d)\b")),
+    ("FLEXSPI", re.compile(r"\b(?:FLEXSPI|FlexSPI)(\d)\b")),
+    ("LLWU", re.compile(r"\b(LLWU)\b")),
+    ("DMAMUX", re.compile(r"\bDMAMUX(\d?)\b")),
+    ("EWM", re.compile(r"\b(EWM)\b")),
+    ("CRC", re.compile(r"\b(CRC)\b")),
+    ("LCDK", re.compile(r"\b(LCDC|eLCDIF|LCDIF|SLCD)\b")),
+    ("MIPI", re.compile(r"\b(MIPI_DSI|MIPI_CSI)\b")),
+    ("LPADC", re.compile(r"\bLPADC(\d)\b")),
 )
 
 _BULLET = re.compile(r"^\s*(?:[•·▪◦■●\-–]|)\s*(.+)$")
 _QUALIFIER = re.compile(r"\b(up\s+to|maximum|max\.?|minimum|min\.?|typical|typ\.?|at\s+least|as\s+low\s+as|down\s+to)\b", re.I)
 _NUM_UNIT = re.compile(
-    r"(\d+(?:\.\d+)?)[\s-]*(Mbytes?|Kbytes?|MB|KB|Kbit|Mbit|MHz|kHz|GHz|bits?|bytes?|channels?|V|mA|µA|uA|nA|°C|ms|µs|us|ns|I/Os?|pins?|x|×)?\b",
+    r"(\d{1,3}(?:,\d{3})+|\d+(?:\.\d+)?)[\s-]*(Mbytes?|Kbytes?|MB|KB|Kbit|Mbit|MHz|kHz|GHz|bits?|bytes?|channels?|V|mA|µA|uA|nA|°C|ms|µs|us|ns|I/Os?|pins?|x|×)?\b",
     re.I,
 )
 _SIZE = re.compile(r"(\d+(?:\.\d+)?)\s*(Mbytes?|Kbytes?|MB|KB|Kbit|Mbit|bytes?)\b", re.I)
@@ -350,8 +378,27 @@ def read_chapter_features(page_texts: dict[int, str], chapters: dict[str, Any], 
 # and Symbol fonts leave in extracted text (Renesas \uf0b7, Microchip \uf0a7).
 _GLYPH = r"[•·▪◦■●♦◆►▶➢➤✓\u2022\u2023\u25aa\u25ab\u25e6\u2043\u2219\uf000-\uf0ff]"
 _GLYPH_LINE = re.compile(rf"^\s*({_GLYPH})\s*(.*)$")
-_DASH_LINE = re.compile(r"^\s*[–\-]\s+(\S.*)$")
+_DASH_LINE = re.compile(r"^\s*[–\-]\s*(\S.*)?$")
 _COUNT_SUFFIX = re.compile(r"\s*(?:[×x]\s*(\d{1,2})|(\d{1,2})\s*[×x]|\((\d{1,2})\s*(?:channels?|units?|modules?|ch)\))\s*(\(.*\))?\s*$", re.I)
+_COUNT_WORDS = {"one": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6, "seven": 7, "eight": 8, "nine": 9, "ten": 10, "eleven": 11, "twelve": 12, "sixteen": 16}
+# "2 x 12-bit A/D converters", "2 × USARTs", "Two 16-bit timers", "1 x I2C interface".
+_COUNT_PREFIX = re.compile(
+    rf"^(?:up\s+to\s+)?(?:(\d{{1,2}})\s*[×x]\s+|({'|'.join(_COUNT_WORDS)})\s+(?=[A-Za-z0-9])"
+    rf"|(\d{{1,2}})\s+(?!(?:or|to|and|x|bits?|Kbytes?|KB|MB|Mbytes?|MHz|kHz|GHz|V|mA|µA|µs|ns|ms|regions?|wait|external|internal|independent)\b)(?=[A-Za-z]))",
+    re.I,
+)
+# Where a long feature line stops being the fact and starts describing it.
+_LABEL_CUT = re.compile(r",\s+(?:each|all|with|including|supporting|configurable|capable|featuring|providing|up to|for)\b|\s+(?:with|supporting|including|featuring|capable of|configurable as)\s+(?=\S)", re.I)
+_NUMBERED_HEADING = re.compile(r"^\s*\d{1,2}(?:\.\d{1,2}){1,2}\s+[A-Z][A-Za-z]+(?:[ \-/][A-Za-z()]+){0,7}\s*$")
+# Bullets that are a vendor section heading rather than a fact.
+_SECTION_HEADING = re.compile(
+    r"^(?:processor|core|cpu|cpu\s+core|memor(?:y|ies)|system|low[- ]power(?:\s+modes?)?|power(?:\s+management)?|peripherals?|i/os?|packages?|"
+    r"operating\s+(?:voltage|conditions)|debug(?:\s+mode)?|connectivity|communications?(?:\s+interfaces?)?|analog(?:ue)?(?:\s+peripherals)?|timers?|security(?:\s+and\s+\w+)?|safety|"
+    r"clocks?(?:,\s*reset\s+and\s+supply\s+management)?|clock\s+management|reset\s+and\s+clock\s+control|dma|human\s+machine\s+interface(?:\s+\(hmi\))?|graphics|"
+    r"system\s+and\s+power\s+management|multiple\s+clock\s+sources|general[- ]purpose\s+i/os?|input/output|features|key\s+features|main\s+features|other\s+features|"
+    r"advanced\s+analog\s+features|up\s+to\s+\d+\s+(?:fast\s+)?i/o\s+ports|\d+\s+timers|\d+\s+communication\s+interfaces)\s*:?$",
+    re.I,
+)
 
 
 def _bullets(text: str) -> list[str]:
@@ -368,31 +415,64 @@ def _bullet_items(text: str) -> list[dict[str, Any]]:
     its line takes the following line as its text. Parsing stops at the next
     numbered heading."""
     lines = [l.rstrip() for l in text.split("\n")]
+    # A font-substituted bullet renders as one letter alone on its line
+    # (Atmel "z" from Wingdings). If a single character stands alone on six
+    # or more lines of the block, it is this block's bullet glyph.
+    lone = Counter(l.strip() for l in lines if len(l.strip()) == 1 and not l.strip().isdigit() and not re.match(r"[–\-]", l.strip()))
+    extra_glyphs = {ch for ch, n in lone.items() if n >= 6}
+    glyph_line = re.compile(rf"^\s*({_GLYPH}|{'|'.join(re.escape(c) for c in extra_glyphs)})\s*(.*)$") if extra_glyphs else _GLYPH_LINE
+
     glyph_order: list[str] = []
     for line in lines:
-        match = _GLYPH_LINE.match(line)
+        match = glyph_line.match(line)
         if match and match.group(1) not in glyph_order:
             glyph_order.append(match.group(1))
     header_glyph = glyph_order[0] if len(glyph_order) >= 2 else None
+    has_dashes = sum(1 for l in lines if _DASH_LINE.match(l)) >= 3
 
     items: list[dict[str, Any]] = []
     section: str | None = None
+    section_from_bullet = False  # section named by a heading-like bullet, not a header glyph
     current: dict[str, Any] | None = None
     pending_glyph: str | None = None
+    last_bullet: dict[str, Any] | None = None  # most recent glyph bullet; dashes hang off it
 
     def close() -> None:
-        nonlocal current
+        nonlocal current, section, section_from_bullet, last_bullet
         if current and current["text"].strip():
             current["text"] = _norm(current["text"])
-            items.append(current)
+            is_glyph_bullet = current["level"] == 1 and "parent" not in current and current.get("glyph")
+            if is_glyph_bullet:
+                last_bullet = current
+                # In a glyph-over-dash layout (ST "•" headings over "–" facts)
+                # a heading bullet's scope ends at the next glyph bullet. In an
+                # all-glyph layout (Atmel "z" at every level) it persists.
+                if section_from_bullet and has_dashes:
+                    section = None
+                    section_from_bullet = False
+                    current["section"] = None
+            current.pop("glyph", None)
+            # A level-1 bullet that is a vendor section heading ("Memories",
+            # "Low power", "6 timers") names the section for what follows; it
+            # is kept as a fact only when it carries a number.
+            if current["level"] == 1 and _SECTION_HEADING.match(current["text"]):
+                section = current["text"].rstrip(":")
+                section_from_bullet = True
+                current["section"] = section
+                if re.search(r"\d", current["text"]):
+                    items.append(current)
+            else:
+                items.append(current)
         current = None
 
     for line in lines:
         if not line.strip():
             continue
-        if re.match(r"^\s*\d{1,2}(?:\.\d{1,2}){1,2}\s+[A-Z]", line) and (current is not None or items):
+        # A numbered section heading ("2.1 Device overview") ends the list; a
+        # figure like "1.25 DMIPS/MHz (Dhrystone 2.1)" does not.
+        if _NUMBERED_HEADING.match(line) and (current is not None or items):
             break
-        match = _GLYPH_LINE.match(line)
+        match = glyph_line.match(line)
         if match:
             glyph, rest = match.group(1), match.group(2).strip()
             if glyph == header_glyph:
@@ -401,21 +481,35 @@ def _bullet_items(text: str) -> list[dict[str, Any]]:
                 pending_glyph = "header" if not rest else None
                 continue
             close()
-            current = {"text": rest, "section": section, "level": 1}
+            current = {"text": rest, "section": section, "level": 1, "glyph": True}
             pending_glyph = None if rest else "bullet"
             continue
         dash = _DASH_LINE.match(line)
-        if dash and (current is not None or items):
-            parent = current["text"] if current else (items[-1]["text"] if items else None)
+        if dash and (current is not None or items or pending_glyph == "dash"):
             close()
-            current = {"text": dash.group(1).strip(), "section": section, "level": 2, "parent": _norm(parent) if parent else None}
+            parent = last_bullet["text"] if last_bullet else None
+            # Under a section-heading bullet (ST "• Memories" over "– 16 or 32
+            # Kbytes of Flash") the dashes are the facts themselves: level 1.
+            heading_parent = parent is not None and _SECTION_HEADING.match(_norm(parent)) is not None
+            level = 1 if heading_parent else 2
+            current = {"text": (dash.group(1) or "").strip(), "section": section, "level": level}
+            if not heading_parent and parent:
+                current["parent"] = _norm(parent)
+            pending_glyph = None if dash.group(1) else "dash"
             continue
         if pending_glyph == "header":
             section = _norm(line)
             pending_glyph = None
             continue
-        if current is not None and len(line) < 90 and not line.strip().isupper():
+        if current is not None and pending_glyph in ("bullet", "dash") and not current["text"]:
+            # The glyph stood alone; this line is the bullet's text, whatever
+            # its case ("DMA") or length.
+            current["text"] = line.strip()
+            pending_glyph = None
+            continue
+        if current is not None and len(line) < 120 and not line.strip().isupper():
             current["text"] = f"{current['text']} {line.strip()}"
+            pending_glyph = None
     close()
     return items
 
@@ -424,6 +518,13 @@ def split_count(text: str) -> tuple[str, int | None]:
     """"Serial Communications Interface (SCI) × 4" -> ("Serial Communications Interface (SCI)", 4)."""
     match = _COUNT_SUFFIX.search(text)
     if not match:
+        prefix = _COUNT_PREFIX.match(text)
+        if prefix:
+            if prefix.group(1) or prefix.group(3):
+                count = int(prefix.group(1) or prefix.group(3))
+            else:
+                count = _COUNT_WORDS[prefix.group(2).lower()]
+            return text[prefix.end():].strip(), count
         return text, None
     count = int(match.group(1) or match.group(2) or match.group(3))
     label = text[: match.start()].rstrip()
@@ -443,7 +544,7 @@ def read_instances(page_texts: dict[int, str], weak_pages: int = 2) -> dict[str,
     for cls in sorted(support):
         instances = []
         for name, pages in support[cls].items():
-            bare = cls in ("USB", "FMC", "RTC", "IWDG", "AES", "LTDC", "TSC", "DTC", "ELC", "RTI", "EMAC")
+            bare = cls in ("USB", "FMC", "RTC", "IWDG", "AES", "LTDC", "TSC", "DTC", "ELC", "RTI", "EMAC", "PIT", "SCTIMER", "ENET", "SDHC", "LLWU", "EWM", "CRC", "LCDK", "MIPI")
             instances.append({"instance": name if (bare or name.startswith(cls)) else f"{cls}{name}", "pages": len(pages), "first_page": min(pages), "weak": len(pages) < weak_pages})
         instances.sort(key=lambda i: (i["weak"], _natural(i["instance"])))
         strong = [i for i in instances if not i["weak"]]
@@ -458,10 +559,8 @@ def _natural(text: str) -> tuple:
 def _typed_numbers(text: str) -> list[dict[str, Any]]:
     numbers = []
     for match in _NUM_UNIT.finditer(text):
-        value = float(match.group(1))
+        value = float(match.group(1).replace(",", ""))
         unit = (match.group(2) or "").strip() or None
-        if unit is None and not re.search(r"\d", text.replace(match.group(1), "", 1)):
-            pass
         numbers.append({"value": int(value) if value.is_integer() else value, "unit": unit})
     return numbers[:8]
 
@@ -469,22 +568,52 @@ def _typed_numbers(text: str) -> list[dict[str, Any]]:
 def read_features(page_texts: dict[int, str], max_pages: int = 6) -> list[dict[str, Any]]:
     """Bullet features on the first pages, verbatim, numbers typed, qualifier as printed."""
     out: list[dict[str, Any]] = []
-    for pno in range(1, min(max_pages, max(page_texts) if page_texts else 0) + 1):
+    if not page_texts:
+        return out
+    last = max(page_texts)
+    heading_re = re.compile(r"^\s*(?:key\s+|device\s+|product\s+)?features\s*$", re.I | re.M)
+
+    def glyph_lines(text: str) -> int:
+        return sum(1 for line in text.splitlines() if _GLYPH_LINE.match(line) or _DASH_LINE.match(line))
+
+    # Pages to read: the opening pages, plus the "Features" page wherever the
+    # front matter puts it (reference manuals put it after a 40-page TOC), plus
+    # the pages that continue its bullet list.
+    pages: list[int] = list(range(1, min(max_pages, last) + 1))
+    for pno in range(max_pages + 1, min(FEATURES_SEARCH_PAGES, last) + 1):
         text = page_texts.get(pno) or ""
-        if not re.search(r"\bfeatures\b", text, re.I) and pno > 2:
+        if heading_re.search(text) and glyph_lines(text) >= 8:
+            pages.append(pno)
+            nxt = pno + 1
+            while nxt <= last and glyph_lines(page_texts.get(nxt) or "") >= 8 and not re.search(r"^\s*1\.\s+Overview\b|^\s*Table\s+1\.\d", page_texts.get(nxt) or "", re.M):
+                pages.append(nxt)
+                nxt += 1
+            break
+    for pno in pages:
+        text = page_texts.get(pno) or ""
+        if not re.search(r"\bfeatures\b", text, re.I) and pno > 2 and pno <= max_pages:
             continue
         # A "Features" heading on the page starts the list; otherwise the whole page.
-        heading = re.search(r"^\s*(?:key\s+|device\s+|product\s+)?features\s*$", text, re.I | re.M)
+        heading = heading_re.search(text)
         block = text[heading.end():] if heading else text
         for item in _bullet_items(block):
             out.append(_feature(item["text"], pno, section=item.get("section"), level=item.get("level"), parent=item.get("parent")))
     return out[:400]
 
 
+FEATURES_SEARCH_PAGES = 120
+
+
 def _feature(text: str, page: int, *, section: str | None = None, level: int | None = None, parent: str | None = None) -> dict[str, Any]:
     text = _norm(text)
     qualifier = _QUALIFIER.search(text)
-    label, count = split_count(text)
+    # The fact is the head of the line; ", each with up to 4 IC/OC/PWM ..." is
+    # its description. The full line stays in verbatim.
+    head = text
+    cut = _LABEL_CUT.search(text)
+    if cut and cut.start() >= 8 and re.search(r"[A-Za-z]", text[: cut.start()]):
+        head = text[: cut.start()].rstrip(" ,:;")
+    label, count = split_count(head)
     subject = f"{section} {label}" if section else label
     row = {
         "verbatim": text[:300],
@@ -539,14 +668,27 @@ def read_prose_facts(page_texts: dict[int, str], max_pages: int = 160) -> list[d
         return text[start: end if end != -1 else len(text)]
 
     supply_candidates: list[tuple[float, float, str, int, str]] = []
+    # Cores: one row per designator (M4, M33, C28x), spelling variants
+    # collapsed. A core the document names once in a comparison or migration
+    # table is not this family's core: a row needs the opening pages or
+    # repeated mention (page support >= 3, or >= 10% of the core mentions).
+    core_pages: dict[str, set[int]] = defaultdict(set)
+    core_first: dict[str, tuple[int, str]] = {}
     for pno in range(1, min(max_pages, max(page_texts) if page_texts else 0) + 1):
         text = page_texts.get(pno) or ""
         for match in _CORE.finditer(text):
             core = match.group(1) or match.group(2) or match.group(3)
             if core:
-                # One row per core designator (M4, M33, C28x); spelling variants collapse.
                 stem = re.sub(r"[^a-z0-9]+", "", re.sub(r"\b(?:arm|with|fpu|dsp|mpu|and|core)\b", "", core.lower()))
-                add("core", match.group(0), pno, key_text=stem)
+                core_pages[stem].add(pno)
+                core_first.setdefault(stem, (pno, match.group(0)))
+    total_core_pages = sum(len(p) for p in core_pages.values()) or 1
+    for stem, pages in core_pages.items():
+        pno, verbatim = core_first[stem]
+        if min(pages) <= 3 or (len(pages) >= 3 and len(pages) / total_core_pages >= 0.10):
+            add("core", verbatim, pno, key_text=stem, context=f"pages={len(pages)}")
+    for pno in range(1, min(max_pages, max(page_texts) if page_texts else 0) + 1):
+        text = page_texts.get(pno) or ""
         for line in text.split("\n"):
             # A CPU/system clock statement, not a peripheral's bit rate.
             if not re.search(r"frequency|\bcpu\b|\bcore\b|\bsystem clock|\bsysclk|\bhclk|running|operat|performance|\bmips\b|\bdmips\b", line, re.I):

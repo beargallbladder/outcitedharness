@@ -114,7 +114,10 @@ def test_quantity_qualifier_names_the_quantity_not_the_bound() -> None:
 
     assert quantity_qualifier(row("512-KB code flash memory", 512, "KB", cls="flash")) == "code_flash"
     assert quantity_qualifier(row("8-KB data flash memory (100,000 erase/write cycles)", 8, "KB", cls="flash")) == "data_flash"
-    assert quantity_qualifier(row("Up to 2 Mbytes of Flash memory", 2, "Mbytes", cls="flash", qualifier="Up to")) is None  # bare flash: not called code
+    # Bare "Flash": the document did not say which; CR wants the null, not a guess.
+    assert quantity_qualifier(row("Up to 2 Mbytes of Flash memory", 2, "Mbytes", cls="flash", qualifier="Up to")) is None
+    # A multi-valued line has no scalar value but still names its quantity.
+    assert quantity_qualifier({**row("8 KB or 16 KB data flash", None, None, cls="flash"), "group": "memory"}) == "data_flash"
     assert quantity_qualifier(row("96-KB SRAM", 96, "KB", cls="sram")) == "total_sram"
     assert quantity_qualifier(row("Main internal SRAM1 (112 KB)", 112, "KB", cls="sram")) == "sram_bank"
     assert quantity_qualifier(row("Ta = –40°C to +85°C", [-40, 85], "°C", section="temperature_range")) == "ambient"

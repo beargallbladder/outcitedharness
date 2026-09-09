@@ -1,0 +1,134 @@
+{
+  "schema": "harness.electronics-key-features-gold.v1",
+  "source_artifact": "Atmel-42242-SAM-D10_Datasheet.pdf",
+  "source": "Atmel SAM D10 datasheet 42242H, Features page (p.2). Written cold from the page text before scoring. Bullets render as the letter 'z' (Wingdings) at every level.",
+  "expected": [
+    {
+      "group": "processing",
+      "label": "Cortex-M0\\+"
+    },
+    {
+      "group": "processing",
+      "label": "48\\s?MHz",
+      "value": 48,
+      "quantity_qualifier": "maximum"
+    },
+    {
+      "group": "memory",
+      "label": "8/16\\s?KB.{0,40}Flash",
+      "varies_by_part": true,
+      "note": "bare \"Flash\": qualifier stays null (CR renesas-correction-qualifier-ack-20260908)"
+    },
+    {
+      "group": "memory",
+      "label": "4\\s?KB SRAM",
+      "value": 4,
+      "quantity_qualifier": "total_sram"
+    },
+    {
+      "group": "power_clock_reset",
+      "label": "Power-on reset \\(POR\\) and brown-out"
+    },
+    {
+      "group": "power_clock_reset",
+      "label": "DFLL48M"
+    },
+    {
+      "group": "power_clock_reset",
+      "label": "Idle and standby"
+    },
+    {
+      "group": "power_clock_reset",
+      "label": "1.62\\s?V – 3.63\\s?V",
+      "quantity_qualifier": "rated"
+    },
+    {
+      "group": "peripherals",
+      "label": "6-channel Direct Memory Access|DMAC"
+    },
+    {
+      "group": "peripherals",
+      "label": "Event System"
+    },
+    {
+      "group": "peripherals",
+      "label": "External Interrupt Controller|EIC"
+    },
+    {
+      "group": "timers_pwm_control",
+      "label": "Two 16-bit Timer/Counters"
+    },
+    {
+      "group": "timers_pwm_control",
+      "label": "24-bit Timer/Counters? for Control|TCC"
+    },
+    {
+      "group": "timers_pwm_control",
+      "label": "Real Time Counter|RTC"
+    },
+    {
+      "group": "timers_pwm_control",
+      "label": "Watchdog Timer|WDT"
+    },
+    {
+      "group": "security_safety_identity",
+      "label": "CRC-32"
+    },
+    {
+      "group": "connectivity",
+      "label": "SERCOM",
+      "qualifier_verbatim": "Up to"
+    },
+    {
+      "group": "connectivity",
+      "label": "I2C Bus up to 3.4\\s?MHz"
+    },
+    {
+      "group": "connectivity",
+      "label": "LIN slave"
+    },
+    {
+      "group": "analogue",
+      "label": "12-bit, 350\\s?ksps Analog-to-Digital"
+    },
+    {
+      "group": "analogue",
+      "label": "10-bit, 350\\s?ksps Digital-to-Analog"
+    },
+    {
+      "group": "analogue",
+      "label": "Two Analog Comparators"
+    },
+    {
+      "group": "graphics_vision_touch_hmi",
+      "label": "Peripheral Touch Controller|PTC"
+    },
+    {
+      "group": "graphics_vision_touch_hmi",
+      "label": "72-channel capacitive touch",
+      "qualifier_verbatim": "Up to"
+    },
+    {
+      "group": "io_package_environment",
+      "label": "22 programmable I/O pins",
+      "qualifier_verbatim": "Up to"
+    },
+    {
+      "group": "io_package_environment",
+      "label": "24-pin QFN"
+    },
+    {
+      "group": "io_package_environment",
+      "label": "20-pin SOIC"
+    },
+    {
+      "group": "io_package_environment",
+      "label": "20-ball WLCSP"
+    },
+    {
+      "group": "io_package_environment",
+      "label": "14-pin SOIC"
+    }
+  ],
+  "forbidden": []
+}

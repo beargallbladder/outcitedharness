@@ -82,12 +82,57 @@ def main() -> int:
         "grid_rows_varies_by_part": varies,
         "by_vendor_meets_bar": dict(Counter(g["_meta"]["vendor"] for g in grids if g["meets_six_of_ten"])),
         "by_vendor_documents": dict(Counter(g["_meta"]["vendor"] for g in grids)),
-        "vendor_null_with_inference": dict(Counter(g["_meta"].get("vendor_inferred") for g in grids if not g["_meta"]["vendor"])),
+        "vendor_basis": dict(Counter(g["_meta"].get("vendor_basis") or "null" for g in grids)),
+        "vendor_null_artifacts": sorted(g["_meta"]["source_artifact"] for g in grids if not g["_meta"]["vendor"])[:60],
         "scope_empty": sum(1 for g in grids if not g["_meta"]["scope_as_printed"]),
         "grid_rows_per_document": _quantiles([sum(1 for r in g["rows"] if r["tier"] == "grid") for g in grids]),
         "rows_with_also_printed": sum(1 for g in grids for r in g["rows"] if r.get("also_printed")),
     }
+    # Typed facts for the six primary groups, and the progress ledger.
+    typed_by_group: Counter = Counter()
+    typed_kinds: Counter = Counter()
+    docs_with_typed: dict[str, set] = {}
+    for g in grids:
+        for k, v in g.get("typed_facts_by_group", {}).items():
+            typed_by_group[k] += v
+            docs_with_typed.setdefault(k, set()).add(g["_meta"]["document_sha256"])
+        typed_kinds.update(g.get("typed_fact_kinds", {}))
+    qq = Counter()
+    for g in grids:
+        qq.update({k: v for k, v in g.get("quantity_qualifiers", {}).items() if k})
+    summary["typed_facts_by_group"] = dict(typed_by_group)
+    summary["documents_with_typed_facts_by_group"] = {k: len(v) for k, v in docs_with_typed.items()}
+    summary["typed_fact_kinds"] = dict(typed_kinds.most_common())
+    summary["quantity_qualified_grid_rows"] = dict(qq)
+    summary["io_by_package_rows"] = sum(1 for g in grids for r in g["rows"] if r.get("section") == "io_by_package")
     (args.out / "summary.json").write_text(json.dumps(summary, indent=1))
+
+    ledger = args.out.parent / "key-features-grid-progress.jsonl"
+    measures = {
+        "documents": summary["documents"],
+        "meets_six_of_ten": summary["meets_six_of_ten"],
+        "grid_rows": summary["rows_by_tier"].get("grid", 0),
+        "median_grid_rows": summary["grid_rows_per_document"].get("median"),
+        "typed_facts": sum(typed_by_group.values()),
+        "typed_facts_by_group": dict(typed_by_group),
+        "quantity_qualified_rows": sum(qq.values()),
+        "io_by_package_rows": summary["io_by_package_rows"],
+        "scope_empty": summary["scope_empty"],
+    }
+    previous = None
+    if ledger.exists():
+        lines = [l for l in ledger.read_text().splitlines() if l.strip()]
+        if lines:
+            previous = json.loads(lines[-1])["measures"]
+    delta = {}
+    if previous:
+        for k, v in measures.items():
+            if isinstance(v, (int, float)) and isinstance(previous.get(k), (int, float)):
+                delta[k] = v - previous[k]
+    entry = {"generated_at": summary["generated_at"], "out": str(args.out), "measures": measures, "delta_vs_previous": delta}
+    with ledger.open("a") as fh:
+        fh.write(json.dumps(entry) + "\n")
+    summary["progress_delta"] = delta
     print(json.dumps(summary, indent=1))
     return 0
 

@@ -61,6 +61,7 @@ CLASS_GROUPS: dict[str, tuple[str, ...]] = {
     "fmc": ("connectivity",),
     "wireless": ("connectivity",),
     "adc": ("analogue",),
+    "temp_sensor": ("analogue",),
     "dac": ("analogue",),
     "comparator": ("analogue",),
     "opamp": ("analogue",),
@@ -140,11 +141,38 @@ INSTANCE_CLASS: dict[str, tuple[str, str]] = {
     "MIBADC": ("adc", "Multi-buffered ADC (MibADC)"),
     "LIN": ("lin", "LIN"),
     "EMAC": ("ethernet", "Ethernet MAC (EMAC)"),
+    # NXP Kinetis / LPC / MCX / i.MX RT.
+    "TPM": ("timer", "Timer/PWM module (TPM)"),
+    "FTM": ("timer", "FlexTimer module (FTM)"),
+    "PIT": ("timer", "Periodic interrupt timer (PIT)"),
+    "LPTMR": ("lptim", "Low-power timer (LPTMR)"),
+    "LPIT": ("lptim", "Low-power periodic interrupt timer (LPIT)"),
+    "CTIMER": ("timer", "Standard counter/timers (CTIMER)"),
+    "SCTIMER": ("timer", "SCTimer/PWM"),
+    "TSI": ("touch", "Touch sensing input (TSI)"),
+    "CMP": ("comparator", "Analog comparator (CMP)"),
+    "LPI2C": ("i2c", "Low-power I2C (LPI2C)"),
+    "LPSPI": ("spi", "Low-power SPI (LPSPI)"),
+    "FLEXCOMM": ("usart", "Flexcomm serial interfaces"),
+    "FLEXCAN": ("can", "FlexCAN"),
+    "ENET": ("ethernet", "Ethernet (ENET)"),
+    "SDHC": ("sdmmc", "SD host controller (SDHC)"),
+    "FLEXIO": ("usart", "FlexIO"),
+    "FLEXSPI": ("xspi", "FlexSPI"),
+    "LLWU": ("power", "Low-leakage wakeup unit (LLWU)"),
+    "DMAMUX": ("dma", "DMA channel mux (DMAMUX)"),
+    "EWM": ("watchdog", "External watchdog monitor (EWM)"),
+    "CRC": ("safety", "CRC"),
+    "LCDK": ("display", "LCD controller"),
+    "MIPI": ("display", "MIPI DSI/CSI"),
+    "LPADC": ("adc", "Low-power ADC (LPADC)"),
 }
 
 _RANGE = re.compile(r"\d+(?:\.\d+)?\s*(?:-|–|to)\s*\d+(?:\.\d+)?")
 # "48, 64, 72 and 100 leads" is a list; "100,000 cycles" is a thousands separator.
 _COMMA_LIST = re.compile(r"\b\d{1,3}(?:,\s+\d{1,3})+(?:,?\s+(?:and|or)\s+\d{1,3})?\b|\b\d{1,3}\s+(?:and|or)\s+\d{1,3}\s+(?:leads|pins|packages)\b")
+# "16 or 32 Kbytes", "8/16KB", "26/37/51 I/Os", "64/128/256 KB": one cell, several members.
+_ALT_LIST = re.compile(r"\b\d{1,4}\s*(?:or|/)\s*\d{1,4}(?:\s*/\s*\d{1,4})*\s*-?\s*(?:KB|MB|Kbytes?|Mbytes?|Kbit|Mbit|I/Os?|pins?|leads?|MHz|channels?)\b", re.I)
 _VARIES = re.compile(r"depending on|varies|device[- ]dependent|according to the (?:device|part|package)|see (?:the )?datasheet", re.I)
 _SENTENCE_START = re.compile(r"^(?:the|this|these|it|for|refer|see|section|to|when|if|in|on|a|an|all|note)\b", re.I)
 _GRID_MAX_LEN = 72
@@ -187,6 +215,16 @@ _SECTION_GROUP_DIRECT: dict[str, str] = {
     "input output": "io_package_environment",
     "general purpose i o ports": "io_package_environment",
     "system and power management": "power_clock_reset",
+    "multiple clock sources": "power_clock_reset",
+    "clock sources": "power_clock_reset",
+    "reset and clock control": "power_clock_reset",
+    "power supply": "power_clock_reset",
+    "arm cortex m33 core": "processing",
+    "arm cortex m4 core": "processing",
+    "arm cortex m23 core": "processing",
+    "arm cortex m85 core": "processing",
+    "arm cortex m0 core": "processing",
+    "cpu core": "processing",
     "event link": "peripherals",
     "direct memory access dma": "peripherals",
     "dma": "peripherals",
@@ -210,16 +248,59 @@ _PROSE_GROUP: dict[str, tuple[str, str]] = {
 
 
 def varies_by_part(text: str) -> bool:
-    return bool(_RANGE.search(text) or _COMMA_LIST.search(text) or _VARIES.search(text))
+    return bool(_RANGE.search(text) or _COMMA_LIST.search(text) or _ALT_LIST.search(text) or _VARIES.search(text))
+
+
+# Sizes that are not a memory capacity: programming/erase granularity, ECC
+# word sizes, sector/page/block sizes, partitions, note text.
+_NOT_CAPACITY = re.compile(r"^\s*note\b|^\s*\(|\bfirst\b|\barea of\b|\bunits? of\b|\bgranularity|\berase\b|\bprogram(?:ming)?\s*:|\bblank\s+check|\bpage\s+size|\bblock\s+size|\bsector\s+size|\bsectors?\s+of\b|\bword\b|\bper\s+(?:sector|page|block)|\bminimum\s+(?:erase|program)|\bphrase\b|\brecord\s+size|\bcache\s+line|\bline\s+size|\bboundar", re.I)
+
+_STANDALONE_LEAF_CLASSES = {"temp_sensor", "dma", "rtc", "watchdog", "safety", "comparator", "dac", "adc", "touch", "display", "usb", "can", "ethernet", "crypto", "opamp"}
+_MODE_LEAF = re.compile(r"^(?:simple|smart\s*card|manchester|asynchronous|synchronous|half[- ]duplex|full[- ]duplex|master|slave|mode|modes|supports?|support\s+for|peripherals?\s+supported)\b", re.I)
+_SUPPLY_RANGE_TEXT = re.compile(r"\b\d\.\d{1,2}\s*V?\s*(?:to|–|-|~)\s*\d\.\d{1,2}\s*V\b")
+
+# Vendor section headings that carry a count or a long name; checked when the
+# exact key is not in _SECTION_GROUP_DIRECT.
+_SECTION_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
+    # keys arrive through _norm_key: lower-case letters only ("6 timers" -> "timers").
+    (re.compile(r"^timers?\b"), "timers_pwm_control"),
+    (re.compile(r"^communication"), "connectivity"),
+    (re.compile(r"^up to (?:fast )?i o ports?$|^i os?$|^i o ports?$|^i o$"), "io_package_environment"),
+    (re.compile(r"^clock reset and supply management$|^clocks? and reset|^reset and clock|^supply and reset|^clock(?:ing)? and power"), "power_clock_reset"),
+    (re.compile(r"^operating voltage$|^voltage range$|^supply voltage"), "power_clock_reset"),
+    (re.compile(r"^debug(?: mode| and trace)?$|^debug"), "peripherals"),
+    (re.compile(r"^(?:arm )?cortex m\d+\S* core$|^(?:arm|risc v) .*core$|^processor$|^cpu$|^core$"), "processing"),
+    (re.compile(r"^analog(?:ue)?"), "analogue"),
+    (re.compile(r"^memor(?:y|ies)"), "memory"),
+    (re.compile(r"^security|^safety|^cryptograph"), "security_safety_identity"),
+    (re.compile(r"^graphics|^display|^human machine|^hmi$|^touch"), "graphics_vision_touch_hmi"),
+    (re.compile(r"^packages?|^operating temperature|^temperature range"), "io_package_environment"),
+)
+
+
+def _section_group(section_key: str) -> str | None:
+    if section_key in _SECTION_GROUP_DIRECT:
+        return _SECTION_GROUP_DIRECT[section_key]
+    for pattern, group in _SECTION_PATTERNS:
+        if pattern.search(section_key):
+            return group
+    return None
 
 
 def _grid_eligible(text: str) -> bool:
     return len(text) <= _GRID_MAX_LEN and not _SENTENCE_START.match(text) and not text.rstrip().endswith((":", ",", ";")) and not text.endswith(".")
 
 
-def _single_number(numbers: list[dict[str, Any]]) -> tuple[Any, str | None]:
+def _single_number(numbers: list[dict[str, Any]], text: str = "") -> tuple[Any, str | None]:
     typed = [n for n in numbers if n.get("unit")]
+    if text and (_RANGE.search(text) or _ALT_LIST.search(text) or _COMMA_LIST.search(text)):
+        return None, None  # "2.0 to 3.6 V", "16 or 32 Kbytes": a range or list, not a scalar
     if len(typed) == 1 and len(numbers) <= 2:
+        return typed[0]["value"], typed[0]["unit"]
+    # "8 KB data flash memory (100,000 P/E cycles)": the sized number leads and
+    # the unitless numbers after it are detail. A unitless number before the
+    # sized one ("1 to 20 MHz", "48/64/80 MHz") makes it a range or list: no scalar.
+    if len(typed) == 1 and numbers and numbers[0] is typed[0]:
         return typed[0]["value"], typed[0]["unit"]
     return None, None
 
@@ -231,13 +312,18 @@ def build_grid(record: dict[str, Any], vendor_by_sha: dict[str, str] | None = No
     scope = _scope_as_printed(identity)
     lines = identity["lines_covered"]
     grain = "series" if (lines.get("group_tokens") or lines["wildcards"] or lines["parts"]) else "family"
-    vendor = normalize_vendor(meta.get("vendor")) or normalize_vendor((vendor_by_sha or {}).get(meta["document_sha256"]))
-    vendor_inferred = None
+    vendor = normalize_vendor(meta.get("vendor"))
+    vendor_basis = "document" if vendor else None
     if not vendor:
-        vendor_inferred = infer_vendor(identity.get("document_id"), scope, artifact)
-    base = {"vendor": vendor, "grain": grain, "scope_as_printed": scope, "source_artifact": artifact, "document_sha256": meta["document_sha256"]}
-    if vendor_inferred:
-        base["vendor_inferred"] = vendor_inferred
+        vendor = normalize_vendor((vendor_by_sha or {}).get(meta["document_sha256"]))
+        vendor_basis = "inventory" if vendor else None
+    if not vendor:
+        # A null vendor cannot be routed to a catalogue node (CR grid-v0
+        # review). The document ID, scope and filename name the vendor in
+        # nearly every case; the basis says so.
+        vendor = infer_vendor(identity.get("document_id"), scope, artifact)
+        vendor_basis = "inferred" if vendor else None
+    base = {"vendor": vendor, "vendor_basis": vendor_basis, "grain": grain, "scope_as_printed": scope, "source_artifact": artifact, "document_sha256": meta["document_sha256"]}
     chapter_titles: dict[str, str] = {}
     for cls, entries in record.get("chapters", {}).get("peripheral_classes", {}).items():
         for entry in entries:
@@ -258,7 +344,7 @@ def build_grid(record: dict[str, Any], vendor_by_sha: dict[str, str] | None = No
             "qualifier_verbatim": qualifier,
             # A supply range is the envelope of every member (CR decision);
             # temperature and anything "depending on MPN" varies by part.
-            "varies_by_part": False if section == "supply_range" else varies_by_part(verbatim),
+            "varies_by_part": False if (section == "supply_range" or _SUPPLY_RANGE_TEXT.search(label)) else varies_by_part(verbatim),
             "tier": tier,
             "source_pages": sorted(set(pages))[:12],
             "verbatim": verbatim[:300],
@@ -296,15 +382,16 @@ def build_grid(record: dict[str, Any], vendor_by_sha: dict[str, str] | None = No
         classes = feature.get("classes") or []
         section = feature.get("vendor_section")
         section_class = feature.get("section_class") or (_SECTION_WORDS.get(_norm_key(section)) if section else None)
-        value, unit = _single_number(feature.get("numbers", []))
+        value, unit = _single_number(feature.get("numbers", []), label)
         groups: set[str] = set()
         cls: str | None = classes[0] if classes else None
         section_key = _norm_key(section)
+        section_group = _section_group(section_key)
         bullet_groups = {g for c in classes for g in CLASS_GROUPS.get(c, ())}
-        if section_key in _SECTION_GROUP_DIRECT and section_key not in _MIXED_SECTIONS:
+        if section_group and section_key not in _MIXED_SECTIONS:
             # The vendor filed it under this heading; that is the group. A
             # bullet whose own class also belongs elsewhere keeps both homes.
-            groups = {_SECTION_GROUP_DIRECT[section_key]}
+            groups = {section_group}
             if cls in _DUAL_HOME_CLASSES:
                 groups |= bullet_groups
         elif bullet_groups:
@@ -312,14 +399,21 @@ def build_grid(record: dict[str, Any], vendor_by_sha: dict[str, str] | None = No
         elif section_class:
             groups = set(CLASS_GROUPS.get(section_class, ()))
             cls = cls or section_class
-        elif section_key in _SECTION_GROUP_DIRECT:
-            groups = {_SECTION_GROUP_DIRECT[section_key]}
+        elif section_group:
+            groups = {section_group}
         if not groups and _package_or_temp(text):
             groups = {"io_package_environment"}
         if not groups and _power_fact(text):
             groups = {"power_clock_reset"}
-        # Sub-bullets are detail under their parent: below the grid.
-        tier = "grid" if (_grid_eligible(label) and feature.get("level", 1) == 1) else "below_grid"
+        # Sub-bullets are detail under their parent: below the grid — except a
+        # short security-function line under a security engine ("Symmetric
+        # algorithms: AES", "128-bit unique ID"), which the target page lists.
+        security_leaf = "security_safety_identity" in groups and len(label) <= 48 and any(p.search(label) for _, p in _SECURITY_VOCAB)
+        # A sub-bullet that names a peripheral in its own right ("Temperature
+        # sensor" under the ADC, "7-channel DMA controller") is a grid line; a
+        # mode of its parent ("Simple SPI" under SCI) is not.
+        standalone_leaf = cls in _STANDALONE_LEAF_CLASSES and len(label) <= 48 and not _MODE_LEAF.match(label)
+        tier = "grid" if (_grid_eligible(label) and (feature.get("level", 1) == 1 or security_leaf or standalone_leaf)) else "below_grid"
         for group in sorted(groups):
             emit(group, cls, label, pages=[feature["receipt"]["page"]], verbatim=text, tier=tier, instances=feature.get("count"), value=value, unit=unit, qualifier=feature.get("qualifier_verbatim"), section=section or "features", flags={"parent": feature["parent"]} if feature.get("parent") else None)
 
@@ -347,7 +441,7 @@ def build_grid(record: dict[str, Any], vendor_by_sha: dict[str, str] | None = No
         sizing = unit is not None and unit.lower().rstrip("s") in _SIZING_UNITS
         # Only capacity/speed facts of the memory and core chapters render;
         # a peripheral chapter's bit rates are detail.
-        tier = "grid" if (_grid_eligible(text) and len(text) <= 56 and sizing and cls in ("flash", "sram", "memory_map", "cpu_core")) else "below_grid"
+        tier = "grid" if (_grid_eligible(text) and len(text) <= 56 and sizing and cls in ("flash", "sram", "memory_map", "cpu_core") and not _NOT_CAPACITY.search(text)) else "below_grid"
         for group in groups:
             emit(group, cls, text, pages=[feature["receipt"]["page"]], verbatim=text, tier=tier, value=value, unit=unit, qualifier=feature.get("qualifier_verbatim"), section=feature.get("section"))
 
@@ -358,7 +452,11 @@ def build_grid(record: dict[str, Any], vendor_by_sha: dict[str, str] | None = No
         if text.lower() in seen_memory:
             continue
         seen_memory.add(text.lower())
-        emit("memory", "flash" if re.search(r"flash|program memory|otp", text, re.I) else "sram", text, pages=[row["receipt"]["page"]], verbatim=text, tier="grid" if _grid_eligible(text) else "below_grid", value=row["size_kb"], unit="KB", qualifier=row.get("qualifier_verbatim"), section="memory")
+        # Sub-kilobyte numbers are programming/erase granularity, ECC word
+        # sizes or note text, never a family memory capacity; footnotes and
+        # "first N KB of" partitions are detail. Both stay below the grid.
+        capacity = row["size_kb"] >= 1 and not _NOT_CAPACITY.search(text)
+        emit("memory", "flash" if re.search(r"flash|program memory|otp", text, re.I) else "sram", text, pages=[row["receipt"]["page"]], verbatim=text, tier="grid" if (capacity and _grid_eligible(text)) else "below_grid", value=row["size_kb"], unit="KB", qualifier=row.get("qualifier_verbatim"), section="memory")
 
     # 5. Prose facts from the opening pages: core, max frequency, supply,
     #    temperature, packages.
@@ -394,7 +492,16 @@ def build_grid(record: dict[str, Any], vendor_by_sha: dict[str, str] | None = No
     rows = _dedupe(rows)
     for row in rows:
         row["quantity_qualifier"] = quantity_qualifier(row)
+        facts = typed_facts(row)
+        if facts:
+            row["typed"] = facts
     sram_check = _sram_bank_check(rows)
+    typed_by_group: Counter = Counter()
+    typed_kinds: Counter = Counter()
+    for row in rows:
+        for fact in row.get("typed", []):
+            typed_by_group[row["group"]] += 1
+            typed_kinds[fact["kind"]] += 1
     grid_rows = [r for r in rows if r["tier"] == "grid"]
     populated = Counter(r["group"] for r in grid_rows)
     return {
@@ -408,7 +515,146 @@ def build_grid(record: dict[str, Any], vendor_by_sha: dict[str, str] | None = No
         "not_observed": not_observed,
         "flags": {"npu_group_undecided": "npu" in observed, **sram_check},
         "quantity_qualifiers": dict(Counter(r["quantity_qualifier"] for r in grid_rows if r.get("value") is not None)),
+        "typed_facts_by_group": dict(typed_by_group),
+        "typed_fact_kinds": dict(typed_kinds),
     }
+
+
+# Typed facts for the six groups where the family read is the only source.
+# Each grammar reads a row's text (label + verbatim) and returns typed
+# {kind, value, unit?, condition?} facts. Nothing inferred: every kind needs
+# its anchor word in the text.
+_MODE_WORDS = r"(run|sleep|low[- ]power\s+run|low[- ]power\s+sleep|lprun|lpsleep|stop\s*\d?|standby|shutdown|deep[- ]sleep|deep\s+power[- ]down|power[- ]down|vbat|backup|idle|snooze|hibernate|em\d|active|software\s+standby|halt|wait)"
+_CURRENT = re.compile(rf"(\d+(?:\.\d+)?)\s*(nA|µA|uA|μA|mA)(?:/MHz)?\b", re.I)
+_CURRENT_PER_MHZ = re.compile(r"(\d+(?:\.\d+)?)\s*(µA|uA|μA)\s*/\s*MHz", re.I)
+_WAKEUP = re.compile(r"wake[- ]?up[^.\n]{0,40}?(\d+(?:\.\d+)?)\s*(µs|us|μs|ns|ms)|(\d+(?:\.\d+)?)\s*(µs|us|μs|ns|ms)[^.\n]{0,20}wake", re.I)
+_BITS = re.compile(r"(\d{1,2})[- ]bit", re.I)
+_CHANNELS = re.compile(r"(?:up\s+to\s+)?(\d{1,3})\s*(?:external\s+|input\s+|analog\s+)?(?:channels?|ch\b|inputs?)", re.I)
+_SAMPLE_RATE = re.compile(r"(\d+(?:\.\d+)?)\s*(Msps|ksps|MSPS|kSPS|Ms/s|ks/s|MHz\s+sampling)", re.I)
+_BITRATE = re.compile(r"(\d+(?:\.\d+)?)\s*(Mbit/s|Mbps|kbit/s|kbps|Gbit/s|Mbyte/s|MB/s)", re.I)
+_SECURITY_VOCAB: tuple[tuple[str, re.Pattern[str]], ...] = (
+    ("aes", re.compile(r"\bAES(?:[- ]?(?:128|192|256))?\b")),
+    ("sha", re.compile(r"\bSHA(?:[- ]?(?:1|2|224|256|384|512))?\b")),
+    ("trng", re.compile(r"\bTRNG\b|\btrue\s+random|\bRNG\b|random\s+number\s+generator", re.I)),
+    ("ecc_crypto", re.compile(r"\bECC\b(?=[^.\n]{0,40}(?:crypto|asymmetric|curve|ECDSA|ECDH|public))|\bECDSA\b|\bECDH\b|\bPKA\b|elliptic", re.I)),
+    ("rsa", re.compile(r"\bRSA\b")),
+    ("trustzone", re.compile(r"TrustZone|\bTZ\b", re.I)),
+    ("secure_boot", re.compile(r"secure\s+boot|root\s+of\s+trust|\bRoT\b", re.I)),
+    ("tamper", re.compile(r"\btamper", re.I)),
+    ("unique_id", re.compile(r"unique\s+(?:device\s+)?ID|\bUID\b|\bUUID\b", re.I)),
+    ("readout_protection", re.compile(r"read-?out\s+protection|\bRDP\b|code\s+protection|flash\s+(?:area\s+)?protection|write\s+protection", re.I)),
+    ("mpu", re.compile(r"\bMPU\b|memory\s+protection\s+unit", re.I)),
+    ("memory_ecc", re.compile(r"\bECC\b(?![^.\n]{0,40}(?:crypto|asymmetric|curve|ECDSA|ECDH|public))|error\s+correct", re.I)),
+    ("parity", re.compile(r"\bparity\b", re.I)),
+    ("crc", re.compile(r"\bCRC(?:-?\d+)?\b")),
+    ("watchdog", re.compile(r"watchdog|\bWDT\b|\bIWDG\b|\bWWDG\b|\bIWDT\b", re.I)),
+    ("secure_debug", re.compile(r"debug\s+(?:access\s+level|protection|authentication)|secure\s+debug", re.I)),
+    ("key_storage", re.compile(r"key\s+(?:storage|injection|wrap|management)|\bHUK\b|\bPUF\b", re.I)),
+    ("functional_safety", re.compile(r"IEC\s*61508|ISO\s*26262|\bSIL\s?\d|\bASIL|class\s+B|UL\s*60730", re.I)),
+    ("hardware_crypto_generic", re.compile(r"cryptograph|\bcrypto\b|\bRSIP\b|\bSCE\d?\b|\bHASH\b|\bCRYP\b|\bSAES\b", re.I)),
+)
+_USB_SPEED = re.compile(r"\b(full[- ]speed|high[- ]speed|low[- ]speed|super[- ]speed|\bFS\b|\bHS\b)", re.I)
+_LCD_SEG = re.compile(r"(\d{1,2})\s*[×x]\s*(\d{1,3})\s*segment", re.I)
+_TOUCH_CH = re.compile(r"(\d{1,3})[- ]channel\s+(?:capacitive\s+)?touch|touch[^.\n]{0,30}?(\d{1,3})\s*(?:channels?|electrodes?|inputs?)", re.I)
+_RESOLUTION_PX = re.compile(r"(\d{3,4})\s*[×x]\s*(\d{3,4})", re.I)
+_TIMER_WIDTH_COUNT = re.compile(r"(\d{1,2})[- ]bit\b[^.\n]{0,40}?(?:[×x]\s*(\d{1,2})|(\d{1,2})\s*[×x])|(\d{1,2})\s+(\d{1,2})[- ]bit", re.I)
+_PWM_CH = re.compile(r"(\d{1,3})\s*(?:PWM\s+)?(?:channels?|outputs?)[^.\n]{0,15}PWM|PWM[^.\n]{0,30}?(\d{1,3})\s*(?:channels?|outputs?)", re.I)
+
+
+def _n(text: str) -> float | int:
+    value = float(text)
+    return int(value) if value.is_integer() else value
+
+
+def typed_facts(row: dict[str, Any]) -> list[dict[str, Any]]:
+    text = f"{row.get('label') or ''} — {row.get('verbatim') or ''}"
+    cls = row.get("peripheral_class") or ""
+    group = row["group"]
+    facts: list[dict[str, Any]] = []
+
+    if group == "analogue":
+        bits = _BITS.search(text)
+        if bits and cls in ("adc", "dac", "comparator", "opamp", ""):
+            kind = "dac" if re.search(r"\bDAC|D/A", text, re.I) else "adc" if re.search(r"\bADC|A/D|S12AD|analog[- ]to[- ]digital|SAR|sigma", text, re.I) else cls or None
+            if kind in ("adc", "dac"):
+                facts.append({"kind": f"{kind}_resolution_bits", "value": int(bits.group(1))})
+        ch = _CHANNELS.search(text)
+        if ch and re.search(r"\bADC|A/D|S12AD|analog", text, re.I):
+            facts.append({"kind": "adc_channels", "value": int(ch.group(1)), "qualifier_verbatim": "Up to" if re.search(r"up\s+to", ch.group(0), re.I) else None})
+        rate = _SAMPLE_RATE.search(text)
+        if rate:
+            facts.append({"kind": "adc_sample_rate", "value": _n(rate.group(1)), "unit": rate.group(2)})
+        if row.get("instances") and cls in ("adc", "dac", "comparator", "opamp"):
+            facts.append({"kind": f"{cls}_instances", "value": row["instances"]})
+
+    elif group == "timers_pwm_control":
+        if row.get("instances") and cls in ("timer", "lptim", "hrtim", "rtc", "watchdog"):
+            facts.append({"kind": f"{cls}_instances", "value": row["instances"]})
+        bits = _BITS.search(text)
+        if bits and cls in ("timer", "lptim", "hrtim"):
+            facts.append({"kind": "timer_width_bits", "value": int(bits.group(1)), "count": row.get("instances")})
+        pwm = _PWM_CH.search(text)
+        if pwm:
+            facts.append({"kind": "pwm_channels", "value": int(pwm.group(1) or pwm.group(2)), "qualifier_verbatim": "Up to" if re.search(r"up\s+to", text, re.I) else None})
+
+    elif group == "power_clock_reset":
+        per_mhz = _CURRENT_PER_MHZ.search(text)
+        if per_mhz:
+            facts.append({"kind": "active_current_per_mhz", "value": _n(per_mhz.group(1)), "unit": "µA/MHz"})
+        for match in _CURRENT.finditer(text):
+            if per_mhz and match.start() == per_mhz.start():
+                continue
+            window = text[max(0, match.start() - 70): match.end() + 70]
+            mode = re.search(_MODE_WORDS, window, re.I)
+            facts.append({"kind": "current_in_mode", "value": _n(match.group(1)), "unit": match.group(2).replace("u", "µ").replace("μ", "µ"), "mode_verbatim": mode.group(1) if mode else None, "condition_verbatim": window.strip()[:140]})
+        wake = _WAKEUP.search(text)
+        if wake:
+            value, unit = (wake.group(1), wake.group(2)) if wake.group(1) else (wake.group(3), wake.group(4))
+            facts.append({"kind": "wakeup_time", "value": _n(value), "unit": unit.replace("u", "µ").replace("μ", "µ"), "condition_verbatim": wake.group(0)[:120]})
+        if row.get("section") == "supply_range" and isinstance(row.get("value"), list):
+            facts.append({"kind": "supply_range_v", "value": row["value"], "quantity_qualifier": row.get("quantity_qualifier")})
+
+    elif group == "security_safety_identity":
+        for name, pattern in _SECURITY_VOCAB:
+            match = pattern.search(text)
+            if match:
+                facts.append({"kind": "security_function", "value": name, "verbatim": match.group(0)})
+
+    elif group == "connectivity":
+        if row.get("instances") and cls:
+            facts.append({"kind": f"{cls}_instances", "value": row["instances"]})
+        rate = _BITRATE.search(text)
+        if rate:
+            facts.append({"kind": "bit_rate", "value": _n(rate.group(1)), "unit": rate.group(2), "peripheral_class": cls or None})
+        if cls == "usb" or re.search(r"\bUSB\b", text):
+            speed = _USB_SPEED.search(text)
+            if speed:
+                facts.append({"kind": "usb_speed", "value": speed.group(1).lower().replace(" ", "-")})
+            if re.search(r"\bOTG\b|on-the-go", text, re.I):
+                facts.append({"kind": "usb_otg", "value": True})
+        if cls == "can" or re.search(r"\bCAN\b", text):
+            if re.search(r"CAN[- ]?FD|FDCAN|flexible\s+data", text, re.I):
+                facts.append({"kind": "can_fd", "value": True})
+        if cls == "ethernet" or re.search(r"Ethernet|\bEMAC\b|\bETH\b", text):
+            if re.search(r"10/100|100\s*Mb", text):
+                facts.append({"kind": "ethernet_speed", "value": "10/100"})
+            if re.search(r"gigabit|1000\s*Mb|\bGb\b", text, re.I):
+                facts.append({"kind": "ethernet_speed", "value": "gigabit"})
+
+    elif group == "graphics_vision_touch_hmi":
+        seg = _LCD_SEG.search(text)
+        if seg:
+            facts.append({"kind": "lcd_segments", "value": [int(seg.group(1)), int(seg.group(2))]})
+        touch = _TOUCH_CH.search(text)
+        if touch:
+            facts.append({"kind": "touch_channels", "value": int(touch.group(1) or touch.group(2)), "qualifier_verbatim": "Up to" if re.search(r"up\s+to", text, re.I) else None})
+        res = _RESOLUTION_PX.search(text)
+        if res and re.search(r"resolution|display|LCD|LTDC|pixel", text, re.I):
+            facts.append({"kind": "display_resolution", "value": [int(res.group(1)), int(res.group(2))]})
+        if row.get("instances") and cls in ("display", "dcmi", "touch"):
+            facts.append({"kind": f"{cls}_instances", "value": row["instances"]})
+
+    return facts
 
 
 # Which QUANTITY a numeric row is (CR reversal-extract-qualifiers-20260908).
@@ -425,20 +671,36 @@ _QQ_AMBIENT = re.compile(r"\bTa\b|\bT\s*A\b|ambient", re.I)
 _QQ_JUNCTION = re.compile(r"\bTj\b|\bT\s*J\b|junction", re.I)
 _QQ_STORAGE = re.compile(r"\bstorage\b|\bTstg\b", re.I)
 _QQ_ABS_MAX = re.compile(r"absolute\s+max|\babs\.?\s*max|\bmaximum\s+ratings?", re.I)
-_QQ_RATED = re.compile(r"operating\s+(?:voltage|range|conditions?)|supply\s+voltage|power\s+supply|\bV(?:DD|CC)\b|recommended", re.I)
+_QQ_RATED = re.compile(r"operating\s+(?:voltage|range|conditions?)|supply\s+voltage|power\s+supply|\bV(?:DD|CC)\b|recommended|\bsupply\b|\boperating\b|\boperation\b|\bvoltage\s+range\b", re.I)
 _QQ_TYPICAL = re.compile(r"\btyp(?:ical|\.)?\b", re.I)
 _QQ_MINIMUM = re.compile(r"\bmin(?:imum|\.)?\b", re.I)
 _QQ_MAXIMUM = re.compile(r"\bmax(?:imum|\.)?\b|\bup\s+to\b", re.I)
 
 
+_SIZE_IN_TEXT = re.compile(r"\d\s*-?\s*(?:KB|MB|Kbytes?|Mbytes?|bytes|Kbit|Mbit)\b", re.I)
+
+
 def quantity_qualifier(row: dict[str, Any]) -> str | None:
-    if row.get("value") is None:
-        return None
-    text = f"{row.get('label') or ''} {row.get('verbatim') or ''} {row.get('context') or ''}"
+    # Fields are joined with a separator so a label ending "SRAM" and a
+    # verbatim starting "6 or 10" do not read as a bank designator "SRAM 6".
+    # The vendor's section heading counts as wording ("Operating Voltage" over "1.62V – 3.63V").
+    text = " ¦ ".join(str(row.get(k) or "") for k in ("label", "verbatim", "context", "section"))
     unit = (row.get("unit") or "").lower()
     cls = row.get("peripheral_class")
     section = row.get("section") or ""
-    if unit in ("kb", "mb", "kbyte", "kbytes", "mbyte", "mbytes", "bytes", "kbit", "mbit") or cls in ("flash", "sram", "memory_map"):
+    memory_row = unit in ("kb", "mb", "kbyte", "kbytes", "mbyte", "mbytes", "bytes", "kbit", "mbit") or cls in ("flash", "sram", "memory_map")
+    # A multi-valued memory line ("16 or 32 Kbytes of Flash") has no scalar
+    # value but is exactly the family fact that needs its qualifier.
+    supply_text = _SUPPLY_RANGE_TEXT.search(str(row.get("label") or ""))
+    if row.get("value") is None and not (memory_row and row.get("group", "memory") == "memory" and _SIZE_IN_TEXT.search(text)) and not supply_text:
+        return None
+    if supply_text and row.get("value") is None:
+        if _QQ_ABS_MAX.search(text):
+            return "absolute_maximum"
+        if _QQ_RATED.search(text) or re.search(r"\bsupply\b|\boperating\b|\bV(?:DD|CC)\b", text, re.I):
+            return "rated"
+        return None
+    if memory_row:
         if _QQ_DATA_FLASH.search(text):
             return "data_flash"
         if _QQ_CODE_FLASH.search(text):
@@ -449,7 +711,10 @@ def quantity_qualifier(row: dict[str, Any]) -> str | None:
             if _QQ_SRAM_SPECIAL.search(text):
                 return None
             return "total_sram"
-        return None  # bare "flash": the document did not say which
+        # Bare "Flash": the document did not say which. CR (renesas-correction-
+        # qualifier-ack-20260908): the null is wanted, not a guess; ST is
+        # disambiguated from its own parametric export on their side.
+        return None
     if unit in ("°c", "ºc", "c") or section == "temperature_range":
         if _QQ_STORAGE.search(text):
             return None
@@ -619,14 +884,15 @@ VENDOR_DOMAIN: dict[str, str] = {
     "adi": "analog.com", "analog devices": "analog.com", "ambiq": "ambiq.com", "nordic": "nordicsemi.com",
 }
 _VENDOR_HINTS: tuple[tuple[re.Pattern[str], str], ...] = (
-    (re.compile(r"^(?:RM|UM|PM|DS|AN|ES)\d{4}$|^STM32|^STM8"), "st.com"),
-    (re.compile(r"^(?:SLAU|SLAS|SPRU|SPRS|SPNU|SPNS|SLVS|SLLS|SPMU|SPMS)[A-Z0-9]+$|^(?:TMS320|TMS570|MSP430|MSPM0|TM4C|AM2|RM4|CC\d{4})"), "ti.com"),
-    (re.compile(r"^R01(?:UH|DS|AN)\d{4}|^(?:RA\d|RX\d|RL78|RZ|RH850)"), "renesas.com"),
-    (re.compile(r"^DS\d{8}[A-Z]?$|^DS\d{5}[A-Z]$|^(?:PIC|dsPIC|AT(?:SAM|mega|tiny|xmega)|SAM[A-Z]\d)"), "microchip.com"),
-    (re.compile(r"^GD32"), "gigadevice.com"),
-    (re.compile(r"^(?:EFM32|EFR32|EFM8|C8051|SiM3|Si\d{4})"), "silabs.com"),
-    (re.compile(r"^(?:MK|MKL|MKV|MKE|MKW|LPC|MIMXRT|i\.MX|MCX|S32|KL\d)[A-Z0-9]*"), "nxp.com"),
-    (re.compile(r"^(?:XMC|PSoC|CY8C|TLE|AURIX|TC3)"), "infineon.com"),
+    (re.compile(r"^(?:RM|UM|PM|DS|AN|ES)\d{4}$|^STM32|^STM8|^rm\d{4}|^(?:L\d{4}|L\d{4}[A-Z]?|ST1S\d+|STSPIN\w*|STM|VIPER|L6\d{3}|L7\d{3}|L5\d{3}|L9\d{3})\b", re.I), "st.com"),
+    (re.compile(r"^(?:SLAU|SLAS|SPRU|SPRS|SPNU|SPNS|SPNZ|SLVS|SLLS|SPMU|SPMS|SPRUI|SPRUH|SPRUG|SPRUF|SLAA|SWRU|SWRS|TIDU)[A-Z0-9]+|^(?:TMS320|TMS570|MSP430|MSPM0|MSPM33|TM4C|AM2|AM6|RM4|RM5|CC\d{4}|Tiva|Concerto|F28M|Jacinto|PRU\b)", re.I), "ti.com"),
+    (re.compile(r"^R01(?:UH|DS|AN|TU)\d{4}|^REN_|^(?:RA\d|RX\d|RL78|RZ|RH850|RE01|R7F|R5F|DA1\d{4})", re.I), "renesas.com"),
+    (re.compile(r"^DS\d{8}[A-Z]?$|^DS\d{5}[A-Z]$|^(?:PIC|dsPIC|AT(?:SAM|mega|tiny|xmega)|SAM[A-Z]\d|SAM9|CEC1\d{2}|MEC1\d{2}|AVR)", re.I), "microchip.com"),
+    (re.compile(r"^GD32", re.I), "gigadevice.com"),
+    (re.compile(r"^(?:EFM32|EFR32|EFM8|C8051|SiM3|Si\d{4}|BGM|MGM|EZR32)", re.I), "silabs.com"),
+    (re.compile(r"^(?:MK|MKL|MKV|MKE|MKW|LPC|MIMXRT|IMXRT|i\.?MX|MCX|S32|KL\d|K\d{2}P\d{2,3}M|KE\d|KV\d|KW\d|KBTLDR|DRM\d{3}|FT10RM|Kinetis|Freescale|QN9|JN5|RW61)", re.I), "nxp.com"),
+    (re.compile(r"^(?:XMC|PSoC|PSOC|CY8C|CYW|TLE|AURIX|TC2|TC3|TC4|infineon|infns)", re.I), "infineon.com"),
+    (re.compile(r"^nRF\d{4,5}", re.I), "nordicsemi.com"),
 )
 
 

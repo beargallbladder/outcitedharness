@@ -1,0 +1,145 @@
+{
+  "schema": "harness.electronics-key-features-gold.v1",
+  "source_artifact": "stm32f103c4.pdf",
+  "source": "STM32F103x4/x6 datasheet DocID15060 Rev 7, Features page (p.1). Written cold from the page text before scoring.",
+  "expected": [
+    {
+      "group": "processing",
+      "label": "Cortex.{0,3}-M3"
+    },
+    {
+      "group": "processing",
+      "label": "72 MHz",
+      "value": 72,
+      "quantity_qualifier": "maximum"
+    },
+    {
+      "group": "memory",
+      "label": "16 or 32 Kbytes of Flash",
+      "varies_by_part": true,
+      "note": "bare \"Flash\": qualifier stays null (CR renesas-correction-qualifier-ack-20260908)"
+    },
+    {
+      "group": "memory",
+      "label": "6 or 10 Kbytes of SRAM",
+      "varies_by_part": true,
+      "quantity_qualifier": "total_sram"
+    },
+    {
+      "group": "power_clock_reset",
+      "label": "2.0 to 3.6 V",
+      "quantity_qualifier": "rated"
+    },
+    {
+      "group": "power_clock_reset",
+      "label": "POR, PDR"
+    },
+    {
+      "group": "power_clock_reset",
+      "label": "4-to-16 MHz crystal"
+    },
+    {
+      "group": "power_clock_reset",
+      "label": "8 MHz factory-trimmed RC"
+    },
+    {
+      "group": "power_clock_reset",
+      "label": "40 kHz RC"
+    },
+    {
+      "group": "power_clock_reset",
+      "label": "Sleep, Stop and Standby"
+    },
+    {
+      "group": "power_clock_reset",
+      "label": "VBAT"
+    },
+    {
+      "group": "analogue",
+      "label": "12-bit.{0,12}A/D",
+      "instances": 2
+    },
+    {
+      "group": "analogue",
+      "label": "Temperature sensor"
+    },
+    {
+      "group": "peripherals",
+      "label": "7-channel DMA"
+    },
+    {
+      "group": "io_package_environment",
+      "label": "51 fast I/O ports",
+      "qualifier_verbatim": "Up to"
+    },
+    {
+      "group": "io_package_environment",
+      "label": "26/37/51 I/Os",
+      "varies_by_part": true
+    },
+    {
+      "group": "io_package_environment",
+      "label": "LQFP64"
+    },
+    {
+      "group": "io_package_environment",
+      "label": "VFQFPN36"
+    },
+    {
+      "group": "timers_pwm_control",
+      "label": "Two 16-bit timers"
+    },
+    {
+      "group": "timers_pwm_control",
+      "label": "motor control PWM timer"
+    },
+    {
+      "group": "timers_pwm_control",
+      "label": "2 watchdog timers",
+      "instances": 2
+    },
+    {
+      "group": "timers_pwm_control",
+      "label": "SysTick"
+    },
+    {
+      "group": "connectivity",
+      "label": "I2C",
+      "instances": 1
+    },
+    {
+      "group": "connectivity",
+      "label": "USARTs?",
+      "instances": 2
+    },
+    {
+      "group": "connectivity",
+      "label": "\\bSPI\\b",
+      "instances": 1
+    },
+    {
+      "group": "connectivity",
+      "label": "CAN interface"
+    },
+    {
+      "group": "connectivity",
+      "label": "USB 2.0 full-speed"
+    },
+    {
+      "group": "security_safety_identity",
+      "label": "CRC calculation unit"
+    },
+    {
+      "group": "security_safety_identity",
+      "label": "96-bit unique ID"
+    }
+  ],
+  "forbidden": [
+    {
+      "group": "power_clock_reset",
+      "label": "2.0 to 3.6 V",
+      "varies_by_part": true,
+      "why": "supply range is an envelope, never varies_by_part (CR)"
+    }
+  ]
+}
