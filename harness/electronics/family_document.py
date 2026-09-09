@@ -513,7 +513,7 @@ _CORE = re.compile(
 _MAX_FREQ = re.compile(r"\b(?:(up\s+to|max(?:imum)?(?:\s+of)?|maximum\s+frequency\s+of)\s*(\d{1,3}(?:\.\d)?)\s*MHz|(\d{1,3}(?:\.\d)?)\s*MHz\s+(max(?:imum)?(?:\s+(?:operating\s+)?frequency)?))", re.I)
 _SUPPLY = re.compile(r"\b(\d\.\d{1,2})\s*V?\s*(?:to|–|-|~)\s*(\d\.\d{1,2})\s*V\b")
 _TEMP = re.compile(r"[-–−]\s*40\s*°?\s*C?\s*(?:to|–|-|~|\.\.)\s*\+?\s*(85|105|125|150)\s*°\s*C")
-_PACKAGE = re.compile(r"\b((?:LQFP|UFQFPN|UFBGA|TFBGA|WLCSP|LFBGA|QFN|VQFN|HWQFN|TQFP|VFQFPN|EWLCSP|LGA|TSSOP|SOIC|SSOP|SO|DIP|PDIP|SOT|VSSOP|HVQFN|HTQFP|nFBGA|PLCC|CSP|HLQFP|WQFN|DFN|UDFN|uDFN|LQFN|QFP|BGA)\s?-?\d{1,3}[A-Z]?)\b")
+_PACKAGE = re.compile(r"\b((?:LFQFP|TFLGA|PLQP|PTLG|PWQN|PLBG|LQFP|UFQFPN|UFBGA|TFBGA|WLCSP|LFBGA|QFN|VQFN|HWQFN|TQFP|VFQFPN|EWLCSP|LGA|TSSOP|SOIC|SSOP|SO|DIP|PDIP|SOT|VSSOP|HVQFN|HTQFP|nFBGA|PLCC|CSP|HLQFP|WQFN|DFN|UDFN|uDFN|LQFN|QFP|BGA)\s?-?\d{1,3}[A-Z]?)\b")
 
 
 def read_prose_facts(page_texts: dict[int, str], max_pages: int = 160) -> list[dict[str, Any]]:
@@ -568,6 +568,42 @@ def read_prose_facts(page_texts: dict[int, str], max_pages: int = 160) -> list[d
     return out[:80]
 
 
+_PKG_WORD = r"(?:LFQFP|TFLGA|PLQP|PTLG|PWQN|PLBG|PVQN|LQFP|UFQFPN|UFBGA|TFBGA|WLCSP|LFBGA|QFN|VQFN|HWQFN|TQFP|VFQFPN|EWLCSP|LGA|TSSOP|SOIC|SSOP|DIP|PDIP|VSSOP|HVQFN|HTQFP|nFBGA|PLCC|CSP|HLQFP|WQFN|DFN|UDFN|LQFN|QFP|BGA|WFLGA|WLBGA|VFBGA)"
+# Renesas RA/RX house style: "I/O ports for the 100-pin LQFP" ... "I/O pins: 80".
+_IO_FOR_PACKAGE = re.compile(
+    rf"I/O\s+ports?\s+for\s+the\s+(?P<pins>\d{{2,3}})-pin\s+(?P<pkg>{_PKG_WORD})[^\n]*\n(?:[^\n]*\n){{0,2}}?[–\-\s]*I/O\s+pins?\s*[:：]\s*(?P<io>\d{{1,3}})",
+    re.I,
+)
+# Generic proximity: "<N>-pin <PKG>" and "I/O (pins|ports)[:] <M>" within a short window, either order.
+_IO_NEAR_PACKAGE = re.compile(
+    rf"(?P<pins>\d{{2,3}})-(?:pin|lead)\s+(?P<pkg>{_PKG_WORD})\b(?P<mid>[^\n]{{0,60}}\n?[^\n]{{0,80}}?)\b(?:I/Os?|GPIOs?|I/O\s+(?:pins|ports)|general[- ]purpose\s+I/Os?)\s*[:：]?\s*(?P<io>\d{{1,3}})\b",
+    re.I,
+)
+
+
+def read_io_by_package(page_texts: dict[int, str]) -> list[dict[str, Any]]:
+    """Package-qualified I/O counts: the document's own "N-pin PACKAGE -> M
+    I/O" statements. Each row is one (pin count, package) with its I/O count,
+    verbatim and page. Never a scalar for the family."""
+    out: list[dict[str, Any]] = []
+    seen: set[tuple[int, str, int]] = set()
+    for pno, text in page_texts.items():
+        for pattern, kind in ((_IO_FOR_PACKAGE, "io_ports_for_package"), (_IO_NEAR_PACKAGE, "io_near_package")):
+            for match in pattern.finditer(text):
+                pins, io = int(match.group("pins")), int(match.group("io"))
+                pkg = match.group("pkg").upper()
+                if io > pins or io < 4:
+                    continue  # plausibility: I/O never exceeds pins
+                if kind == "io_near_package" and re.search(r"\d", match.group("mid") or "") and len(match.group("mid") or "") > 40:
+                    continue  # too much text between; likely unrelated numbers
+                key = (pins, pkg, io)
+                if key in seen:
+                    continue
+                seen.add(key)
+                out.append({"pin_count": pins, "package": pkg, "io_count": io, "pattern": kind, "verbatim": _norm(match.group(0))[:200], "receipt": {"page": pno}})
+    return out[:40]
+
+
 def read_memory(document: Any, page_texts: dict[int, str], chapters: dict[str, Any]) -> list[dict[str, Any]]:
     """Rows naming a memory region with a size, from memory-map/flash/SRAM chapter pages and the cover."""
     pages: list[int] = [1, 2, 3]
@@ -607,6 +643,7 @@ def read_family_document(path: Path, *, vendor: str | None = None, max_text_page
     chapter_features = read_chapter_features(page_texts, chapters, document.page_count)
     memory = read_memory(document, page_texts, chapters)
     prose_facts = read_prose_facts(page_texts)
+    io_by_package = read_io_by_package(page_texts)
     chapters.pop("all_entries", None)
     return {
         "schema": SCHEMA,
@@ -627,6 +664,7 @@ def read_family_document(path: Path, *, vendor: str | None = None, max_text_page
         "chapter_features": chapter_features,
         "memory": memory,
         "prose_facts": prose_facts,
+        "io_by_package": io_by_package,
         "bogey": {
             "chapter_entries": chapters["entries"],
             "peripheral_classes": len(chapters["peripheral_classes"]),
@@ -637,5 +675,6 @@ def read_family_document(path: Path, *, vendor: str | None = None, max_text_page
             "chapter_features": len(chapter_features),
             "chapter_feature_sections": len({(f["receipt"]["page"], f["section"]) for f in chapter_features}),
             "memory_rows": len(memory),
+            "io_by_package_rows": len(io_by_package),
         },
     }

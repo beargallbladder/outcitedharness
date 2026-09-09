@@ -369,6 +369,13 @@ def build_grid(record: dict[str, Any], vendor_by_sha: dict[str, str] | None = No
             label = ", ".join(fact["value"])
         emit(group, cls, label, pages=[fact["receipt"]["page"]], verbatim=fact["verbatim"], tier="grid" if len(label) <= _GRID_MAX_LEN else "below_grid", value=fact.get("value") if fact["kind"] != "packages" else None, unit=fact.get("unit"), qualifier=fact.get("qualifier_verbatim"), section=fact["kind"], flags={"packages": fact["value"]} if fact["kind"] == "packages" else None)
 
+    # 5b. Package-qualified I/O counts. One row per (pin count, package); the
+    #     I/O number is a value only under that package qualifier. CR: never a
+    #     scalar, never expanded to members. `varies_by_part` is forced on.
+    for row in record.get("io_by_package", []):
+        label = f"{row['io_count']} I/O ({row['pin_count']}-pin {row['package']})"
+        emit("io_package_environment", "gpio", label, pages=[row["receipt"]["page"]], verbatim=row["verbatim"], tier="grid", value=row["io_count"], unit="I/O", section="io_by_package", flags={"package_qualifier": {"pin_count": row["pin_count"], "package": row["package"]}, "varies_by_part": True, "pattern": row["pattern"]})
+
     # 6. Chapter presence: asserted present, with location. Never absence.
     presence = []
     for cls, entries in record.get("chapters", {}).get("peripheral_classes", {}).items():
