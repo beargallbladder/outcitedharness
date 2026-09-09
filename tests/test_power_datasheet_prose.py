@@ -116,6 +116,21 @@ def test_infineon_operating_and_storage_is_kept():
     assert [-55.0, 175.0] in temps
     assert [-65.0, 150.0] not in temps
 
+    facts = _facts("Drain-source voltage V DSS 750 V static, T = -55°C to 175°C")
+    assert [-55.0, 175.0] in _of(facts, "temp_range")
+
+
+def test_optimos_product_summary_vds_rds():
+    facts = _facts(
+        "Product Summary\n"
+        "VDS 30 30 V\n"
+        "RDS(on),max VGS=10 V 5 3.7 mW\n"
+        "ID 40 40 A\n"
+    )
+    assert 30.0 in _of(facts, "vds")
+    assert 0.0037 in _of(facts, "rds_max") or 0.005 in _of(facts, "rds_max")
+    assert 40.0 in _of(facts, "id_max")
+
 
 def test_rohm_outline_box_vds_id_rds():
     """ROHM Si MOSFET page-1 outline: VDSS / RDS(on)(Max.) / ID, including P-ch."""

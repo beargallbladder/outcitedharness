@@ -66,10 +66,10 @@ _VALUE_UNIT = re.compile(r"^[-−–+±]?\s?\d+(?:\.\d+)?\s?[pnuµμmkM]?(?:Ω|O
 _VALUE_UNIT_UPPER = re.compile(r"^[A-Za-z()/_]+\s*≤\s*[-−–+]?\d+(?:\.\d+)?\s?[pnuµμmkM]?(?:Ω|Ohm|V|A|W|°C|ºC|C|Hz|s|F|H|J|%)(?:\s*\(\d\))?$")  # "ISWITCH ≤ 3.0A"
 _HEADER_CONDITION = re.compile(r"\b(T[AJC]|V[A-Z]{1,3})\s*=\s*[-+]?\d", re.I)
 
-_TITLE_ABS_MAX = re.compile(r"absolute\s+maximum|abs\.?\s*max", re.I)
+_TITLE_ABS_MAX = re.compile(r"absolute\s+maximum|abs\.?\s*max|maximum\s+ratings", re.I)
 _TITLE_RECOMMENDED = re.compile(r"recommended\s+operating|operating\s+conditions|operating\s+range|operating\s+ratings", re.I)
 _TITLE_THERMAL = re.compile(r"thermal\s+(?:information|characteristics|resistance|data)", re.I)
-_TITLE_SUMMARY = re.compile(r"product\s+summary|key\s+(?:specifications|parameters)|summary", re.I)
+_TITLE_SUMMARY = re.compile(r"product\s+summary|key\s+(?:performance\s+)?(?:specifications|parameters)|summary", re.I)
 _TITLE_EC = re.compile(r"electrical\s+characteristics|electrical\s+specifications|static\s+characteristics|dynamic\s+characteristics|characteristics", re.I)
 _TITLE_ORDER = re.compile(r"ordering|package\s+information|packaging|device\s+information|revision\s+history|pin\s+(?:functions?|configuration)", re.I)
 
@@ -127,8 +127,8 @@ _CANONICAL: tuple[tuple[re.Pattern[str], str], ...] = (
     (re.compile(r"\boutput\s+voltage", re.I), "VOUT"),
     (re.compile(r"\boutput\s+current|load\s+current", re.I), "IOUT"),
     (re.compile(r"drain[- ]to[- ]source\s+on[- ]?(?:state\s+)?resistance|on[- ]resistance", re.I), "RDS(on)"),
-    (re.compile(r"drain[- ]to[- ]source\s+(?:breakdown\s+)?voltage|drain[- ]source\s+voltage", re.I), "VDS"),
-    (re.compile(r"continuous\s+drain(?:[- ]to[- ]drain)?\s+current|drain[- ]to[- ]drain\s+current|operating\s+current", re.I), "ID"),
+    (re.compile(r"drain[- ]to[- ]source\s+(?:breakdown\s+)?voltage|drain[- ]source\s+voltage|vdss\b", re.I), "VDS"),
+    (re.compile(r"continuous\s+(?:dc\s+)?drain(?:[- ]to[- ]drain)?\s+current|drain[- ]to[- ]drain\s+current|operating\s+current", re.I), "ID"),
     (re.compile(r"total\s+gate\s+charge|gate\s+charge\s+total", re.I), "Qg"),
 )
 
@@ -362,6 +362,41 @@ def _column_edges(table: Any) -> list[float]:
     return sorted(edges)
 
 
+def _split_values_min_typ_max(
+    table: Any,
+    spans: list[dict[str, Any]],
+    header: list[tuple[float, float, str]],
+    roles: dict[int, str],
+    data_start: int,
+) -> tuple[list[tuple[float, float, str]], dict[int, str], int]:
+    """Infineon 'Values' over a second header row Min. / Typ. / Max."""
+    value_idxs = [i for i, role in roles.items() if role == "value"]
+    if len(value_idxs) != 1:
+        return header, roles, data_start
+    vi = value_idxs[0]
+    x0, x1, name = header[vi]
+    if not re.search(r"^values?$", name.strip(), re.I):
+        return header, roles, data_start
+    sub, nxt = _row_as_header(table, spans, data_start)
+    found: dict[str, tuple[float, float, str]] = {}
+    for sx0, sx1, subname in sub:
+        cx = (sx0 + sx1) / 2
+        if not (x0 - 4 <= cx <= x1 + 4):
+            continue
+        if re.match(r"^\s*min", subname, re.I):
+            found["min"] = (sx0, sx1, subname)
+        elif re.match(r"^\s*typ", subname, re.I):
+            found["typ"] = (sx0, sx1, subname)
+        elif re.match(r"^\s*max", subname, re.I):
+            found["max"] = (sx0, sx1, subname)
+    if "min" not in found or "max" not in found:
+        return header, roles, data_start
+    pieces = [found[k] for k in ("min", "typ", "max") if k in found]
+    new_header = header[:vi] + pieces + header[vi + 1:]
+    new_roles, _ = _roles_for_header([n for _, _, n in new_header], [])
+    return new_header, new_roles, nxt
+
+
 def _row_as_header(table: Any, spans: list[dict[str, Any]], row_index: int) -> tuple[list[tuple[float, float, str]], int]:
     """Read table.rows[row_index] as a header row: (columns, next data row)."""
     if row_index >= len(table.rows):
@@ -456,6 +491,13 @@ def _parse_number(text: str) -> float | list[float] | None:
             return float(t)
         except ValueError:
             return None
+    # Infineon Values cell before the Min/Typ/Max split: "‑ ‑ 750".
+    parts = [p for p in t.replace("±", "").split() if p not in {"-", "‑", "—", "–", "."}]
+    if len(parts) == 1 and _NUMBER.match(parts[0]):
+        try:
+            return float(parts[0].replace(" ", ""))
+        except ValueError:
+            return None
     return None
 
 
@@ -508,6 +550,9 @@ def read_characteristic_tables(document: Any) -> list[dict[str, Any]]:
                     continue
             title = title_in_table or _title_above(page_lines, table.bbox)
             if _TITLE_ORDER.search(title) and not _TITLE_EC.search(title):
+                continue
+            header, roles, data_start = _split_values_min_typ_max(table, spans, header, roles, data_start)
+            if not _is_characteristics_header(roles):
                 continue
             kind = _table_kind(title)
             if kind == "esd":
@@ -757,7 +802,12 @@ _PROSE_PATTERNS: tuple[tuple[re.Pattern[str], str, str], ...] = (
     # ROHM outline box + Infineon Features: "VDSS 40V" / "VDSS = 1200 V" / "ID ±24A" / "IDDC = 30 A"
     (re.compile(r"V\s*DSS\s*(?:/?\s*|=)\s*([-+]?\d+(?:\.\d+)?)\s*V", re.I), "vds", "VDS"),
     (re.compile(r"(?:^|[\s/])ID(?:DC)?\s*[±=]?\s*(\d+(?:\.\d+)?)\s*A\b", re.I), "id_max", "ID"),
+    (re.compile(r"(?:^|[\s/])I\s*D\s+(\d+(?:\.\d+)?)\s+\d+(?:\.\d+)?\s+A\b", re.I), "id_max", "ID"),
     (re.compile(r"RDS\s*\(?\s*on\s*\)?\s*(?:\(\s*Max\.?\s*\)|=)\s*(\d+(?:\.\d+)?)\s*(m)?\s*[ΩΩωΩohm]?", re.I), "rds_max", "RDS(on)"),
+    # OptiMOS Product Summary: "VDS 30 30 V" / "RDS(on),max … 3.7 mW" (mW = mΩ).
+    (re.compile(r"\bV\s*DS\s+([-+]?\d+(?:\.\d+)?)\s+(?:\d+(?:\.\d+)?\s+)?V\b", re.I), "vds", "VDS"),
+    (re.compile(r"R\s*DS\s*\(?on\)?\s*,?\s*max\b.*?(\d+(?:\.\d+)?)\s*(?:m\s*[WΩΩω]|mΩ)", re.I), "rds_max", "RDS(on)"),
+    (re.compile(rf"(?:static|over\s+full\s+T|operating).{{0,48}}T\s*[jvc]?\s*=\s*{_SNUM}(?:{_C})?{_TO}{_SNUM}{_C}", re.I), "temp_range", "TJ"),
 )
 _PROSE_STOP = re.compile(r"absolute\s+maximum\s+ratings|pin\s+configuration|electrical\s+characteristics|specifications", re.I)
 _PROSE_PARAM = {
@@ -847,7 +897,7 @@ def _prose_value(kind: str, nums: list[float], matched: str) -> Any | None:
         if not nums:
             return None
         value = nums[0]
-        if re.search(r"\bm\s*[ΩΩωohm]|mΩ", matched, re.I):
+        if re.search(r"\bm\s*[ΩΩωohmW]|mΩ", matched, re.I):
             value = value / 1000.0
         return value
     if not nums or nums[0] > 1000:
@@ -927,11 +977,40 @@ def read_front_page_facts(document: Any, max_pages: int = 3) -> list[dict[str, A
 # Grid
 # ---------------------------------------------------------------------------
 
+_SYMBOL_IN_TEXT = re.compile(
+    r"\b(V\s*\(?\s*BR\s*\)?\s*DSS|VDSS|VDS|RDS\s*\(?\s*on\s*\)?|IDDC|ID,pulse|IDM|ID)\b",
+    re.I,
+)
+
+
+def _recover_symbol(symbol: str, parameter: str, verbatim: str = "") -> str:
+    if (symbol or "").strip():
+        return symbol
+    aliases = canonical_symbols(parameter or "")
+    if aliases:
+        return aliases[0]
+    match = _SYMBOL_IN_TEXT.search(f"{parameter} {verbatim}")
+    if not match:
+        return symbol
+    raw = re.sub(r"[\s,]+", "", match.group(1)).upper()
+    return {
+        "VBRDSS": "V(BR)DSS",
+        "VDSS": "VDSS",
+        "VDS": "VDS",
+        "RDSON": "RDS(on)",
+        "RDS(ON)": "RDS(on)",
+        "IDDC": "ID",
+        "IDPULSE": "ID,pulse",
+        "IDM": "IDM",
+        "ID": "ID",
+    }.get(raw, raw)
+
+
 def _rows_from_fact(fact: dict[str, Any], base: dict[str, Any]) -> list[dict[str, Any]]:
     if not (fact.get("symbol") or "").strip():
-        aliases = canonical_symbols(fact.get("parameter") or "")
-        if aliases:
-            fact = {**fact, "symbol": aliases[0], "symbol_as_printed": fact.get("symbol_as_printed") or aliases[0]}
+        recovered = _recover_symbol("", fact.get("parameter") or "", fact.get("verbatim") or "")
+        if recovered:
+            fact = {**fact, "symbol": recovered, "symbol_as_printed": fact.get("symbol_as_printed") or recovered}
     group = classify(fact["symbol"], fact["parameter"] or (fact.get("condition_verbatim") or "" if not fact["symbol"] else ""), fact["section"])
     label_head = " ".join(p for p in (fact["symbol"], fact["parameter"]) if p).strip()
     kind = fact["table_kind"]

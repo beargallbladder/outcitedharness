@@ -94,3 +94,33 @@ def test_q1_q2_header_is_fragmented():
     merged = ["", "PARAMETER", "TEST CONDITIONS", "Q1 Control FET MIN TYP MAX", "Q2 Sync FET MIN TYP MAX", "UNIT"]
     assert not _header_looks_fragmented(merged)
     assert not _header_looks_fragmented(["SYMBOL", "PARAMETER", "MIN", "TYP", "MAX", "UNIT"])
+
+
+def test_vdss_parameter_recovers_switching_symbol():
+    from harness.electronics.power_datasheet import _recover_symbol
+
+    assert _recover_symbol("", "VDSS over full Tj,range", "VDSS over full Tj,range 750 V") == "VDS"
+    rows = _rows_from_fact(
+        {
+            "symbol": "",
+            "symbol_as_printed": "",
+            "parameter": "VDSS over full Tj,range",
+            "section": "",
+            "table_kind": "characteristics",
+            "table_title": "Key performance parameters",
+            "table_condition": None,
+            "condition_verbatim": None,
+            "unit": "V",
+            "value": 750.0,
+            "verbatim": "VDSS over full Tj,range 750 V",
+            "page": 1,
+        },
+        {"vendor": "infineon.com"},
+    )
+    assert rows[0]["symbol"] == "VDS"
+    assert rows[0]["group"] == "switching"
+    assert rows[0]["value"] == 750.0
+
+
+def test_continuous_dc_drain_current_is_id():
+    assert "ID" in canonical_symbols("Continuous DC drain current")
