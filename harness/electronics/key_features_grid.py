@@ -428,7 +428,7 @@ def build_grid(record: dict[str, Any], vendor_by_sha: dict[str, str] | None = No
         # A document with a features table (TI) summarises the family there;
         # its long "Features" section is per-peripheral detail. From that
         # section only a counted or sized line is a grid fact.
-        if has_features_table and feature.get("source") not in ("features_table", "description") and feature["receipt"]["page"] > 6:
+        if has_features_table and feature.get("source") == "features_continuation":
             if not (feature.get("count") or (value is not None and unit)):
                 tier = "below_grid"
         for group in sorted(groups):

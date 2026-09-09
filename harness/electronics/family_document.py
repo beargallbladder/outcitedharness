@@ -573,7 +573,11 @@ def read_features(page_texts: dict[int, str], max_pages: int = 6) -> list[dict[s
         return out
     last = max(page_texts)
     # "Features", "Key Features", or "<Part> Microcontroller Features" (TI).
-    heading_re = re.compile(r"^\s*(?:\d{1,2}(?:\.\d{1,2}){0,2}\s*\n?\s*)?(?:[A-Za-z][A-Za-z0-9/™®+\- ]{0,40}?\s+)?(?:key\s+|device\s+|product\s+|microcontroller\s+)?features\s*$", re.I | re.M)
+    heading_re = re.compile(
+        r"^\s*(?:\d{1,2}(?:\.\d{1,2}){0,2}\s*\n?\s*)?(?:[A-Za-z][A-Za-z0-9/™®+\- ]{0,40}?\s+)?(?:key\s+|device\s+|product\s+|microcontroller\s+)?features\s*$"
+        r"|^\s*(?:\d{1,2}(?:\.\d{1,2}){0,2}\s*\n?\s*)?[A-Za-z0-9][A-Za-z0-9/+\- ]{0,30}?\s+(?:sub-?family|family|series)\s+introduction\s*$",
+        re.I | re.M,
+    )
 
     def glyph_lines(text: str) -> int:
         return sum(1 for line in text.splitlines() if _GLYPH_LINE.match(line) or _DASH_LINE.match(line))
@@ -582,12 +586,16 @@ def read_features(page_texts: dict[int, str], max_pages: int = 6) -> list[dict[s
     # front matter puts it (reference manuals put it after a 40-page TOC), plus
     # the pages that continue its bullet list.
     pages: list[int] = list(range(1, min(max_pages, last) + 1))
+    heading_page: int | None = None
     for pno in range(max_pages + 1, min(FEATURES_SEARCH_PAGES, last) + 1):
         text = page_texts.get(pno) or ""
         if heading_re.search(text) and glyph_lines(text) >= 8:
             pages.append(pno)
+            heading_page = pno
             nxt = pno + 1
-            while nxt <= last and glyph_lines(page_texts.get(nxt) or "") >= 8 and not re.search(r"^\s*1\.\s+Overview\b|^\s*Table\s+1\.\d", page_texts.get(nxt) or "", re.M):
+            # Continuation pages: still dense with bullets, not a new chapter,
+            # and not a features table (read_features_table owns that page).
+            while nxt <= last and glyph_lines(page_texts.get(nxt) or "") >= 8 and not re.search(r"^\s*1\.\s+Overview\b|^\s*Table\s+1\.\d", page_texts.get(nxt) or "", re.M) and not _FEATURES_TABLE_CAPTION.search(page_texts.get(nxt) or ""):
                 pages.append(nxt)
                 nxt += 1
             break
@@ -599,7 +607,11 @@ def read_features(page_texts: dict[int, str], max_pages: int = 6) -> list[dict[s
         heading = heading_re.search(text)
         block = text[heading.end():] if heading else text
         for item in _bullet_items(block):
-            out.append(_feature(item["text"], pno, section=item.get("section"), level=item.get("level"), parent=item.get("parent")))
+            row = _feature(item["text"], pno, section=item.get("section"), level=item.get("level"), parent=item.get("parent"))
+            # The page the Features heading is on carries the family summary;
+            # its continuation pages are per-peripheral detail.
+            row["source"] = "features_heading_page" if pno == heading_page or pno <= max_pages else "features_continuation"
+            out.append(row)
     return out[:400]
 
 
@@ -610,7 +622,8 @@ FEATURES_SEARCH_PAGES = 120
 # Features": Feature | Description, with one-cell section rows "Communication
 # Interfaces", "Analog Support"). The description cell is the fact as printed;
 # the feature cell names the peripheral ("Operating Range (Ambient)").
-_FEATURES_TABLE_CAPTION = re.compile(r"^\s*Table\s+\d{1,2}-\d{1,2}\.\s+.{0,60}\bFeatures\s*$", re.I | re.M)
+_FEATURES_TABLE_CAPTION = re.compile(r"^\s*Table\s+\d{1,2}[-.]\d{1,2}\.?\s+.{0,60}\b(?:Features|Module functional categories|functional categories)\s*$", re.I | re.M)
+_FEATURES_TABLE_HEADER = re.compile(r"^(?:feature|module\s+category|category|module|function|block)s?$", re.I)
 
 
 def read_features_table(document: Any, page_texts: dict[int, str], max_pages: int = 80) -> list[dict[str, Any]]:
@@ -624,18 +637,34 @@ def read_features_table(document: Any, page_texts: dict[int, str], max_pages: in
         except Exception:
             continue
         for table in tables:
-            rows = [[_norm(c or "") for c in row] for row in table.extract()]
+            raw_rows = [[(c or "") for c in row] for row in table.extract()]
+            rows = [[_norm(c) for c in row] for row in raw_rows]
             if not rows or len(rows[0]) != 2:
                 continue
-            header = [c.lower() for c in rows[0]]
-            if not ("feature" in header[0] and "description" in header[1]):
+            # The caption may be extracted as a first spanning row.
+            start = 1 if _FEATURES_TABLE_CAPTION.match(rows[0][0]) and not rows[0][1] else 0
+            if start >= len(rows):
+                continue
+            header = [c.lower() for c in rows[start]]
+            if not (_FEATURES_TABLE_HEADER.match(header[0]) and "description" in header[1]):
                 continue
             section: str | None = None
-            for feature_name, description in rows[1:]:
+            for (feature_name, description), (_, raw_description) in zip(rows[start + 1:], raw_rows[start + 1:]):
                 if feature_name and not description:
                     section = feature_name
                     continue
                 if not description or len(description) < 3:
+                    continue
+                # A category row whose description is a bullet list (Kinetis
+                # "Module functional categories"): each bullet is a fact, the
+                # category is its section.
+                if _GLYPH_LINE.match(raw_description.strip().splitlines()[0]):
+                    for item in _bullet_items(raw_description):
+                        if item.get("level", 1) != 1 or item["text"].rstrip().endswith(":"):
+                            continue
+                        row = _feature(item["text"], pno, section=feature_name, level=1)
+                        row["source"] = "features_table"
+                        out.append(row)
                     continue
                 # Parenthetical ranges are the fact; the frame is the section.
                 # "Industrial (-40°C to 85°C) temperature range" stays as printed.

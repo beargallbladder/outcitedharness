@@ -1,0 +1,122 @@
+{
+  "schema": "harness.electronics-key-features-gold.v1",
+  "source_artifact": "KL25P80M48SF0RM.pdf",
+  "source": "NXP/Freescale KL25 Sub-Family Reference Manual Rev 3: 2.3 KL25 Sub-Family Introduction bullets (p.38) and Table 2-1 Module functional categories (p.39). No 'Features' heading; the categories are the sections. Written cold before scoring.",
+  "expected": [
+    {
+      "group": "processing",
+      "label": "Cortex.{0,3}-M0\\+"
+    },
+    {
+      "group": "processing",
+      "label": "48 MHz",
+      "value": 48
+    },
+    {
+      "group": "memory",
+      "label": "128 KB.{0,3}flash",
+      "_note": "table prints \"Up to\", intro bullet prints \"up to\"; either row satisfies"
+    },
+    {
+      "group": "memory",
+      "label": "16 KB SRAM",
+      "value": 16,
+      "quantity_qualifier": "total_sram",
+      "qualifier_verbatim": "up to"
+    },
+    {
+      "group": "peripherals",
+      "label": "DMA"
+    },
+    {
+      "group": "power_clock_reset",
+      "label": "Low-leakage wakeup unit",
+      "_note": "document files it under System; the wakeup unit is a power-mode block"
+    },
+    {
+      "group": "analogue",
+      "label": "16-bit analog-to-digital converter"
+    },
+    {
+      "group": "analogue",
+      "label": "Comparator \\(CMP\\)"
+    },
+    {
+      "group": "analogue",
+      "label": "12-bit DAC"
+    },
+    {
+      "group": "timers_pwm_control",
+      "label": "6-channel TPM",
+      "instances": 1
+    },
+    {
+      "group": "timers_pwm_control",
+      "label": "2-channel TPM",
+      "instances": 2
+    },
+    {
+      "group": "timers_pwm_control",
+      "label": "periodic interrupt timer"
+    },
+    {
+      "group": "timers_pwm_control",
+      "label": "Real time clock"
+    },
+    {
+      "group": "timers_pwm_control",
+      "label": "Low-power timer"
+    },
+    {
+      "group": "connectivity",
+      "label": "serial peripheral interface",
+      "instances": 2
+    },
+    {
+      "group": "connectivity",
+      "label": "USB OTG controller"
+    },
+    {
+      "group": "connectivity",
+      "label": "I2C",
+      "instances": 2
+    },
+    {
+      "group": "connectivity",
+      "label": "UART"
+    },
+    {
+      "group": "security_safety_identity",
+      "label": "COP watchdog"
+    },
+    {
+      "group": "power_clock_reset",
+      "label": "1\\.71 ?V (?:to|-|–) 3\\.6 ?V",
+      "quantity_qualifier": "rated"
+    },
+    {
+      "group": "power_clock_reset",
+      "label": "MCG"
+    },
+    {
+      "group": "io_package_environment",
+      "label": "32-pin to 80-pin"
+    },
+    {
+      "group": "io_package_environment",
+      "label": "40 °C to 105 °C",
+      "quantity_qualifier": "ambient"
+    },
+    {
+      "group": "graphics_vision_touch_hmi",
+      "label": "Capacitive touch sense"
+    }
+  ],
+  "forbidden": [
+    {
+      "group": "processing",
+      "label": "Cortex-M4|Cortex-M3",
+      "why": "comparison-table mentions; the KL25 core is M0+"
+    }
+  ]
+}
