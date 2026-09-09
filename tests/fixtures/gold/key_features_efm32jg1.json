@@ -1,0 +1,127 @@
+{
+  "schema": "harness.electronics-key-features-gold.v1",
+  "source_artifact": "efm32jg1-rm (1).pdf",
+  "source": "Silicon Labs EFM32JG1 Reference Manual Rev 1.0: cover 'ENERGY FRIENDLY FEATURES' (p.1) and '2.3 MCU Features Overview' (p.26). Written cold before scoring.",
+  "expected": [
+    {
+      "group": "processing",
+      "label": "Cortex-M3"
+    },
+    {
+      "group": "processing",
+      "label": "40 MHz"
+    },
+    {
+      "group": "processing",
+      "label": "Memory Protection Unit"
+    },
+    {
+      "group": "memory",
+      "label": "256 KB Flash",
+      "value": 256
+    },
+    {
+      "group": "memory",
+      "label": "32 KB RAM",
+      "value": 32,
+      "quantity_qualifier": "total_sram"
+    },
+    {
+      "group": "io_package_environment",
+      "label": "32 General Purpose I/O pins",
+      "qualifier_verbatim": "Up to"
+    },
+    {
+      "group": "io_package_environment",
+      "label": "5 V tolerant I/O"
+    },
+    {
+      "group": "peripherals",
+      "label": "8 Channel DMA Controller"
+    },
+    {
+      "group": "peripherals",
+      "label": "12 Channel Peripheral Reflex System"
+    },
+    {
+      "group": "security_safety_identity",
+      "label": "CRYPTO Advanced Encryption Standard Accelerator"
+    },
+    {
+      "group": "security_safety_identity",
+      "label": "Accelerated SHA-1 and SHA-2"
+    },
+    {
+      "group": "security_safety_identity",
+      "label": "Elliptic Curve Cryptography"
+    },
+    {
+      "group": "security_safety_identity",
+      "label": "Cyclic Redundancy Check"
+    },
+    {
+      "group": "connectivity",
+      "label": "Universal Synchronous/Asynchronous Receiver/Transmitter",
+      "instances": 2
+    },
+    {
+      "group": "connectivity",
+      "label": "Low Energy UART",
+      "instances": 1
+    },
+    {
+      "group": "connectivity",
+      "label": "I2C Interface",
+      "instances": 1
+    },
+    {
+      "group": "timers_pwm_control",
+      "label": "16-bit Timer/Counter",
+      "instances": 2
+    },
+    {
+      "group": "timers_pwm_control",
+      "label": "16-bit Low Energy Timer"
+    },
+    {
+      "group": "timers_pwm_control",
+      "label": "CRYOTIMER"
+    },
+    {
+      "group": "timers_pwm_control",
+      "label": "32-bit Real-Time Counter and Calendar"
+    },
+    {
+      "group": "timers_pwm_control",
+      "label": "16-bit Pulse Counter"
+    },
+    {
+      "group": "timers_pwm_control",
+      "label": "Watchdog Timer"
+    },
+    {
+      "group": "power_clock_reset",
+      "label": "2\\.1 μA EM3 Stop current"
+    },
+    {
+      "group": "power_clock_reset",
+      "label": "63 μA/MHz"
+    },
+    {
+      "group": "power_clock_reset",
+      "label": "dc-dc converter"
+    }
+  ],
+  "forbidden": [
+    {
+      "group": "security_safety_identity",
+      "label": "Home automation",
+      "why": "an application, not a feature"
+    },
+    {
+      "group": "io_package_environment",
+      "label": "Industrial and factory automation",
+      "why": "an application, not a feature"
+    }
+  ]
+}

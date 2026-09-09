@@ -167,6 +167,24 @@ INSTANCE_CLASS: dict[str, tuple[str, str]] = {
     "LCDK": ("display", "LCD controller"),
     "MIPI": ("display", "MIPI DSI/CSI"),
     "LPADC": ("adc", "Low-power ADC (LPADC)"),
+    "TIMER": ("timer", "Timer/Counter (TIMER)"),
+    "WTIMER": ("timer", "Wide Timer/Counter (WTIMER)"),
+    "LETIMER": ("lptim", "Low Energy Timer (LETIMER)"),
+    "LEUART": ("usart", "Low Energy UART (LEUART)"),
+    "PCNT": ("timer", "Pulse Counter (PCNT)"),
+    "ACMP": ("comparator", "Analog Comparator (ACMP)"),
+    "IDAC": ("dac", "Current DAC (IDAC)"),
+    "VDAC": ("dac", "Voltage DAC (VDAC)"),
+    "RTCC": ("rtc", "Real Time Counter and Calendar (RTCC)"),
+    "CRYOTIMER": ("lptim", "Ultra Low Energy Timer (CRYOTIMER)"),
+    "LDMA": ("dma", "Linked DMA (LDMA)"),
+    "GPCRC": ("safety", "General Purpose CRC (GPCRC)"),
+    "PRS": ("interrupts", "Peripheral Reflex System (PRS)"),
+    "CSEN": ("touch", "Capacitive Sense (CSEN)"),
+    "LESENSE": ("touch", "Low Energy Sensor Interface (LESENSE)"),
+    "WDOG": ("watchdog", "Watchdog (WDOG)"),
+    "PCA": ("timer", "Programmable Counter Array (PCA)"),
+    "SMB": ("i2c", "SMBus (SMB)"),
 }
 
 _RANGE = re.compile(r"\d+(?:\.\d+)?\s*(?:-|–|to)\s*\d+(?:\.\d+)?")
@@ -351,7 +369,7 @@ def build_grid(record: dict[str, Any], vendor_by_sha: dict[str, str] | None = No
             "qualifier_verbatim": qualifier,
             # A supply range is the envelope of every member (CR decision);
             # temperature and anything "depending on MPN" varies by part.
-            "varies_by_part": False if (section == "supply_range" or _SUPPLY_RANGE_TEXT.search(label)) else varies_by_part(verbatim),
+            "varies_by_part": False if (section == "supply_range" or _SUPPLY_RANGE_TEXT.search(label) or _SUPPLY_RANGE_TEXT.search(verbatim)) else varies_by_part(verbatim),
             "tier": tier,
             "source_pages": sorted(set(pages))[:12],
             "verbatim": verbatim[:300],
@@ -959,4 +977,4 @@ def _package_or_temp(text: str) -> bool:
 
 
 def _power_fact(text: str) -> bool:
-    return bool(re.search(r"\b(?:V|mV|µA|uA|mA|nA)\b|/MHz|supply|standby|wake-?up|\bPLL\b|reset|LVD|BOR|POR", text))
+    return bool(re.search(r"\b(?:V|mV|µA|μA|uA|mA|nA)\b|(?<=\d\s)(?:µA|μA)|/MHz|supply|standby|wake-?up|\bPLL\b|reset|LVD|BOR|POR|\bcurrent\b|\bEM[0-4]\b|energy mode|dc-?dc|\bLDO\b|regulator", text, re.I))

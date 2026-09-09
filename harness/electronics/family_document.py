@@ -100,19 +100,19 @@ CHAPTER_VOCAB: tuple[tuple[str, re.Pattern[str]], ...] = (
     ("temp_sensor", re.compile(r"temperature\s+sensor|\bTSN\b|\bTEMPSENSOR\b", re.I)),
     ("opamp", re.compile(r"\bop-?amp|\boperational amplifier|\bpga\b", re.I)),
     ("comparator", re.compile(r"\bcomp(?:arator)?s?\b", re.I)),
-    ("crypto", re.compile(r"\baes\b|\bcryp\b|\bhash\b|\bpka\b|\bsaes\b|\brng\b|\btrng|\bcryptograph|\bsecurity\b|\bsecure\b|\bhsm\b|\bmathacl", re.I)),
+    ("crypto", re.compile(r"\baes\b|\bcryp\b|\bcrypto\b|\bhash\b|\bpka\b|\bsaes\b|\brng\b|\btrng|\bcryptograph|\bsecurity\b|\bsecure\b|\bhsm\b|\bmathacl|\bsha-?[123]\b|\bsha-?256\b|advanced encryption standard|elliptic curve|public key|\becdsa\b|\becdh\b", re.I)),
     ("trustzone", re.compile(r"\btrustzone|\bgtzc\b|\btz\b", re.I)),
     ("npu", re.compile(r"\bnpu\b|\bneural|\bai accelerator|\btinyengine", re.I)),
     ("wireless", re.compile(r"\bradio\b|\bbluetooth|\bble\b|\b802\.15\.4|\bzigbee|\bthread\b|\bwi-?fi|\brf subsystem|\bsub-ghz", re.I)),
-    ("safety", re.compile(r"\becc\b|\bcrc\b|\bpbist|\bstc\b|\besm\b|\berror signaling|\bccm-r4|\bself-test|\bfunctional safety", re.I)),
+    ("safety", re.compile(r"\becc\b|\bcrc\b|cyclic redundancy|\bpbist|\bstc\b|\besm\b|\berror signaling|\bccm-r4|\bself-test|\bfunctional safety", re.I)),
     ("debug", re.compile(r"\bdebug|\bdbg\b|\bswd\b|\bjtag|\btrace|\betm\b|\bcoresight", re.I)),
-    ("power", re.compile(r"\bpower (?:control|management|supply)|\bpwr\b|\bpmcu\b|\bpower-saving|low[- ]power modes|\bhibernat|\bbattery[- ]backed", re.I)),
+    ("power", re.compile(r"\bpower (?:control|management|supply)|\bpwr\b|\bpmcu\b|\bpower-saving|low[- ]power modes|\bhibernat|\bbattery[- ]backed|\bdc-?dc\b|\bldo\b|voltage regulator|brown-?out|\bbod\b|energy management|\bemu\b|\benergy modes?\b|\bEM[0-4]\b", re.I)),
     ("reset_clock", re.compile(r"\breset and clock|\brcc\b|\bclock (?:system|tree|configuration|control)|\boscillator|\bsysctl\b|\bclock module", re.I)),
     ("gpio", re.compile(r"\bgpio|\bgeneral[- ]purpose i/?os?|\bi/o ports?|\bport (?:control|i/o)|\biomux|\bpinmux|\bi/o multiplexing", re.I)),
     ("dma", re.compile(r"\bdma\b|[µμu]dma\b|\bdirect memory access|\bgpdma|\bmdma|\bbdma|\bdmamux|\bedma", re.I)),
-    ("timer", re.compile(r"\btimers?\b|\btim\d|\btimg|\btima|\bgptm|\bepwm|\becap|\beqep|\brti\b|\bhet\b|\bn2het|\boutput compare|\binput capture|\bpwm\b|\bqei\b|\bquadrature encoder", re.I)),
-    ("interrupts", re.compile(r"\binterrupt|\bnvic\b|\bexti\b|\bvim\b|\bevents?\b", re.I)),
-    ("cpu_core", re.compile(r"\b(?:cortex|cpu|processor core|core architecture|arm)\b", re.I)),
+    ("timer", re.compile(r"\btimers?\b|\btim\d|\btimg|\btima|\bgptm|\bepwm|\becap|\beqep|\brti\b|\bhet\b|\bn2het|\boutput compare|\binput capture|\bpwm\b|\bqei\b|\bquadrature encoder|\bcryotimer|\bletimer|\bwtimer|\bpulse counter|\bpcnt\b|\bpca\b|programmable counter array", re.I)),
+    ("interrupts", re.compile(r"\binterrupt|\bnvic\b|\bexti\b|\bvim\b|\bevents?\b|peripheral reflex system|\bprs\b", re.I)),
+    ("cpu_core", re.compile(r"\b(?:cortex|cpu|processor core|core architecture|arm)\b|memory protection unit|\bmpu\b|floating[- ]point unit|\bfpu\b|\bc?8051\b|\bcip-51\b|\brisc-v\b|\bxtensa\b|\bc28x\b|\brl78\b|\brxv\d\b|\bavr\b(?:\s+(?:core|cpu))|\bmips\b", re.I)),
 )
 
 # Instance grammar: canonical class -> regex whose group(1) is the instance
@@ -198,6 +198,26 @@ INSTANCE_GRAMMAR: tuple[tuple[str, re.Pattern[str]], ...] = (
     ("SDHC", re.compile(r"\b(SDHC|uSDHC\d?|USDHC\d?)\b")),
     ("FLEXIO", re.compile(r"\b(?:FLEXIO|FlexIO)(\d)\b")),
     ("FLEXSPI", re.compile(r"\b(?:FLEXSPI|FlexSPI)(\d)\b")),
+    # Silicon Labs EFM32/EFR32 house names (TIMER0, WTIMER0, LETIMER0, LEUART0,
+    # PCNT0, ACMP0, IDAC0, RTCC, CRYOTIMER, LDMA, GPCRC, PRS, CRYPTO, VDAC0, CSEN).
+    ("TIMER", re.compile(r"\bTIMER(\d)\b")),
+    ("WTIMER", re.compile(r"\bWTIMER(\d)\b")),
+    ("LETIMER", re.compile(r"\bLETIMER(\d)\b")),
+    ("LEUART", re.compile(r"\bLEUART(\d)\b")),
+    ("PCNT", re.compile(r"\bPCNT(\d)\b")),
+    ("ACMP", re.compile(r"\bACMP(\d)\b")),
+    ("IDAC", re.compile(r"\bIDAC(\d)\b")),
+    ("VDAC", re.compile(r"\bVDAC(\d)\b")),
+    ("RTCC", re.compile(r"\b(RTCC)\b")),
+    ("CRYOTIMER", re.compile(r"\b(CRYOTIMER)\b")),
+    ("LDMA", re.compile(r"\b(LDMA)\b")),
+    ("GPCRC", re.compile(r"\b(GPCRC)\b")),
+    ("PRS", re.compile(r"\b(PRS)\b")),
+    ("CSEN", re.compile(r"\b(CSEN)\b")),
+    ("LESENSE", re.compile(r"\b(LESENSE)\b")),
+    ("WDOG", re.compile(r"\bWDOG(\d)\b")),
+    ("PCA", re.compile(r"\bPCA(\d)\b")),
+    ("SMB", re.compile(r"\bSMB(\d)\b")),
     ("LLWU", re.compile(r"\b(LLWU)\b")),
     ("DMAMUX", re.compile(r"\bDMAMUX(\d?)\b")),
     ("EWM", re.compile(r"\b(EWM)\b")),
@@ -327,7 +347,7 @@ def classify_chapter_title(title: str) -> str | None:
 
 
 _FEATURES_HEADING = re.compile(
-    r"^\s*(?:\d{1,2}(?:\.\d{1,2}){0,2}\s+)?(?P<subject>[A-Za-z][A-Za-z0-9/™®+\- ]{0,60}?)\s*(?:main\s+|key\s+|general\s+)?features\s*$",
+    r"^\s*(?:\d{1,2}(?:\.\d{1,2}){0,2}\s+)?(?P<subject>[A-Za-z][A-Za-z0-9/™®+\- ]{0,60}?)\s*(?:main\s+|key\s+|general\s+)?features(?:\s+overview)?\s*$",
     re.I | re.M,
 )
 
@@ -384,17 +404,17 @@ _COUNT_SUFFIX = re.compile(r"\s*(?:[×x]\s*(\d{1,2})|(\d{1,2})\s*[×x]|\((\d{1,2
 _COUNT_WORDS = {"one": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6, "seven": 7, "eight": 8, "nine": 9, "ten": 10, "eleven": 11, "twelve": 12, "sixteen": 16}
 # "2 x 12-bit A/D converters", "2 × USARTs", "Two 16-bit timers", "1 x I2C interface".
 _COUNT_PREFIX = re.compile(
-    rf"^(?:up\s+to\s+)?(?:(\d{{1,2}})\s*[×x]\s+|({'|'.join(_COUNT_WORDS)})\s+(?=[A-Za-z0-9])"
+    rf"^(?:up\s+to\s+)?(?:(\d{{1,2}})\s*(?:×\s*|x\s+)|({'|'.join(_COUNT_WORDS)})\s+(?=[A-Za-z0-9])"
     rf"|(\d{{1,2}})\s+(?!(?:or|to|and|x|bits?|Kbytes?|KB|MB|Mbytes?|MHz|kHz|GHz|V|mA|µA|µs|ns|ms|regions?|wait|external|internal|independent|channels?|pins?|wire|lanes?|ports?|modes?|levels?|priorit\w+|cycles?|entries|vectors?|slots?|bytes?|words?|segments?|commons?)\b)(?=[A-Za-z]))",
     re.I,
 )
 # Where a long feature line stops being the fact and starts describing it.
-_LABEL_CUT = re.compile(r",\s+(?:each|all|with|including|supporting|configurable|capable|featuring|providing|up to|for)\b|\s+(?:with|supporting|including|featuring|capable of|configurable as)\s+(?=\S)", re.I)
+_LABEL_CUT = re.compile(r",\s+(?:each|all|with|including|supporting|configurable|capable|featuring|providing|up to|for)\b|\s+(?:with|supporting|including|featuring|capable of|configurable as|for periodic|for use|operates?|running)\s+(?=\S)", re.I)
 _NUMBERED_HEADING = re.compile(r"^\s*\d{1,2}(?:\.\d{1,2}){1,2}\s+[A-Z][A-Za-z]+(?:[ \-/][A-Za-z()]+){0,7}\s*$")
 # Bullets that are a vendor section heading rather than a fact.
 _SECTION_HEADING = re.compile(
     r"^(?:processor|core|cpu|cpu\s+core|memor(?:y|ies)|system|low[- ]power(?:\s+modes?)?|power(?:\s+management)?|peripherals?|i/os?|packages?|"
-    r"operating\s+(?:voltage|conditions)|debug(?:\s+mode)?|connectivity|communications?(?:\s+interfaces?)?|analog(?:ue)?(?:\s+peripherals)?|timers?|security(?:\s+and\s+\w+)?|safety|"
+    r"operating\s+(?:voltage|conditions)|debug(?:\s+mode)?|connectivity|communications?(?:\s+interfaces?)?|analog(?:ue)?(?:\s+peripherals)?|timers?(?:/counters?)?|counters?/timers?(?:\s+and\s+pwm)?|security(?:\s+and\s+\w+)?|safety|"
     r"clocks?(?:,\s*reset\s+and\s+supply\s+management)?|clock\s+management|reset\s+and\s+clock\s+control|dma|human\s+machine\s+interface(?:\s+\(hmi\))?|graphics|"
     r"system\s+and\s+power\s+management|multiple\s+clock\s+sources|general[- ]purpose\s+i/os?|input/output|features|key\s+features|main\s+features|other\s+features|"
     r"advanced\s+analog\s+features|up\s+to\s+\d+\s+(?:fast\s+)?i/o\s+ports|\d+\s+timers|\d+\s+communication\s+interfaces)\s*:?$",
@@ -574,7 +594,7 @@ def read_features(page_texts: dict[int, str], max_pages: int = 6) -> list[dict[s
     last = max(page_texts)
     # "Features", "Key Features", or "<Part> Microcontroller Features" (TI).
     heading_re = re.compile(
-        r"^\s*(?:\d{1,2}(?:\.\d{1,2}){0,2}\s*\n?\s*)?(?:[A-Za-z][A-Za-z0-9/™®+\- ]{0,40}?\s+)?(?:key\s+|device\s+|product\s+|microcontroller\s+)?features\s*$"
+        r"^\s*(?:\d{1,2}(?:\.\d{1,2}){0,2}\s*\n?\s*)?(?:[A-Za-z][A-Za-z0-9/™®+\- ]{0,40}?\s+)?(?:key\s+|device\s+|product\s+|microcontroller\s+)?features(?:\s+overview)?\s*$"
         r"|^\s*(?:\d{1,2}(?:\.\d{1,2}){0,2}\s*\n?\s*)?[A-Za-z0-9][A-Za-z0-9/+\- ]{0,30}?\s+(?:sub-?family|family|series)\s+introduction\s*$",
         re.I | re.M,
     )
@@ -606,7 +626,15 @@ def read_features(page_texts: dict[int, str], max_pages: int = 6) -> list[dict[s
         # A "Features" heading on the page starts the list; otherwise the whole page.
         heading = heading_re.search(text)
         block = text[heading.end():] if heading else text
+        # A cover that lists applications ("Example applications:", "...
+        # applications include the following:") mixes those bullets into the
+        # feature column in text order; an application names a market, not a block.
+        applications_page = _APPLICATIONS_LEAD.search(text) is not None
         for item in _bullet_items(block):
+            if _TOC_LINE.match(item["text"]):
+                continue
+            if applications_page and _is_application(item["text"]):
+                continue
             row = _feature(item["text"], pno, section=item.get("section"), level=item.get("level"), parent=item.get("parent"))
             # The page the Features heading is on carries the family summary;
             # its continuation pages are per-peripheral detail.
@@ -616,6 +644,24 @@ def read_features(page_texts: dict[int, str], max_pages: int = 6) -> list[dict[s
 
 
 FEATURES_SEARCH_PAGES = 120
+
+_APPLICATIONS_LEAD = re.compile(r"\b(?:example\s+applications|applications?\s+include(?:\s+the\s+following)?|target\s+applications|typical\s+applications)\s*:?\s*$", re.I | re.M)
+_APPLICATION_WORDS = re.compile(
+    r"\b(?:automation|consumer|medical|lighting|health|fitness|accessor(?:y|ies)|iot|smart\s+\w+|metering|meters?|appliances?|automotive|wearables?|e-?bikes?|drones?|toys|gaming|building|industrial|white\s+goods|hvac|point\s+of\s+sale|expander|motor\s+control|sensor\s+controllers?|sensors|equipment|devices|systems|electronics|home|security|controls?|monitoring|thermostats?|locks?|remotes?|hubs?|gateways?|trackers?|infrastructure|energy\s+harvesting|inverters?|chargers?|robotics?|telecom|networking|communications?\s+equipment)\b",
+    re.I,
+)
+_TOC_LINE = re.compile(r"^\d{1,4}\s+\d{1,2}(?:\.\d{1,2}){1,3}\s+\S|.*\.\s?\.\s?\.\s?\.|.*\s\.\s*$")
+
+
+def _is_application(text: str) -> bool:
+    """An application bullet names a market and carries no number, no unit and
+    no peripheral: "Motor control", "Home automation and security"."""
+    if re.search(r"\d", text) or len(text) > 48:
+        return False
+    if not _APPLICATION_WORDS.search(text):
+        return False
+    remainder = _APPLICATION_WORDS.sub(" ", text)
+    return not any(pattern.search(_singular_acronyms(remainder)) for name, pattern in CHAPTER_VOCAB if name not in ("power", "gpio", "cpu_core"))
 
 
 # A features *table* (TI Tiva/Hercules "Table 1-1. <Part> Microcontroller
@@ -686,7 +732,7 @@ def read_features_table(document: Any, page_texts: dict[int, str], max_pages: in
 # ST "Description", Microchip and NXP introductions all use it.
 _DESC_HEADING = re.compile(r"^\s*(?:\d{1,2}\.?\s+)?(?:general\s+description|description|introduction|overview|product\s+overview|device\s+overview)\s*$", re.I | re.M)
 _DESC_LEAD = re.compile(
-    r"^(?:(?:it|they|which|the\s+(?:devices?|series|family|mcus?|products?)|these\s+devices|this\s+(?:device|series|family)|all\s+devices|[A-Z][A-Za-z0-9/\-]+(?:\s+\S+){0,3}?\s+(?:devices?|series|family|mcus?))\s+)?"
+    r"^(?:(?:it|they|which|the\s+(?:devices?|series|family|mcus?|products?)|these\s+devices|this\s+(?:device|series|family)|all\s+devices|[A-Z][A-Za-z0-9/\-]+(?:\s+\S+){0,6}?\s+(?:devices?|series|family|mcus?|microcontrollers?))\s+)?"
     r"(?:also\s+|further\s+)?(?:provides?|incorporates?|offers?|features?|includes?|integrates?|has|have|contains?|supports?|comes?\s+with|is\s+equipped\s+with|embeds?|operates?\s+from|is\s+available\s+in|are\s+available\s+in|available\s+in|delivers?|combines?|operating\s+at)\s+(?:a\s+|an\s+|the\s+)?",
     re.I,
 )
@@ -772,8 +818,13 @@ def _feature(text: str, page: int, *, section: str | None = None, level: int | N
     # its description. The full line stays in verbatim.
     head = text
     cut = _LABEL_CUT.search(text)
-    if cut and cut.start() >= 8 and re.search(r"[A-Za-z]", text[: cut.start()]):
+    # "C8051 core with 25 MHz maximum operating frequency": the tail after
+    # "with" is a sized fact of its own, so the line stays whole.
+    sized_tail = cut and re.match(r"\s*,?\s*(?:with|supporting|including|featuring|up to|for)\s+(?:up\s+to\s+)?\d+(?:\.\d+)?\s*-?\s*(?:MHz|kHz|GHz|KB|MB|Kbytes?|Mbytes?|V)\b", text[cut.start():], re.I)
+    if cut and cut.start() >= 8 and re.search(r"[A-Za-z]", text[: cut.start()]) and not sized_tail:
         head = text[: cut.start()].rstrip(" ,:;")
+    if head.count("(") > head.count(")") and "(" in head:
+        head = head[: head.rindex("(")].rstrip(" ,:;")  # a parenthetical the cut split open
     label, count = split_count(head)
     subject = f"{section} {label}" if section else label
     row = {
