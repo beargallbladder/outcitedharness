@@ -43,6 +43,7 @@ CLASS_GROUPS: dict[str, tuple[str, ...]] = {
     "npu": ("processing",),  # flagged: CR undecided
     "flash": ("memory",),
     "sram": ("memory",),
+    "eeprom": ("memory",),
     "memory_map": ("memory",),
     "dma": ("peripherals",),
     "interrupts": ("peripherals",),
@@ -174,7 +175,8 @@ _COMMA_LIST = re.compile(r"\b\d{1,3}(?:,\s+\d{1,3})+(?:,?\s+(?:and|or)\s+\d{1,3}
 # "16 or 32 Kbytes", "8/16KB", "26/37/51 I/Os", "64/128/256 KB": one cell, several members.
 _ALT_LIST = re.compile(r"\b\d{1,4}\s*(?:or|/)\s*\d{1,4}(?:\s*/\s*\d{1,4})*\s*-?\s*(?:KB|MB|Kbytes?|Mbytes?|Kbit|Mbit|I/Os?|pins?|leads?|MHz|channels?)\b", re.I)
 _VARIES = re.compile(r"depending on|varies|device[- ]dependent|according to the (?:device|part|package)|see (?:the )?datasheet", re.I)
-_SENTENCE_START = re.compile(r"^(?:the|this|these|it|for|refer|see|section|to|when|if|in|on|a|an|all|note)\b", re.I)
+_SENTENCE_START = re.compile(r"^(?:the|this|these|it|for|refer|see|section|to|when|if|in|on|a|an|all|note|may|allows?|supports?|provides?|enables?|includes?|load|output|pin|gluelessly|devices?)\b|(?-i:^Can\s+[a-z])", re.I)
+_CLASS_OVER_SECTION = {"flash", "sram", "eeprom", "memory_map", "debug", "dma", "package", "temp_sensor"}
 _GRID_MAX_LEN = 72
 
 
@@ -234,7 +236,7 @@ _SECTION_GROUP_DIRECT: dict[str, str] = {
 }
 _SECTION_WORDS: dict[str, str] = {}
 # Vendor headings that hold several groups' worth of facts; the bullet decides.
-_MIXED_SECTIONS = {"system and power management", "system", "peripherals", "other", "others", "miscellaneous", "additional features"}
+_MIXED_SECTIONS = {"system and power management", "system", "peripherals", "other", "others", "miscellaneous", "additional features", "description"}
 # Classes the RA4C1 page files in two groups on purpose.
 _DUAL_HOME_CLASSES = {"watchdog", "safety", "trustzone", "crypto"}
 _SIZING_UNITS = {"mbyte", "kbyte", "mb", "kb", "mbit", "kbit", "mhz", "khz", "ghz", "v", "channel", "i/o", "pin", "°c"}
@@ -258,6 +260,7 @@ _NOT_CAPACITY = re.compile(r"^\s*note\b|^\s*\(|\bfirst\b|\barea of\b|\bunits? of
 _STANDALONE_LEAF_CLASSES = {"temp_sensor", "dma", "rtc", "watchdog", "safety", "comparator", "dac", "adc", "touch", "display", "usb", "can", "ethernet", "crypto", "opamp"}
 _MODE_LEAF = re.compile(r"^(?:simple|smart\s*card|manchester|asynchronous|synchronous|half[- ]duplex|full[- ]duplex|master|slave|mode|modes|supports?|support\s+for|peripherals?\s+supported)\b", re.I)
 _SUPPLY_RANGE_TEXT = re.compile(r"\b\d\.\d{1,2}\s*V?\s*(?:to|–|-|~)\s*\d\.\d{1,2}\s*V\b")
+_TEMP_RANGE_TEXT = re.compile(r"[-–−]\s*\d{1,3}\s*(?:°\s*C|ºC|℃)?\s*(?:to|~|–|-|…)\s*\+?\s*\d{1,3}\s*(?:°\s*C|ºC|℃)")
 
 # Vendor section headings that carry a count or a long name; checked when the
 # exact key is not in _SECTION_GROUP_DIRECT.
@@ -275,6 +278,10 @@ _SECTION_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
     (re.compile(r"^security|^safety|^cryptograph"), "security_safety_identity"),
     (re.compile(r"^graphics|^display|^human machine|^hmi$|^touch"), "graphics_vision_touch_hmi"),
     (re.compile(r"^packages?|^operating temperature|^temperature range"), "io_package_environment"),
+    # TI features-table sections.
+    (re.compile(r"^performance$"), "processing"),
+    (re.compile(r"^advanced motion control$|^motion control"), "timers_pwm_control"),
+    (re.compile(r"^package information$|^packaging"), "io_package_environment"),
 )
 
 
@@ -376,6 +383,7 @@ def build_grid(record: dict[str, Any], vendor_by_sha: dict[str, str] | None = No
     # 2. Cover features: the vendor's own short list (family data sheets).
     #    The vendor's section heading ("■ Memory", "■ Connectivity") decides the
     #    group when it classifies; the bullet's own words otherwise.
+    has_features_table = any(f.get("source") == "features_table" for f in record.get("features", []))
     for feature in record.get("features", []):
         text = feature["verbatim"]
         label = feature.get("label") or text
@@ -388,9 +396,12 @@ def build_grid(record: dict[str, Any], vendor_by_sha: dict[str, str] | None = No
         section_key = _norm_key(section)
         section_group = _section_group(section_key)
         bullet_groups = {g for c in classes for g in CLASS_GROUPS.get(c, ())}
-        if section_group and section_key not in _MIXED_SECTIONS:
+        table_row = feature.get("source") == "features_table"
+        if section_group and section_key not in _MIXED_SECTIONS and not (table_row and cls in _CLASS_OVER_SECTION):
             # The vendor filed it under this heading; that is the group. A
             # bullet whose own class also belongs elsewhere keeps both homes.
+            # In a features table the section rows are coarse ("Performance"
+            # holds Flash, SRAM and EEPROM): a memory/debug class wins there.
             groups = {section_group}
             if cls in _DUAL_HOME_CLASSES:
                 groups |= bullet_groups
@@ -414,6 +425,12 @@ def build_grid(record: dict[str, Any], vendor_by_sha: dict[str, str] | None = No
         # mode of its parent ("Simple SPI" under SCI) is not.
         standalone_leaf = cls in _STANDALONE_LEAF_CLASSES and len(label) <= 48 and not _MODE_LEAF.match(label)
         tier = "grid" if (_grid_eligible(label) and (feature.get("level", 1) == 1 or security_leaf or standalone_leaf)) else "below_grid"
+        # A document with a features table (TI) summarises the family there;
+        # its long "Features" section is per-peripheral detail. From that
+        # section only a counted or sized line is a grid fact.
+        if has_features_table and feature.get("source") not in ("features_table", "description") and feature["receipt"]["page"] > 6:
+            if not (feature.get("count") or (value is not None and unit)):
+                tier = "below_grid"
         for group in sorted(groups):
             emit(group, cls, label, pages=[feature["receipt"]["page"]], verbatim=text, tier=tier, instances=feature.get("count"), value=value, unit=unit, qualifier=feature.get("qualifier_verbatim"), section=section or "features", flags={"parent": feature["parent"]} if feature.get("parent") else None)
 
@@ -662,7 +679,8 @@ def typed_facts(row: dict[str, Any]) -> list[dict[str, Any]]:
 # says which quantity (code flash vs data flash, Ta vs Tj). Anchored on the
 # document's own words; a bare "flash" is left null, never called code flash.
 _QQ_CODE_FLASH = re.compile(r"\bcode\s+flash|\bprogram\s+(?:flash|memory)|\bflash\s+program\s+memory|\bapplication\s+(?:flash|code)|\bmain\s+flash|\bembedded\s+flash\s+memory\s+\(.*code|\binstruction\s+flash|\bcode\s+memory|\bcode\s+storage|\bprogram\s+space", re.I)
-_QQ_DATA_FLASH = re.compile(r"\bdata\s+flash|\beeprom|\bdata\s+memory\b(?!\s*\(sram)|\bemulated\s+eeprom|\bee\s+memory", re.I)
+_QQ_DATA_FLASH = re.compile(r"\bdata\s+flash|\bdata\s+memory\b(?!\s*\(sram)|\bemulated\s+eeprom|\bee\s+memory", re.I)
+_QQ_EEPROM = re.compile(r"\beeprom\b", re.I)
 # A bank has a designator the vendor gave it; special-purpose RAMs (backup,
 # cache, message, DMA, USB, retention) are neither bank nor total.
 _QQ_SRAM_BANK = re.compile(r"\bsram\s?\d\b|\bsram[A-D]\b|\bsram\s+bank|\bbank\s*\d|\bitcm|\bdtcm|\btcm\b|\bccm\b|\baxi\s+sram|\bahb\s+sram|\bmain\s+internal\s+sram|\bauxiliary\s+internal\s+sram|\bd\d\s+domain", re.I)
@@ -684,7 +702,7 @@ def quantity_qualifier(row: dict[str, Any]) -> str | None:
     # Fields are joined with a separator so a label ending "SRAM" and a
     # verbatim starting "6 or 10" do not read as a bank designator "SRAM 6".
     # The vendor's section heading counts as wording ("Operating Voltage" over "1.62V – 3.63V").
-    text = " ¦ ".join(str(row.get(k) or "") for k in ("label", "verbatim", "context", "section"))
+    text = " ¦ ".join(str(row.get(k) or "") for k in ("label", "verbatim", "context", "section", "parent"))
     unit = (row.get("unit") or "").lower()
     cls = row.get("peripheral_class")
     section = row.get("section") or ""
@@ -692,7 +710,16 @@ def quantity_qualifier(row: dict[str, Any]) -> str | None:
     # A multi-valued memory line ("16 or 32 Kbytes of Flash") has no scalar
     # value but is exactly the family fact that needs its qualifier.
     supply_text = _SUPPLY_RANGE_TEXT.search(str(row.get("label") or ""))
-    if row.get("value") is None and not (memory_row and row.get("group", "memory") == "memory" and _SIZE_IN_TEXT.search(text)) and not supply_text:
+    temp_text = _TEMP_RANGE_TEXT.search(str(row.get("label") or ""))
+    if row.get("value") is None and not (memory_row and row.get("group", "memory") == "memory" and _SIZE_IN_TEXT.search(text)) and not supply_text and not temp_text:
+        return None
+    if temp_text and row.get("value") is None and not supply_text:
+        if _QQ_STORAGE.search(text):
+            return None
+        if _QQ_JUNCTION.search(text):
+            return "junction"
+        if _QQ_AMBIENT.search(text):
+            return "ambient"
         return None
     if supply_text and row.get("value") is None:
         if _QQ_ABS_MAX.search(text):
@@ -701,6 +728,8 @@ def quantity_qualifier(row: dict[str, Any]) -> str | None:
             return "rated"
         return None
     if memory_row:
+        if _QQ_EEPROM.search(text) and not re.search(r"emulat", text, re.I):
+            return None  # true EEPROM is neither flash kind; the emulated one is data flash
         if _QQ_DATA_FLASH.search(text):
             return "data_flash"
         if _QQ_CODE_FLASH.search(text):
@@ -768,6 +797,8 @@ def _dedupe(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     merged: dict[tuple, dict[str, Any]] = {}
     for row in rows:
         key = (row["group"], row["tier"], _label_key(row["label"]))
+        if key in merged and merged[key].get("instances") is not None and row.get("instances") is not None and merged[key]["instances"] != row["instances"]:
+            key = key + (row["instances"],)  # "16 digital comparators" and "8 digital comparators" are two statements
         if key in merged:
             keep = merged[key]
             keep["source_pages"] = sorted(set(keep["source_pages"]) | set(row["source_pages"]))[:12]
@@ -812,6 +843,13 @@ def _prefer_specific(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
             for j, b in enumerate(bucket):
                 if i == j or not keep[i] or not toks[i]:
                     continue
+                # Two counts or two values that disagree are two facts
+                # ("16-bit timers ×2" and "general purpose 16-bit timers plus
+                # one PWM timer ×3"), never one.
+                if a.get("instances") is not None and b.get("instances") is not None and a["instances"] != b["instances"]:
+                    continue
+                if a.get("value") is not None and b.get("value") is not None and json_value(a["value"]) != json_value(b["value"]):
+                    continue
                 if toks[i] < toks[j] or (toks[i] == toks[j] and _specificity(a) < _specificity(b)) or (toks[i] == toks[j] and _specificity(a) == _specificity(b) and i > j):
                     keep[i] = False
                     b.setdefault("also_printed", [])
@@ -850,6 +888,9 @@ def _vendor_stem(names: list[str], icls: str) -> str:
 
 
 def _label_key(label: str) -> str:
+    # "UARTs" and "UART", "I2Cs" and "I2C": one key. Only acronym plurals;
+    # "timers" stays distinct from "timer" as printed.
+    label = re.sub(r"\b([A-Z][A-Z0-9]{1,7})s\b", r"\1", label)
     text = re.sub(r"[®™©]", "", label.lower())
     text = re.sub(r"[\s\-–_]+", " ", text)
     return re.sub(r"[^a-z0-9 ./()+]", "", text).strip()

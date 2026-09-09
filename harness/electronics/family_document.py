@@ -61,7 +61,7 @@ _REVISION = re.compile(r"\b(?:Rev(?:ision)?\.?\s*([0-9]+(?:\.[0-9]+)?[A-Z]?)|Ver
 # Peripheral vocabulary: canonical class -> chapter-title regex. A title is
 # tried against CHAPTER_EXCLUDE[class] first; a hit there blocks the class.
 CHAPTER_EXCLUDE: dict[str, re.Pattern[str]] = {
-    "cpu_core": re.compile(r"\btimers?\b|arbitr|\bcpu (?:self-test|compare)|\bfilter\b", re.I),
+    "cpu_core": re.compile(r"\btimers?\b|arbitr|\bcpu (?:self-test|compare)|\bfilter\b|\bprimecell\b|dma\b", re.I),
     "comparator": re.compile(r"\bclock\b|\bbus\b|\bdcc\b|\bwindow\b", re.I),
     "trustzone": re.compile(r"\btrip", re.I),
     "sram": re.compile(r"\bmessage ram\b|\bprotection\b|\bmemory ram\b", re.I),
@@ -74,13 +74,14 @@ CHAPTER_EXCLUDE: dict[str, re.Pattern[str]] = {
 CHAPTER_VOCAB: tuple[tuple[str, re.Pattern[str]], ...] = (
     ("memory_map", re.compile(r"\bmemory (?:map|organi[sz]ation)\b|\bmemory and bus", re.I)),
     ("flash", re.compile(r"\b(?:embedded )?flash\b|\bnvm\b|\bprogram memory\b", re.I)),
+    ("eeprom", re.compile(r"\beeprom\b(?!\s+emulation)", re.I)),
     ("sram", re.compile(r"\bs?ram\b(?!p)", re.I)),
     ("ethernet", re.compile(r"\bethernet|\bemac\b|\beth\b", re.I)),
     ("usb", re.compile(r"\busb\b|\botg\b|\bucpd|\busb type-c", re.I)),
     ("sdmmc", re.compile(r"\bsdmmc|\bsdio\b|\bsd/mmc|\bemmc|\bmmc\b", re.I)),
     ("xspi", re.compile(r"\bquad-?spi|\bqspi|\bocto-?spi|\bospi|\bxspi|\bhexadeca|\bhyperbus", re.I)),
     ("fmc", re.compile(r"\bfmc\b|\bfsmc|\bflexible (?:static )?memory controller|\bemif\b|\bexternal memory interface|\bebi\b", re.I)),
-    ("can", re.compile(r"\bcan\b|\bfdcan|\bbxcan|\bmcan|\bdcan|\becan|\bcontroller area network", re.I)),
+    ("can", re.compile(r"\bCAN\b|(?i:\bcan\s*(?:2\.0|fd|bus|controller|module|interface)\b|\bfdcan|\bbxcan|\bmcan|\bdcan|\becan|\bcontroller area network|\bflexcan|\btwai\b)")),
     ("lin", re.compile(r"\blin\b", re.I)),
     ("i3c", re.compile(r"\bi3c\b", re.I)),
     ("i2c", re.compile(r"\bi2c|\bi²c|\binter-integrated", re.I)),
@@ -105,11 +106,11 @@ CHAPTER_VOCAB: tuple[tuple[str, re.Pattern[str]], ...] = (
     ("wireless", re.compile(r"\bradio\b|\bbluetooth|\bble\b|\b802\.15\.4|\bzigbee|\bthread\b|\bwi-?fi|\brf subsystem|\bsub-ghz", re.I)),
     ("safety", re.compile(r"\becc\b|\bcrc\b|\bpbist|\bstc\b|\besm\b|\berror signaling|\bccm-r4|\bself-test|\bfunctional safety", re.I)),
     ("debug", re.compile(r"\bdebug|\bdbg\b|\bswd\b|\bjtag|\btrace|\betm\b|\bcoresight", re.I)),
-    ("power", re.compile(r"\bpower (?:control|management|supply)|\bpwr\b|\bpmcu\b|\bpower-saving|low[- ]power modes", re.I)),
+    ("power", re.compile(r"\bpower (?:control|management|supply)|\bpwr\b|\bpmcu\b|\bpower-saving|low[- ]power modes|\bhibernat|\bbattery[- ]backed", re.I)),
     ("reset_clock", re.compile(r"\breset and clock|\brcc\b|\bclock (?:system|tree|configuration|control)|\boscillator|\bsysctl\b|\bclock module", re.I)),
     ("gpio", re.compile(r"\bgpio|\bgeneral[- ]purpose i/?os?|\bi/o ports?|\bport (?:control|i/o)|\biomux|\bpinmux|\bi/o multiplexing", re.I)),
-    ("dma", re.compile(r"\bdma\b|\bdirect memory access|\bgpdma|\bmdma|\bbdma|\bdmamux|\bedma", re.I)),
-    ("timer", re.compile(r"\btimers?\b|\btim\d|\btimg|\btima|\bgptm|\bepwm|\becap|\beqep|\brti\b|\bhet\b|\bn2het|\boutput compare|\binput capture", re.I)),
+    ("dma", re.compile(r"\bdma\b|[µμu]dma\b|\bdirect memory access|\bgpdma|\bmdma|\bbdma|\bdmamux|\bedma", re.I)),
+    ("timer", re.compile(r"\btimers?\b|\btim\d|\btimg|\btima|\bgptm|\bepwm|\becap|\beqep|\brti\b|\bhet\b|\bn2het|\boutput compare|\binput capture|\bpwm\b|\bqei\b|\bquadrature encoder", re.I)),
     ("interrupts", re.compile(r"\binterrupt|\bnvic\b|\bexti\b|\bvim\b|\bevents?\b", re.I)),
     ("cpu_core", re.compile(r"\b(?:cortex|cpu|processor core|core architecture|arm)\b", re.I)),
 )
@@ -384,7 +385,7 @@ _COUNT_WORDS = {"one": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6, 
 # "2 x 12-bit A/D converters", "2 × USARTs", "Two 16-bit timers", "1 x I2C interface".
 _COUNT_PREFIX = re.compile(
     rf"^(?:up\s+to\s+)?(?:(\d{{1,2}})\s*[×x]\s+|({'|'.join(_COUNT_WORDS)})\s+(?=[A-Za-z0-9])"
-    rf"|(\d{{1,2}})\s+(?!(?:or|to|and|x|bits?|Kbytes?|KB|MB|Mbytes?|MHz|kHz|GHz|V|mA|µA|µs|ns|ms|regions?|wait|external|internal|independent)\b)(?=[A-Za-z]))",
+    rf"|(\d{{1,2}})\s+(?!(?:or|to|and|x|bits?|Kbytes?|KB|MB|Mbytes?|MHz|kHz|GHz|V|mA|µA|µs|ns|ms|regions?|wait|external|internal|independent|channels?|pins?|wire|lanes?|ports?|modes?|levels?|priorit\w+|cycles?|entries|vectors?|slots?|bytes?|words?|segments?|commons?)\b)(?=[A-Za-z]))",
     re.I,
 )
 # Where a long feature line stops being the fact and starts describing it.
@@ -571,7 +572,8 @@ def read_features(page_texts: dict[int, str], max_pages: int = 6) -> list[dict[s
     if not page_texts:
         return out
     last = max(page_texts)
-    heading_re = re.compile(r"^\s*(?:key\s+|device\s+|product\s+)?features\s*$", re.I | re.M)
+    # "Features", "Key Features", or "<Part> Microcontroller Features" (TI).
+    heading_re = re.compile(r"^\s*(?:\d{1,2}(?:\.\d{1,2}){0,2}\s*\n?\s*)?(?:[A-Za-z][A-Za-z0-9/™®+\- ]{0,40}?\s+)?(?:key\s+|device\s+|product\s+|microcontroller\s+)?features\s*$", re.I | re.M)
 
     def glyph_lines(text: str) -> int:
         return sum(1 for line in text.splitlines() if _GLYPH_LINE.match(line) or _DASH_LINE.match(line))
@@ -604,6 +606,136 @@ def read_features(page_texts: dict[int, str], max_pages: int = 6) -> list[dict[s
 FEATURES_SEARCH_PAGES = 120
 
 
+# A features *table* (TI Tiva/Hercules "Table 1-1. <Part> Microcontroller
+# Features": Feature | Description, with one-cell section rows "Communication
+# Interfaces", "Analog Support"). The description cell is the fact as printed;
+# the feature cell names the peripheral ("Operating Range (Ambient)").
+_FEATURES_TABLE_CAPTION = re.compile(r"^\s*Table\s+\d{1,2}-\d{1,2}\.\s+.{0,60}\bFeatures\s*$", re.I | re.M)
+
+
+def read_features_table(document: Any, page_texts: dict[int, str], max_pages: int = 80) -> list[dict[str, Any]]:
+    out: list[dict[str, Any]] = []
+    for pno in range(1, min(max_pages, document.page_count) + 1):
+        text = page_texts.get(pno) or ""
+        if not _FEATURES_TABLE_CAPTION.search(text):
+            continue
+        try:
+            tables = document[pno - 1].find_tables().tables
+        except Exception:
+            continue
+        for table in tables:
+            rows = [[_norm(c or "") for c in row] for row in table.extract()]
+            if not rows or len(rows[0]) != 2:
+                continue
+            header = [c.lower() for c in rows[0]]
+            if not ("feature" in header[0] and "description" in header[1]):
+                continue
+            section: str | None = None
+            for feature_name, description in rows[1:]:
+                if feature_name and not description:
+                    section = feature_name
+                    continue
+                if not description or len(description) < 3:
+                    continue
+                # Parenthetical ranges are the fact; the frame is the section.
+                # "Industrial (-40°C to 85°C) temperature range" stays as printed.
+                for part in re.split(r"\s*;\s*|\.\s+(?=[A-Z])|(?<=\brange)\s+(?=[A-Z])|,\s+(?=each\s+with\b|for\s+a\s+total\b|with\s+four\b)", description):
+                    part = part.strip(" .")
+                    if len(part) < 3 or re.match(r"^(?:each|for a total|with)\b", part, re.I):
+                        continue  # the tail of a split is detail of its head
+                    row = _feature(part, pno, section=section, level=1, parent=feature_name or None)
+                    row["source"] = "features_table"
+                    out.append(row)
+        if out:
+            break
+    return out[:120]
+
+
+# The "General description" paragraph: the family facts as one prose sentence
+# list ("provides up to 3072 KB on-chip Flash memory and 128 KB SRAM ... up to
+# three 12-bit ADCs, two 12-bit DACs, ... a SDIO, and an USBFS"). GigaDevice,
+# ST "Description", Microchip and NXP introductions all use it.
+_DESC_HEADING = re.compile(r"^\s*(?:\d{1,2}\.?\s+)?(?:general\s+description|description|introduction|overview|product\s+overview|device\s+overview)\s*$", re.I | re.M)
+_DESC_LEAD = re.compile(
+    r"^(?:(?:it|they|which|the\s+(?:devices?|series|family|mcus?|products?)|these\s+devices|this\s+(?:device|series|family)|all\s+devices|[A-Z][A-Za-z0-9/\-]+(?:\s+\S+){0,3}?\s+(?:devices?|series|family|mcus?))\s+)?"
+    r"(?:also\s+|further\s+)?(?:provides?|incorporates?|offers?|features?|includes?|integrates?|has|have|contains?|supports?|comes?\s+with|is\s+equipped\s+with|embeds?|operates?\s+from|is\s+available\s+in|are\s+available\s+in|available\s+in|delivers?|combines?|operating\s+at)\s+(?:a\s+|an\s+|the\s+)?",
+    re.I,
+)
+_DESC_STRIP = re.compile(r"^(?:as\s+well\s+as|and|also|with|plus|along\s+with|together\s+with|standard\s+and\s+advanced\s+communication\s+interfaces:|communication\s+interfaces:|peripherals:|including|namely|in\s+addition\s+to|operates?\s+from|from)\s+|^(?:a|an|the)\s+", re.I)
+_DESC_NOUN = re.compile(r"\b(?!(?:up|to|or|and|of|from|at|KB|MB|Kbytes?|Mbytes?|Kbit|Mbit|MHz|kHz|GHz|bit|bits|V|mA|µA|ms|µs|ns|MSps|Msps|ksps)\b)[A-Za-z][A-Za-z0-9/\-]{2,}\b")
+_DESC_FACT = re.compile(
+    rf"\b(?:\d+(?:\.\d+)?|{'|'.join(_COUNT_WORDS)})\b.*(?:\b(?:KB|MB|Kbytes?|Mbytes?|Kbit|Mbit|MHz|kHz|V|bit|channels?|pins?|I/Os?|timers?|ADCs?|DACs?|SPIs?|I2Cs?|I2Ss?|USARTs?|UARTs?|CANs?|USB\w*|SDIO|comparators?|op-?amps?|DMA|GPIOs?|packages?|leads?|cores?)\b|°C)"
+    r"|\b(?:SDIO|USB\w*|CAN\w*|Ethernet|RTC|CRC|LCD|TSC|RNG|AES|SHA|TrustZone|FPU|MPU|DSP|DMA|QSPI|OSPI|FSMC|EXMC|SDMMC|I3C|LIN)\b",
+    re.I,
+)
+
+
+def read_description_facts(page_texts: dict[int, str], max_pages: int = 14) -> list[dict[str, Any]]:
+    """Clauses of the description paragraph that state a counted, sized or
+    named family fact, verbatim; leading verb phrases dropped so the clause
+    reads as a feature line ("up to three 12-bit 2.6M MSPS ADCs")."""
+    out: list[dict[str, Any]] = []
+    for pno in range(1, min(max_pages, max(page_texts) if page_texts else 0) + 1):
+        text = page_texts.get(pno) or ""
+        heading = _DESC_HEADING.search(text)
+        if not heading:
+            continue
+        block = text[heading.end():]
+        nxt = re.search(r"^\s*\d{1,2}(?:\.\d{1,2})?\.?\s+[A-Z][a-z]+(?:\s+\w+){0,5}\s*$", block, re.M)
+        if nxt and nxt.start() > 200:
+            block = block[: nxt.start()]
+        paragraph = _norm(block)
+        if len(paragraph) < 200:
+            continue
+        for sentence in re.split(r"(?<=[A-Za-z0-9)%])\.\s+(?=[A-Z])", paragraph):
+            if not re.search(r"\b(?:up\s+to|provides?|incorporates?|offers?|features?|includes?|integrates?|operates?|available|embeds?|contains?|supports?)\b", sentence, re.I):
+                continue
+            # A colon introduces a list; the part before it is framing.
+            sentence = re.sub(r"^[^:]{0,120}?\binterfaces?:\s*", "", sentence)
+            splitter = r",\s+(?:and\s+|as\s+well\s+as\s+)?|\s+and\s+(?=(?:up\s+to\s+)?(?:\d|(?:a|an|available|" + "|".join(_COUNT_WORDS) + r")\b))|;\s+|\s+(?=(?:operating|running)\s+at\b)|\s+with\s+(?=(?:up\s+to\s+)?\d)"
+            for clause in re.split(splitter, sentence):
+                clause = clause.strip(" .")
+                clause = _DESC_LEAD.sub("", clause)
+                for _ in range(2):
+                    clause = _DESC_STRIP.sub("", clause)
+                clause = re.sub(r"\s+(?:to\s+obtain|which|that|in\s+terms\s+of|for\s+enhanced|providing|allowing|enabling|with\s+flash\s+access|with\s+zero)\b.*$", "", clause, flags=re.I)
+                clause = re.sub(r"^(?:operating|running)\s+at\s+", "", clause, flags=re.I)
+                # A parenthetical list split by the comma rule leaves halves:
+                # "embedded memories (12 Kbytes of SRAM" / "32 Kbytes of Flash)".
+                if "(" in clause and ")" not in clause:
+                    clause = clause[clause.index("(") + 1:]
+                elif ")" in clause and "(" not in clause:
+                    clause = clause[: clause.index(")")]
+                # A verb in the middle starts a new statement; keep the head.
+                clause = re.sub(r"\s+(?:features?|provides?|includes?|incorporates?|offers?|supports?|embeds?|integrates?|has|have)\s+(?:a|an|the|up\s+to)\b.*$", "", clause, flags=re.I)
+                # "... and Reset pin enabled": an "and" tail that states no fact.
+                head, sep, tail = clause.partition(" and ")
+                if sep and not _DESC_FACT.search(tail):
+                    clause = head
+                clause = clause.strip(" .")
+                if "•" in clause or "\uf0b7" in clause or re.search(r"\s(?:is|are|was|were|belongs?)\s", clause):
+                    continue
+                if re.search(r"\b(?:most\s+powerful|needed\s+for|delivering|enabled)\b|@", clause, re.I) or not _DESC_NOUN.search(clause):
+                    continue  # a bare "32 Kbytes" or a test condition is not a family fact
+                if len(clause) < 4 or len(clause) > 90 or not _DESC_FACT.search(clause):
+                    continue
+                if re.search(r"\b(?:suitable|applications?|such\s+as|areas?|markets?|ratio|efficien|ideal|designed|targets?|where|each|selected|configured|optimized|ranging)\b", clause, re.I):
+                    continue
+                if re.search(r"\bcan\s+(?:be|also|operate|run|support|perform|act|handle|reach|wake|use|form)\b", clause, re.I):
+                    continue  # the verb, not the bus
+                row = _feature(clause, pno, section="Description", level=1)
+                row["source"] = "description"
+                out.append(row)
+        if out:
+            break
+    return out[:60]
+
+
+def _singular_acronyms(text: str) -> str:
+    """"three SPIs, two I2Cs, two CANs" -> "SPI", "I2C", "CAN" for classification only."""
+    return re.sub(r"\b([A-Z][A-Z0-9]{1,7})s\b", r"\1", text)
+
+
 def _feature(text: str, page: int, *, section: str | None = None, level: int | None = None, parent: str | None = None) -> dict[str, Any]:
     text = _norm(text)
     qualifier = _QUALIFIER.search(text)
@@ -621,7 +753,7 @@ def _feature(text: str, page: int, *, section: str | None = None, level: int | N
         "count": count,
         "numbers": _typed_numbers(label),
         "qualifier_verbatim": qualifier.group(1) if qualifier else None,
-        "classes": [name for name, pattern in CHAPTER_VOCAB if pattern.search(label) and not (CHAPTER_EXCLUDE.get(name) and CHAPTER_EXCLUDE[name].search(label))][:4],
+        "classes": [name for name, pattern in CHAPTER_VOCAB if pattern.search(_singular_acronyms(label)) and not (CHAPTER_EXCLUDE.get(name) and CHAPTER_EXCLUDE[name].search(label))][:4],
         "receipt": {"page": page},
     }
     if section is not None:
@@ -721,7 +853,12 @@ def read_prose_facts(page_texts: dict[int, str], max_pages: int = 160) -> list[d
         absolute = [c for c in supply_candidates if c not in rated]
         for group in (rated, absolute):
             if group:
-                lo, hi, verbatim, pno, line = max(group, key=lambda c: (c[1] - c[0], -c[3]))
+                # The document's own statement of the supply ("operates from a
+                # 2.6 to 3.6 V power supply", "operating voltage") outranks a
+                # wider range found on a later page (an analog domain, a pin).
+                stated = [c for c in group if re.search(r"operat|power\s+supply|supply\s+voltage|\bV(?:DD|CC)\b\s*(?:=|range|from)", c[4], re.I)]
+                pool = stated or group
+                lo, hi, verbatim, pno, line = max(pool, key=lambda c: (-c[3] if stated else 0, c[1] - c[0], -c[3]))
                 add("supply_range", verbatim, pno, [lo, hi], "V", key_text=f"{lo}-{hi}", context=line)
     return out[:80]
 
@@ -797,7 +934,7 @@ def read_family_document(path: Path, *, vendor: str | None = None, max_text_page
     identity = read_identity(document, page_texts)
     chapters = read_chapters(document, page_texts)
     instances = read_instances(page_texts)
-    features = read_features(page_texts)
+    features = read_features(page_texts) + read_features_table(document, page_texts) + read_description_facts(page_texts)
     chapter_features = read_chapter_features(page_texts, chapters, document.page_count)
     memory = read_memory(document, page_texts, chapters)
     prose_facts = read_prose_facts(page_texts)

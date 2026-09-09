@@ -1,0 +1,31 @@
+{
+  "schema": "harness.electronics-key-features-gold.v1",
+  "source_artifact": "Tiva_C_Series_TM4C123GH6PM_Microcontroller_Data_Sheet_datasheet_Rev._E.pdf",
+  "source": "TI Tiva TM4C123GH6PM data sheet SPMS376E, Table 1-1 Microcontroller Features (p.46). A two-column Feature | Description table, not a bullet list. Written cold before scoring.",
+  "expected": [
+    {"group": "processing", "label": "Cortex-M4F"},
+    {"group": "processing", "label": "80-MHz", "value": 80},
+    {"group": "memory", "label": "256 KB.{0,15}Flash", "value": 256},
+    {"group": "memory", "label": "32 KB.{0,15}SRAM", "value": 32, "quantity_qualifier": "total_sram"},
+    {"group": "memory", "label": "2 ?KB of EEPROM"},
+    {"group": "connectivity", "label": "UART", "instances": 8},
+    {"group": "connectivity", "label": "SSI", "instances": 4},
+    {"group": "connectivity", "label": "I2C", "instances": 4},
+    {"group": "connectivity", "label": "CAN 2.0 A/B", "instances": 2},
+    {"group": "connectivity", "label": "USB 2.0 OTG/Host/Device"},
+    {"group": "peripherals", "label": "32-channel.{0,20}DMA"},
+    {"group": "timers_pwm_control", "label": "16/32-bit GPTM", "instances": 6},
+    {"group": "timers_pwm_control", "label": "watchdog timers", "instances": 2},
+    {"group": "timers_pwm_control", "label": "PWM modules", "instances": 2},
+    {"group": "timers_pwm_control", "label": "QEI", "instances": 2},
+    {"group": "analogue", "label": "12-bit ADC", "instances": 2},
+    {"group": "analogue", "label": "analog comparators", "instances": 2},
+    {"group": "analogue", "label": "digital comparators", "instances": 16},
+    {"group": "power_clock_reset", "label": "Hibernation"},
+    {"group": "io_package_environment", "label": "GPIO", "instances": 6},
+    {"group": "io_package_environment", "label": "64-pin LQFP"},
+    {"group": "io_package_environment", "label": "40°C to 85°C", "quantity_qualifier": "ambient"},
+    {"group": "io_package_environment", "label": "40°C to 105°C", "quantity_qualifier": "ambient"}
+  ],
+  "forbidden": []
+}

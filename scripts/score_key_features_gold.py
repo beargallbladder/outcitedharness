@@ -23,7 +23,10 @@ from pathlib import Path
 def match_row(exp: dict, row: dict) -> tuple[bool, str]:
     if row["group"] != exp["group"] or row["tier"] != "grid":
         return False, "group/tier"
-    hay = f"{row.get('label') or ''} | {row.get('verbatim') or ''}"
+    # A fact printed twice is one row; the other spelling is kept in
+    # also_printed and counts as present ("12-bit ADC modules" under
+    # "12-bit Analog-to-Digital Converters (ADC)").
+    hay = " | ".join([row.get("label") or "", row.get("verbatim") or "", *(row.get("also_printed") or [])])
     if not re.search(exp["label"], hay, re.I):
         return False, "label"
     for key in ("instances", "value", "quantity_qualifier", "qualifier_verbatim", "varies_by_part"):
@@ -90,6 +93,7 @@ def main() -> int:
         grid = grids.get(gold.get("document_sha256")) or grids.get(gold["source_artifact"])
         if grid is None:
             reports.append({"source_artifact": gold["source_artifact"], "error": "document not in drop"})
+            print(f"{gold['source_artifact']}: NOT IN DROP")
             worst = 0.0
             continue
         report = score(gold, grid)

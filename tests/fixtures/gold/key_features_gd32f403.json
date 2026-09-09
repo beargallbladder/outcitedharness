@@ -1,0 +1,30 @@
+{
+  "schema": "harness.electronics-key-features-gold.v1",
+  "source_artifact": "GD32F403xx_Datasheet_Rev3.1.pdf",
+  "source": "GigaDevice GD32F403xx Datasheet Rev 3.1, section 1 General description (p.8) and TOC package names (p.2). No bullet list: the family facts are one prose paragraph. Written cold before scoring.",
+  "expected": [
+    {"group": "processing", "label": "Cortex.{0,3}-M4"},
+    {"group": "processing", "label": "168 MHz", "value": 168},
+    {"group": "memory", "label": "3072 KB.{0,20}Flash", "qualifier_verbatim": "up to"},
+    {"group": "memory", "label": "128 KB SRAM", "value": 128, "quantity_qualifier": "total_sram"},
+    {"group": "analogue", "label": "12-bit.{0,20}ADC", "instances": 3},
+    {"group": "analogue", "label": "12-bit DAC", "instances": 2},
+    {"group": "timers_pwm_control", "label": "general-purpose 16-bit timers", "instances": 8},
+    {"group": "timers_pwm_control", "label": "advanced-control timers", "instances": 2},
+    {"group": "timers_pwm_control", "label": "basic timers", "instances": 2},
+    {"group": "connectivity", "label": "SPI", "instances": 3},
+    {"group": "connectivity", "label": "I2C", "instances": 2},
+    {"group": "connectivity", "label": "USART", "instances": 3},
+    {"group": "connectivity", "label": "UART", "instances": 2},
+    {"group": "connectivity", "label": "I2S", "instances": 2},
+    {"group": "connectivity", "label": "CAN", "instances": 2},
+    {"group": "connectivity", "label": "SDIO"},
+    {"group": "connectivity", "label": "USBFS"},
+    {"group": "power_clock_reset", "label": "2.6 to 3.6 V", "quantity_qualifier": "rated"},
+    {"group": "io_package_environment", "label": "40 to \\+?85"},
+    {"group": "io_package_environment", "label": "LQFP144"},
+    {"group": "io_package_environment", "label": "LQFP48"},
+    {"group": "io_package_environment", "label": "BGA100"}
+  ],
+  "forbidden": []
+}

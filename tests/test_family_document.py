@@ -156,3 +156,33 @@ def test_chapter_features_tag_section_and_enclosing_chapter() -> None:
     assert {r["chapter_class"] for r in rows} == {"spi"}
     assert rows[0]["section"] == "SPI main" or rows[0]["section"] == "SPI"
     assert rows[1]["qualifier_verbatim"] == "Up to"
+
+
+def test_description_paragraph_reads_counted_sized_and_named_facts() -> None:
+    from harness.electronics.family_document import read_description_facts
+
+    paragraph = (
+        "1. \nGeneral description \n"
+        "The GD32F403xx device belongs to the performance line of GD32 MCU Family. It is a new 32-bit general-purpose "
+        "microcontroller based on the Arm® Cortex®-M4 RISC core with best cost-performance ratio in terms of enhanced "
+        "processing capacity. The GD32F403xx device incorporates the Arm® Cortex®-M4 32-bit processor core operating at "
+        "168 MHz frequency with Flash accesses zero wait states to obtain maximum efficiency. It provides up to 3072 KB "
+        "on-chip Flash memory and 128 KB SRAM memory. The devices offer up to three 12-bit 2.6M MSPS ADCs, two 12-bit DACs, "
+        "up to eight general-purpose 16-bit timers, as well as standard and advanced communication interfaces: up to three "
+        "SPIs, two I2Cs, two CANs, a SDIO, and an USBFS. The device operates from a 2.6 to 3.6 V power supply and available "
+        "in –40 to +85 °C temperature range. Each TC can be configured to perform frequency generation. The above features "
+        "make GD32F403xx devices suitable for a wide range of applications."
+    )
+    rows = read_description_facts({1: paragraph})
+    by_label = {r["label"]: r for r in rows}
+    assert by_label["up to 3072 KB on-chip Flash memory"]["qualifier_verbatim"] == "up to"
+    assert "flash" in by_label["up to 3072 KB on-chip Flash memory"]["classes"]
+    assert by_label["12-bit 2.6M MSPS ADCs"]["count"] == 3
+    assert by_label["general-purpose 16-bit timers"]["count"] == 8
+    assert by_label["SPIs"]["count"] == 3 and "spi" in by_label["SPIs"]["classes"]
+    assert by_label["CANs"]["count"] == 2 and "can" in by_label["CANs"]["classes"]
+    assert "SDIO" in by_label and "USBFS" in by_label
+    assert "2.6 to 3.6 V power supply" in by_label
+    assert any(l.startswith("–40 to +85") for l in by_label)
+    # The verb "can" is not the bus; marketing sentences are not facts.
+    assert not any("configured" in l or "suitable" in l for l in by_label)
