@@ -86,7 +86,7 @@ _GROUP_BY_SYMBOL: tuple[tuple[re.Pattern[str], str], ...] = (
     (re.compile(r"^(?:ta|tj|tstg|tstorage|tl|top|tamb|tc|tcase|θja|rθja|rthja|θjc|rθjc|rthjc|θjb|rθjb|ψjt|ψjb|rθ|rth|rthjc\(?top\)?|rθjc\(?top\)?|rθjc\(?bot\)?)$"), "package_environment"),
 )
 _PARAM_GROUP: tuple[tuple[re.Pattern[str], str], ...] = (
-    (re.compile(r"drain|gate\s+charge|on[- ]?resistance|avalanche|reverse\s+recovery|capacitance|source", re.I), "switching"),
+    (re.compile(r"drain|gate\s+charge|on[- ]?resistance|avalanche|reverse\s+recovery|capacitance|source|operating\s+current", re.I), "switching"),
     (re.compile(r"input\s+voltage|output\s+voltage|output\s+current|quiescent|switching\s+frequency|dropout|reference|feedback|current\s+limit|undervoltage|overvoltage|efficiency|line\s+regulation|load\s+regulation", re.I), "regulation"),
     (re.compile(r"junction|ambient|storage|operating\s+(?:free-air\s+)?temperature|lead\s+temperature|case\s+temperature", re.I), "package_environment"),
     (re.compile(r"thermal", re.I), "thermal"),
@@ -96,8 +96,27 @@ _THERMAL_SYMBOL = re.compile(r"^(?:r|ψ|θ)?(?:θ|th|ψ)", re.I)
 
 def _norm_symbol(symbol: str) -> str:
     s = symbol.strip().lower().replace(" ", "").replace("_", "")
+    s = re.sub(r"\*\d+", "", s)
+    s = s.replace("/", "").replace("*", "")
     s = s.replace("θ", "θ").replace("ψ", "ψ")
     return s
+
+
+_UNIT_BY_SYMBOL: tuple[tuple[re.Pattern[str], str], ...] = (
+    (re.compile(r"^(?:vds|vdss|vgs|vgss|v\(br\)dss)$"), "V"),
+    (re.compile(r"^(?:id|idp|idm|is|isp)$"), "A"),
+    (re.compile(r"^(?:pd)$"), "W"),
+    (re.compile(r"^(?:tj|ta|tstg|tc)$"), "°C"),
+    (re.compile(r"^rds"), "mΩ"),
+)
+
+
+def _unit_from_symbol(symbol: str) -> str | None:
+    sym = _norm_symbol(symbol)
+    for pattern, unit in _UNIT_BY_SYMBOL:
+        if pattern.match(sym):
+            return unit
+    return None
 
 
 _CANONICAL: tuple[tuple[re.Pattern[str], str], ...] = (
@@ -109,7 +128,7 @@ _CANONICAL: tuple[tuple[re.Pattern[str], str], ...] = (
     (re.compile(r"\boutput\s+current|load\s+current", re.I), "IOUT"),
     (re.compile(r"drain[- ]to[- ]source\s+on[- ]?(?:state\s+)?resistance|on[- ]resistance", re.I), "RDS(on)"),
     (re.compile(r"drain[- ]to[- ]source\s+(?:breakdown\s+)?voltage|drain[- ]source\s+voltage", re.I), "VDS"),
-    (re.compile(r"continuous\s+drain\s+current", re.I), "ID"),
+    (re.compile(r"continuous\s+drain(?:[- ]to[- ]drain)?\s+current|drain[- ]to[- ]drain\s+current|operating\s+current", re.I), "ID"),
     (re.compile(r"total\s+gate\s+charge|gate\s+charge\s+total", re.I), "Qg"),
 )
 
@@ -223,12 +242,30 @@ def _roles_for_header(names: list[str], cells: list[tuple | None]) -> tuple[dict
             if pattern.search(name):
                 roles[i] = role
                 break
+    # Dual-FET: one header cell is "Q1 Control FET MIN TYP MAX". The numbers
+    # sit in that cell; treat it as the first value group so BVDSS is not lost.
+    if "unit" in roles.values() and not (set(roles.values()) & set(_VALUE_ROLES)):
+        for i, name in enumerate(names):
+            if re.search(r"\bQ1\b|control\s+fet", name or "", re.I) or re.search(r"\bmin\b.*\btyp\b.*\bmax\b", name or "", re.I):
+                roles[i] = "min"
+                break
     return roles, header_condition
 
 
 def _is_characteristics_header(roles: dict[int, str]) -> bool:
     values = set(roles.values())
-    return ("unit" in values and bool(values & set(_VALUE_ROLES))) or "value_unit" in values
+    # ROHM abs-max is Symbol | Value with the unit implied by the symbol (VDSS, ID).
+    return ("unit" in values and bool(values & set(_VALUE_ROLES))) or "value_unit" in values or (
+        "symbol" in values and "value" in values
+    )
+
+
+def _header_looks_fragmented(names: list[str]) -> bool:
+    """find_tables splits 'PARAMETER' into 'PA'+'RAMETER' and a Q1/Q2 MOSFET
+    header into a dozen one- and two-letter cells. Those headers assign the
+    wrong x-ranges to MIN/TYP/MAX and drop BVDSS."""
+    short = sum(1 for n in names if n and 0 < len(n.strip()) <= 3)
+    return len(names) >= 8 and short >= 4
 
 
 _TITLE_ANY = re.compile(r"ratings?|characteristics|conditions|specifications|summary|thermal|information|parameters", re.I)
@@ -383,8 +420,15 @@ def _infer_columns_by_content(table: Any, spans: list[dict[str, Any]], data_star
             for ci in text_cols[1:]:
                 roles[ci] = "conditions"
         return columns, roles, data_start
-    if not value_cols or not unit_cols:
+    if not value_cols:
         return [], {}, data_start
+    if not unit_cols:
+        # ROHM abs-max: Symbol | Value, unit implied by the symbol (VDSS, ID).
+        text_cols = [ci for ci, (num, unit, text, _) in enumerate(stats) if ci not in value_cols and text > 0]
+        roles[value_cols[0]] = "value"
+        if text_cols:
+            roles[text_cols[0]] = "symbol"
+        return columns, roles, data_start
     text_cols = [ci for ci, (num, unit, text, _) in enumerate(stats) if ci not in value_cols and ci not in unit_cols and text > 0]
     if len(value_cols) == 1:
         roles[value_cols[0]] = "value"
@@ -401,7 +445,7 @@ def _infer_columns_by_content(table: Any, spans: list[dict[str, Any]], data_star
 
 
 def _parse_number(text: str) -> float | list[float] | None:
-    t = text.strip().replace("−", "-").replace("–", "-").replace(",", "")
+    t = _normalize_pdf_text(text).strip().replace(",", "")
     t = re.sub(r"\(\d\)$", "", t).strip()
     m = _RANGE.match(t)
     if m:
@@ -436,6 +480,8 @@ def read_characteristic_tables(document: Any) -> list[dict[str, Any]]:
             roles, header_condition = _roles_for_header([n for _, _, n in header], [(x0, 0, x1, 0) for x0, x1, _ in header])
             title_in_table = None
             data_start = 1 if not table.header.external else 0
+            if _header_looks_fragmented([n for _, _, n in header]):
+                roles = {}
             if not _is_characteristics_header(roles):
                 # Older TI layout: the title is the table's first row
                 # ("ABSOLUTE MAXIMUM RATINGS" spanning every column) and the
@@ -558,9 +604,12 @@ def read_characteristic_tables(document: Any) -> list[dict[str, Any]]:
                     symbol, parameter = last_symbol, last_parameter  # continuation row (second condition line)
                 else:
                     last_symbol, last_parameter = symbol, parameter
+                # ROHM prints "V/DSS" and "I *1/D"; glue the subscript and drop the footnote.
+                symbol = re.sub(r"\*\d+", "", symbol)
+                symbol = re.sub(r"[\s/]+", "", symbol)
                 unit_tokens = [t for t, _ in col_lines("unit") if t.strip()]
-                unit_text = " ".join(dict.fromkeys(unit_tokens)).strip()  # "mΩ mΩ" -> "mΩ"; distinct units stay listed
-                unit = unit_text or last_unit
+                unit_text = _normalize_pdf_text(" ".join(dict.fromkeys(unit_tokens))).strip()  # "mΩ mΩ" -> "mΩ"; distinct units stay listed
+                unit = unit_text or last_unit or _unit_from_symbol(symbol)
                 if unit_text:
                     last_unit = unit_text
                 cond_lines = col_lines("conditions")
@@ -660,69 +709,207 @@ def read_characteristic_tables(document: Any) -> list[dict[str, Any]]:
 # and the fixtures (vendor parametrics) are built from exactly them.
 
 _NUM = r"(\d+(?:\.\d+)?)"
+_SNUM = r"([-+]?\d+(?:\.\d+)?)"
 _V = r"\s*-?\s*V(?:olts?)?"
 _TO = r"\s*(?:to|–|-|—|\.\.\.)\s*"
+# "3V (falling threshold) to 65V"; optional wrapping parens on the pair.
+_PAREN = r"(?:\s*\([^)]{0,48}\))?"
+_VRANGE = rf"\(?\s*{_NUM}(?:{_V})?{_PAREN}{_TO}{_NUM}{_V}\s*\)?"
+# Ampere token that is not µA/nA/kA. mA is allowed and scaled later.
+_A = r"\s*-?\s*(?:mA\b|(?<![pnuµμmk])A\b)"
+_C = r"\s*°\s*C"
+_PROSE_SEP = r"(?:voltage\s*)?(?:range|operating\s+range)?\s*(?:of|from|:)?\s*"
 _PROSE_PATTERNS: tuple[tuple[re.Pattern[str], str, str], ...] = (
-    # VIN ranges
-    (re.compile(rf"{_NUM}{_V}{_TO}{_NUM}{_V}\s+(?:wide\s+)?(?:input|supply|VIN|operating\s+input)", re.I), "vin_range", "VIN"),
-    (re.compile(rf"(?:input|supply|VIN)\s+(?:voltage\s+)?(?:range|operating\s+range)?\s*(?:of|from|:)?\s*{_NUM}{_V}{_TO}{_NUM}{_V}", re.I), "vin_range", "VIN"),
-    (re.compile(rf"(?:wide\s+)?(?:input|supply)\s+(?:voltage\s+)?range\s*(?:of|from|:)?\s*{_NUM}{_V}{_TO}{_NUM}{_V}", re.I), "vin_range", "VIN"),
-    (re.compile(rf"operat(?:es|ing|ion)\s+(?:from|over|with)\s+(?:an?\s+)?(?:input\s+)?(?:voltage\s+)?(?:range\s+)?(?:of\s+)?{_NUM}{_V}{_TO}{_NUM}{_V}", re.I), "vin_range", "VIN"),
-    # VOUT ranges
-    (re.compile(rf"(?:adjustable\s+)?output\s+(?:voltage\s+)?(?:range\s+)?(?:adjustable\s+)?(?:from|of|:)?\s*{_NUM}{_V}{_TO}{_NUM}{_V}", re.I), "vout_range", "VOUT"),
-    (re.compile(rf"{_NUM}{_V}{_TO}{_NUM}{_V}\s+(?:adjustable\s+)?output", re.I), "vout_range", "VOUT"),
-    (re.compile(rf"adjustable\s+(?:from\s+)?{_NUM}{_V}{_TO}{_NUM}{_V}", re.I), "vout_range", "VOUT"),
+    # VIN — do not treat a bare trailing "VIN" as the unit of the previous
+    # pair; that steals schematic "VOUT1 1.3V-27V VIN 4.5V-30V" as VIN.
+    (re.compile(rf"{_VRANGE}\s+(?:wide\s+)?(?:input|supply|operating\s+input)", re.I), "vin_range", "VIN"),
+    (re.compile(rf"(?:input|supply|VIN)\s+{_PROSE_SEP}{_VRANGE}", re.I), "vin_range", "VIN"),
+    (re.compile(rf"(?:wide\s+)?(?:input|supply)\s+{_PROSE_SEP}{_VRANGE}", re.I), "vin_range", "VIN"),
+    (re.compile(rf"operat(?:es|ing|ion)\s+(?:from|over|with)\s+(?:an?\s+)?(?:input\s+)?{_PROSE_SEP}{_VRANGE}", re.I), "vin_range", "VIN"),
+    (re.compile(rf"{_NUM}{_V}{_TO}{_NUM}{_V},\s*{_NUM}{_A}", re.I), "vin_range", "VIN"),  # "3V to 65V, 0.3A"
+    # VOUT ranges (schematic net names first so they win over a following VIN)
+    (re.compile(rf"VOUT\s*[12]?\s*{_VRANGE}", re.I), "vout_range", "VOUT"),
+    (re.compile(rf"(?:adjustable\s+)?output\s+{_PROSE_SEP}{_VRANGE}", re.I), "vout_range", "VOUT"),
+    (re.compile(rf"{_VRANGE}\s+(?:adjustable\s+)?output", re.I), "vout_range", "VOUT"),
+    (re.compile(rf"adjustable\s+(?:from\s+)?{_VRANGE}", re.I), "vout_range", "VOUT"),
+    (re.compile(rf"{_NUM}{_V}\s+or\s+{_NUM}{_V}\s+output", re.I), "vout_range", "VOUT"),
+    # VOUT / VIN single bounds printed without a numeric max
+    (re.compile(rf"(?:outputs?|output\s+voltages?)\s+as\s+low\s+as\s+{_NUM}{_V}", re.I), "vout_min", "VOUT"),
+    (re.compile(rf"adjustable\s+output\s+down\s+to\s+{_NUM}{_V}", re.I), "vout_min", "VOUT"),
+    (re.compile(rf"output\s+voltage\s+from\s+{_NUM}{_V}\s+to\s+VIN\b", re.I), "vout_min", "VOUT"),
+    (re.compile(rf"(?:feedback\s+)?(?:voltage\s+)?reference(?:\s+voltage)?(?:\s+of|:)?\s+{_NUM}{_V}", re.I), "vout_min", "VOUT"),
+    (re.compile(rf"{_NUM}{_V}\s*(?:±\s*\d+(?:\.\d+)?\s*%)?\s+voltage reference", re.I), "vout_min", "VOUT"),
+    (re.compile(rf"{_NUM}\s*-?\s*V\s+internal\s+voltage\s+reference", re.I), "vout_min", "VOUT"),
     # IOUT
-    (re.compile(rf"{_NUM}\s*-?\s*A\s+(?:continuous\s+|maximum\s+|max\.?\s+|peak\s+)?(?:output|load|rated)\s+current", re.I), "iout_max", "IOUT"),
-    (re.compile(rf"(?:up\s+to|supports?|delivers?|provides?|capable\s+of)\s+{_NUM}\s*-?\s*A\b", re.I), "iout_max", "IOUT"),
-    (re.compile(rf"(?:output|load)\s+current\s+(?:of\s+|up\s+to\s+)?{_NUM}\s*-?\s*A\b", re.I), "iout_max", "IOUT"),
-    (re.compile(rf"{_NUM}\s*-?\s*A\s+(?:synchronous\s+|step-down\s+|buck\s+|boost\s+|LDO\s+|linear\s+)+(?:converter|regulator)", re.I), "iout_max", "IOUT"),
+    (re.compile(rf"{_NUM}{_A}\s+(?:continuous\s+|maximum\s+|max\.?\s+|peak\s+)?(?:output|load|rated)\s+current", re.I), "iout_max", "IOUT"),
+    (re.compile(rf"(?:up\s+to|supports?|delivers?|provides?|capable\s+of(?:\s+supplying)?|supplying)\s+{_NUM}{_A}", re.I), "iout_max", "IOUT"),
+    (re.compile(rf"(?:output|load)\s+current\s*(?:of|up\s+to|:)?\s*{_NUM}{_A}", re.I), "iout_max", "IOUT"),
+    (re.compile(rf"{_NUM}{_A}\s+(?:to\s+\S+\s+)?load\s+range", re.I), "iout_max", "IOUT"),
+    (re.compile(rf"{_NUM}{_A}\s+(?:synchronous\s+|step-down\s+|buck\s+|boost\s+|LDO\s+|linear\s+|radiation[- ]tolerant\s+|low\s+dropout\s+)*(?:DC/?DC\s+)?(?:converter|regulator)", re.I), "iout_max", "IOUT"),
+    (re.compile(rf"\(\s*\d+(?:\.\d+)?{_V},\s*{_NUM}{_A}\s*\)", re.I), "iout_max", "IOUT"),  # "(30V, 1.25A)"
+    (re.compile(rf"\d+(?:\.\d+)?{_V}{_TO}\d+(?:\.\d+)?{_V},\s*{_NUM}{_A}", re.I), "iout_max", "IOUT"),
+    # Temperature (Features / AEC / junction / ambient). Storage is filtered later.
+    (re.compile(rf"{_SNUM}{_C}{_TO}{_SNUM}{_C}\s+(?:junction|ambient|operating)", re.I), "temp_range", "TA"),
+    (re.compile(rf"(?:AEC-Q100\b.{{0,32}}?|(?:device\s+)?temperature\s+grade\s+\d[:\s]+|(?:junction|ambient|operating(?:\s+free-air)?|military)\s+temperature(?:\s+range)?\s*(?:of|from|:)?\s*|rated\s+from\s+)\(?\s*{_SNUM}{_C}{_TO}{_SNUM}{_C}\s*\)?", re.I), "temp_range", "TA"),
+    # ROHM outline box + Infineon Features: "VDSS 40V" / "VDSS = 1200 V" / "ID ±24A" / "IDDC = 30 A"
+    (re.compile(r"V\s*DSS\s*(?:/?\s*|=)\s*([-+]?\d+(?:\.\d+)?)\s*V", re.I), "vds", "VDS"),
+    (re.compile(r"(?:^|[\s/])ID(?:DC)?\s*[±=]?\s*(\d+(?:\.\d+)?)\s*A\b", re.I), "id_max", "ID"),
+    (re.compile(r"RDS\s*\(?\s*on\s*\)?\s*(?:\(\s*Max\.?\s*\)|=)\s*(\d+(?:\.\d+)?)\s*(m)?\s*[ΩΩωΩohm]?", re.I), "rds_max", "RDS(on)"),
 )
 _PROSE_STOP = re.compile(r"absolute\s+maximum\s+ratings|pin\s+configuration|electrical\s+characteristics|specifications", re.I)
+_PROSE_PARAM = {
+    "vin_range": "Input voltage range",
+    "vout_range": "Output voltage range",
+    "vout_min": "Output voltage",
+    "vin_min": "Input voltage",
+    "iout_max": "Output current",
+    "temp_range": "Operating temperature",
+    "vds": "Drain-to-source voltage",
+    "id_max": "Drain current",
+    "rds_max": "Drain-to-source on-resistance",
+}
+_PROSE_UNIT = {
+    "vin_range": "V",
+    "vout_range": "V",
+    "vout_min": "V",
+    "vin_min": "V",
+    "iout_max": "A",
+    "temp_range": "°C",
+    "vds": "V",
+    "id_max": "A",
+    "rds_max": "Ohm",
+}
+_FIXED_VOUT_HEAD = re.compile(r"output voltage options|available in output voltage|fixed output voltages?\b", re.I)
+_FIXED_VOUT_VALUE = re.compile(r"(\d+(?:\.\d+)?)\s*-?V\b", re.I)
+
+
+# Older ROHM PDFs map Symbol-font ± / − / Ω through the private-use area.
+_PDF_CHAR = {
+    "\uf0b1": "±",
+    "\uf02d": "-",
+    "\uf02b": "+",
+    "\uf0b0": "°",
+    "\uf057": "Ω",
+}
+
+
+def _normalize_pdf_text(text: str) -> str:
+    text = text.replace("\u2013", "-").replace("\u2212", "-").replace("\u00a0", " ")
+    for src, dst in _PDF_CHAR.items():
+        text = text.replace(src, dst)
+    return text
+
+
+def _flatten_front_text(text: str) -> str:
+    text = re.sub(r"[ \t]+", " ", text)
+    text = _normalize_pdf_text(text)
+    # Bullets and sentences; join soft line breaks inside a bullet.
+    return re.sub(r"\n(?![•\u2022\-\u25a0\u25aa\u2013]|\d+\s)", " ", text)
+
+
+def _numeric_groups(match: re.Match[str]) -> list[float]:
+    out: list[float] = []
+    for g in match.groups():
+        if g is None:
+            continue
+        try:
+            out.append(float(g))
+        except ValueError:
+            continue
+    return out
+
+
+def _prose_value(kind: str, nums: list[float], matched: str) -> Any | None:
+    if kind == "temp_range":
+        if len(nums) < 2 or nums[0] >= nums[1] or nums[0] < -80 or nums[1] > 220:
+            return None
+        return [nums[0], nums[1]]
+    if kind.endswith("_range"):
+        if len(nums) < 2:
+            return None
+        lo, hi = (nums[0], nums[1]) if nums[0] <= nums[1] else (nums[1], nums[0])
+        if lo == hi or hi > 2000:
+            return None
+        return [lo, hi]
+    if kind == "vds":
+        if not nums or abs(nums[0]) > 5000:
+            return None
+        return nums[0]
+    if kind == "rds_max":
+        if not nums:
+            return None
+        value = nums[0]
+        if re.search(r"\bm\s*[ΩΩωohm]|mΩ", matched, re.I):
+            value = value / 1000.0
+        return value
+    if not nums or nums[0] > 1000:
+        return None
+    value = nums[0]
+    if kind == "iout_max" and re.search(r"mA\b", matched):
+        value = value / 1000.0
+    return value
+
+
+def _fixed_vout_from_options(flat: str) -> list[float] | None:
+    """Family of fixed outputs listed as 'LM140LA-5.0 5V … LM140LA-15 15V'."""
+    head = _FIXED_VOUT_HEAD.search(flat)
+    if not head:
+        return None
+    window = flat[head.start():head.start() + 400]
+    vals = sorted({float(m.group(1)) for m in _FIXED_VOUT_VALUE.finditer(window) if 0.5 <= float(m.group(1)) <= 60})
+    if len(vals) < 2:
+        return None
+    return [vals[0], vals[-1]]
+
+
+def _facts_from_front_text(flat: str, page: int, seen: set[tuple]) -> list[dict[str, Any]]:
+    facts: list[dict[str, Any]] = []
+
+    def add(kind: str, symbol: str, value: Any, verbatim: str) -> None:
+        key = (kind.split("_")[0], str(value) if not isinstance(value, list) else f"{value[0]}:{value[1]}")
+        # Dedup VIN 4.5-18 whether it came from vin_range or another spelling.
+        if key in seen:
+            return
+        seen.add(key)
+        facts.append({
+            "page": page,
+            "table_title": "front-page prose",
+            "table_kind": "prose",
+            "table_condition": None,
+            "section": "features",
+            "symbol": symbol,
+            "symbol_as_printed": symbol,
+            "parameter": _PROSE_PARAM[kind],
+            "condition_verbatim": None,
+            "unit": _PROSE_UNIT[kind],
+            "value": value,
+            "prose_kind": kind,
+            "verbatim": verbatim[:240],
+        })
+
+    for pattern, kind, symbol in _PROSE_PATTERNS:
+        for m in pattern.finditer(flat):
+            window = flat[max(0, m.start() - 48):m.end() + 24]
+            if kind == "temp_range" and re.search(r"storage|solder|lead\s+temp", window, re.I):
+                continue
+            nums = _numeric_groups(m)
+            value = _prose_value(kind, nums, m.group(0))
+            if value is None:
+                continue
+            add(kind, symbol, value, flat[max(0, m.start() - 40):m.end() + 20].strip())
+
+    options = _fixed_vout_from_options(flat)
+    if options:
+        head = _FIXED_VOUT_HEAD.search(flat)
+        add("vout_range", "VOUT", options, flat[head.start():head.start() + 160].strip() if head else "")
+    return facts
 
 
 def read_front_page_facts(document: Any, max_pages: int = 3) -> list[dict[str, Any]]:
     facts: list[dict[str, Any]] = []
     seen: set[tuple] = set()
     for pno in range(min(max_pages, document.page_count)):
-        text = document[pno].get_text()
-        text = re.sub(r"[ \t]+", " ", text)
-        text = text.replace("\u2013", "-").replace("\u2212", "-").replace("\u00a0", " ")
-        # Bullets and sentences; join soft line breaks inside a bullet.
-        flat = re.sub(r"\n(?![•\u2022\-\u25a0\u25aa\u2013]|\d+\s)", " ", text)
-        for pattern, kind, symbol in _PROSE_PATTERNS:
-            for m in pattern.finditer(flat):
-                nums = [float(g) for g in m.groups() if g is not None]
-                if not nums:
-                    continue
-                if kind.endswith("_range"):
-                    if len(nums) < 2 or nums[0] >= nums[1] or nums[1] > 2000:
-                        continue
-                    value: Any = [nums[0], nums[1]]
-                else:
-                    if nums[0] > 1000:
-                        continue
-                    value = nums[0]
-                key = (kind, str(value))
-                if key in seen:
-                    continue
-                seen.add(key)
-                start = max(0, m.start() - 40)
-                facts.append({
-                    "page": pno + 1,
-                    "table_title": "front-page prose",
-                    "table_kind": "prose",
-                    "table_condition": None,
-                    "section": "features",
-                    "symbol": symbol,
-                    "symbol_as_printed": symbol,
-                    "parameter": {"vin_range": "Input voltage range", "vout_range": "Output voltage range", "iout_max": "Output current"}[kind],
-                    "condition_verbatim": None,
-                    "unit": "V" if kind.endswith("_range") else "A",
-                    "value": value,
-                    "prose_kind": kind,
-                    "verbatim": flat[start:m.end() + 20].strip(),
-                })
+        facts.extend(_facts_from_front_text(_flatten_front_text(document[pno].get_text()), pno + 1, seen))
     return facts
 
 
@@ -731,6 +918,10 @@ def read_front_page_facts(document: Any, max_pages: int = 3) -> list[dict[str, A
 # ---------------------------------------------------------------------------
 
 def _rows_from_fact(fact: dict[str, Any], base: dict[str, Any]) -> list[dict[str, Any]]:
+    if not (fact.get("symbol") or "").strip():
+        aliases = canonical_symbols(fact.get("parameter") or "")
+        if aliases:
+            fact = {**fact, "symbol": aliases[0], "symbol_as_printed": fact.get("symbol_as_printed") or aliases[0]}
     group = classify(fact["symbol"], fact["parameter"] or (fact.get("condition_verbatim") or "" if not fact["symbol"] else ""), fact["section"])
     label_head = " ".join(p for p in (fact["symbol"], fact["parameter"]) if p).strip()
     kind = fact["table_kind"]
@@ -769,15 +960,22 @@ def _rows_from_fact(fact: dict[str, Any], base: dict[str, Any]) -> list[dict[str
         }
 
     if kind == "prose":
-        rows.append(row(fact["value"], "rated" if isinstance(fact["value"], list) else "maximum"))
+        # Gold VIN/VOUT/temp want "rated"; IOUT wants "maximum". A range is
+        # always a rated headline; a single current is a max load.
+        pk = fact.get("prose_kind") or ""
+        if isinstance(fact["value"], list) or pk != "iout_max":
+            qq = "rated"
+        else:
+            qq = "maximum"
+        rows.append(row(fact["value"], qq))
     elif kind == "absolute_maximum":
-        for role in ("value", "max", "min"):
-            if role in fact:
-                v = fact[role]
-                if role == "min" and "max" in fact and not isinstance(v, list):
-                    v = [fact["min"], fact["max"]]
-                rows.append(row(v, "absolute_maximum"))
-                break
+        if "min" in fact and "max" in fact and not isinstance(fact["min"], list) and not isinstance(fact.get("max"), list):
+            rows.append(row([fact["min"], fact["max"]], "absolute_maximum"))
+        else:
+            for role in ("value", "max", "min"):
+                if role in fact:
+                    rows.append(row(fact[role], "absolute_maximum"))
+                    break
     elif kind == "recommended":
         if "min" in fact and "max" in fact and not isinstance(fact["min"], list):
             rows.append(row([fact["min"], fact["max"]], "rated"))

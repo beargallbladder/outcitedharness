@@ -51,8 +51,13 @@ def values_equal(exp: dict, row: dict) -> bool:
         return any(values_equal({**exp, "value": want}, {**row, "value": g}) for g in got)
     if "unit" in exp and exp["unit"] and row.get("unit"):
         a, b = to_base(want, exp["unit"]), to_base(got, row.get("unit"))
-        if a and b:
-            return a[1] == b[1] and abs(a[0] - b[0]) <= 1e-9 * max(1.0, abs(a[0]))
+        if a and b and a[1] == b[1]:
+            if abs(a[0] - b[0]) <= 1e-9 * max(1.0, abs(a[0])):
+                return True
+            # P-channel VDS/ID print negative; vendor selectors are unsigned.
+            if a[1] in {"v", "a"} and abs(abs(a[0]) - abs(b[0])) <= 1e-9 * max(1.0, abs(a[0])):
+                return True
+            return False
     return got == want
 
 

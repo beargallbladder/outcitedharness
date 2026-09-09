@@ -23,7 +23,7 @@ from pathlib import Path
 
 QUANTITY = {
     "vds_v": re.compile(r"^(?:v\(?br\)?dss|vdss|vds|bvdss)$|drain[- ]to[- ]source\s+(?:breakdown\s+)?voltage", re.I),
-    "id_a": re.compile(r"^id$|continuous\s+drain\s+current", re.I),
+    "id_a": re.compile(r"^(?:id|idm|id\d+|id1d2)$|continuous\s+drain(?:[- ]to[- ]drain)?\s+current|operating\s+current", re.I),
     "rds_on_mohm": re.compile(r"^rds\(?on\)?$|on[- ]?resistance", re.I),
     "qg_nc": re.compile(r"^qg$|gate\s+charge\s+total|total\s+gate\s+charge", re.I),
     "vin_min_v": re.compile(r"^vin$|^vi$|^vcc$|\binput\s+voltage|supply\s+voltage", re.I),
