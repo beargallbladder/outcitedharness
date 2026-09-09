@@ -748,9 +748,12 @@ _PROSE_PATTERNS: tuple[tuple[re.Pattern[str], str, str], ...] = (
     (re.compile(rf"{_NUM}{_A}\s+(?:synchronous\s+|step-down\s+|buck\s+|boost\s+|LDO\s+|linear\s+|radiation[- ]tolerant\s+|low\s+dropout\s+)*(?:DC/?DC\s+)?(?:converter|regulator)", re.I), "iout_max", "IOUT"),
     (re.compile(rf"\(\s*\d+(?:\.\d+)?{_V},\s*{_NUM}{_A}\s*\)", re.I), "iout_max", "IOUT"),  # "(30V, 1.25A)"
     (re.compile(rf"\d+(?:\.\d+)?{_V}{_TO}\d+(?:\.\d+)?{_V},\s*{_NUM}{_A}", re.I), "iout_max", "IOUT"),
-    # Temperature (Features / AEC / junction / ambient). Storage is filtered later.
+    # Temperature (Features / AEC / junction / ambient). Bare storage is filtered later;
+    # "operating and storage" is the Infineon combined rating the fixtures ask for.
     (re.compile(rf"{_SNUM}{_C}{_TO}{_SNUM}{_C}\s+(?:junction|ambient|operating)", re.I), "temp_range", "TA"),
     (re.compile(rf"(?:AEC-Q100\b.{{0,32}}?|(?:device\s+)?temperature\s+grade\s+\d[:\s]+|(?:junction|ambient|operating(?:\s+free-air)?|military)\s+temperature(?:\s+range)?\s*(?:of|from|:)?\s*|rated\s+from\s+)\(?\s*{_SNUM}{_C}{_TO}{_SNUM}{_C}\s*\)?", re.I), "temp_range", "TA"),
+    (re.compile(rf"(?:operating\s+and\s+storage|operating\s+junction)\s+temperature(?:\s+range)?\s*(?:T\s*[jv]?\s*,\s*T\s*(?:stg)?|T\s*[jv]|T)?\s*{_SNUM}(?:{_C})?(?:{_TO}|\s+){_SNUM}{_C}", re.I), "temp_range", "TJ"),
+    (re.compile(rf"(?:operating\s+and\s+storage\s+temperature|T\s*[jv]\s*,\s*T\s*stg).{{0,200}}?{_SNUM}(?:{_C})?(?:{_TO}|\s+){_SNUM}(?:{_C})?", re.I | re.DOTALL), "temp_range", "TJ"),
     # ROHM outline box + Infineon Features: "VDSS 40V" / "VDSS = 1200 V" / "ID ±24A" / "IDDC = 30 A"
     (re.compile(r"V\s*DSS\s*(?:/?\s*|=)\s*([-+]?\d+(?:\.\d+)?)\s*V", re.I), "vds", "VDS"),
     (re.compile(r"(?:^|[\s/])ID(?:DC)?\s*[±=]?\s*(\d+(?:\.\d+)?)\s*A\b", re.I), "id_max", "ID"),
@@ -790,6 +793,8 @@ _PDF_CHAR = {
     "\uf02b": "+",
     "\uf0b0": "°",
     "\uf057": "Ω",
+    "\u2011": "-",  # non-breaking hyphen; Infineon "‑55 ‑ 150"
+    "\u00ad": "",
 }
 
 
@@ -803,6 +808,9 @@ def _normalize_pdf_text(text: str) -> str:
 def _flatten_front_text(text: str) -> str:
     text = re.sub(r"[ \t]+", " ", text)
     text = _normalize_pdf_text(text)
+    # Infineon Min/Typ/Max: "T\n-55 -\n175 °C" and "T -55 -\n175 °C".
+    text = re.sub(r"\n(?=\s*[-+]\d)", " ", text)
+    text = re.sub(r"-\s*\n(?=\s*[-+]?\d)", " ", text)
     # Bullets and sentences; join soft line breaks inside a bullet.
     return re.sub(r"\n(?![•\u2022\-\u25a0\u25aa\u2013]|\d+\s)", " ", text)
 
@@ -821,7 +829,7 @@ def _numeric_groups(match: re.Match[str]) -> list[float]:
 
 def _prose_value(kind: str, nums: list[float], matched: str) -> Any | None:
     if kind == "temp_range":
-        if len(nums) < 2 or nums[0] >= nums[1] or nums[0] < -80 or nums[1] > 220:
+        if len(nums) < 2 or nums[0] >= nums[1] or nums[0] < -80 or nums[1] > 220 or nums[1] < 40:
             return None
         return [nums[0], nums[1]]
     if kind.endswith("_range"):
@@ -890,7 +898,9 @@ def _facts_from_front_text(flat: str, page: int, seen: set[tuple]) -> list[dict[
     for pattern, kind, symbol in _PROSE_PATTERNS:
         for m in pattern.finditer(flat):
             window = flat[max(0, m.start() - 48):m.end() + 24]
-            if kind == "temp_range" and re.search(r"storage|solder|lead\s+temp", window, re.I):
+            if kind == "temp_range" and re.search(r"solder|lead\s+temp", window, re.I):
+                continue
+            if kind == "temp_range" and re.search(r"storage", window, re.I) and not re.search(r"operating", window, re.I):
                 continue
             nums = _numeric_groups(m)
             value = _prose_value(kind, nums, m.group(0))

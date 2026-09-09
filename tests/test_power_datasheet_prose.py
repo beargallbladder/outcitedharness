@@ -102,6 +102,21 @@ def test_temp_features_not_storage():
     assert [-65.0, 150.0] not in temps
 
 
+def test_infineon_operating_and_storage_is_kept():
+    """Infineon SIPMOS / CoolSiC: combined rating, not a storage-only skip."""
+    facts = _facts(
+        "Operating and storage temperature T j, T stg -55 ... 150 °C\n"
+        "Operating junction temperature T -55 - 175 °C\n"
+        "Operating junction temperature T \u201155 \u2011\n175 °C\n"
+        "Operating and storage temperature T j, T stg °C ESD 55/150/56\n-55 ... 150\n"
+        "Storage Temperature Range -65°C to +150°C\n"
+    )
+    temps = _of(facts, "temp_range")
+    assert [-55.0, 150.0] in temps
+    assert [-55.0, 175.0] in temps
+    assert [-65.0, 150.0] not in temps
+
+
 def test_rohm_outline_box_vds_id_rds():
     """ROHM Si MOSFET page-1 outline: VDSS / RDS(on)(Max.) / ID, including P-ch."""
     facts = _facts(
