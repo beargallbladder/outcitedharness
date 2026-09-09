@@ -106,6 +106,39 @@ def test_prose_facts_collapse_core_spellings_and_pick_widest_supply() -> None:
     assert [f["value"] for f in facts if f["kind"] == "temperature_range"] == [[-40, 105]]
 
 
+def test_quantity_qualifier_names_the_quantity_not_the_bound() -> None:
+    from harness.electronics.key_features_grid import quantity_qualifier
+
+    def row(label, value, unit, section=None, cls=None, qualifier=None, context=None):
+        return {"label": label, "verbatim": label, "value": value, "unit": unit, "section": section, "peripheral_class": cls, "qualifier_verbatim": qualifier, "context": context}
+
+    assert quantity_qualifier(row("512-KB code flash memory", 512, "KB", cls="flash")) == "code_flash"
+    assert quantity_qualifier(row("8-KB data flash memory (100,000 erase/write cycles)", 8, "KB", cls="flash")) == "data_flash"
+    assert quantity_qualifier(row("Up to 2 Mbytes of Flash memory", 2, "Mbytes", cls="flash", qualifier="Up to")) is None  # bare flash: not called code
+    assert quantity_qualifier(row("96-KB SRAM", 96, "KB", cls="sram")) == "total_sram"
+    assert quantity_qualifier(row("Main internal SRAM1 (112 KB)", 112, "KB", cls="sram")) == "sram_bank"
+    assert quantity_qualifier(row("Ta = –40°C to +85°C", [-40, 85], "°C", section="temperature_range")) == "ambient"
+    assert quantity_qualifier(row("–40 to +125 °C", [-40, 125], "°C", section="temperature_range", context="Junction temperature Tj –40 to +125 °C")) == "junction"
+    assert quantity_qualifier(row("–40 to +125 °C", [-40, 125], "°C", section="temperature_range")) is None
+    assert quantity_qualifier(row("1.8 to 3.6 V", [1.8, 3.6], "V", section="supply_range", context="The device requires a 1.8 to 3.6 V operating voltage supply (VDD)")) == "rated"
+    assert quantity_qualifier(row("1.8 to 4.0 V", [1.8, 4.0], "V", section="supply_range", context="Absolute maximum ratings VDD 1.8 to 4.0 V")) == "absolute_maximum"
+    assert quantity_qualifier(row("Maximum operating frequency: 48 MHz", 48, "MHz", cls="cpu_core", qualifier="Maximum")) == "maximum"
+    assert quantity_qualifier(row("SCI", None, None)) is None
+
+
+def test_sram_banks_must_sum_to_total_or_total_is_refused() -> None:
+    from harness.electronics.key_features_grid import _sram_bank_check
+
+    def r(label, value, qq, tier="grid"):
+        return {"label": label, "value": value, "unit": "KB", "quantity_qualifier": qq, "tier": tier}
+
+    ok = [r("SRAM1 112 KB", 112, "sram_bank"), r("SRAM2 16 KB", 16, "sram_bank"), r("128 KB SRAM", 128, "total_sram")]
+    assert _sram_bank_check(ok)["sram_banks_sum_to_total"] is True and ok[2]["tier"] == "grid"
+    bad = [r("SRAM1 112 KB", 112, "sram_bank"), r("SRAM2 16 KB", 16, "sram_bank"), r("256 KB SRAM", 256, "total_sram")]
+    res = _sram_bank_check(bad)
+    assert res["sram_banks_sum_to_total"] is False and bad[2]["tier"] == "below_grid" and bad[2]["refused"]
+
+
 def test_chapter_features_tag_section_and_enclosing_chapter() -> None:
     chapters = {"all_entries": [
         {"level": 1, "title": "30 Serial peripheral interface (SPI)", "page": 100},

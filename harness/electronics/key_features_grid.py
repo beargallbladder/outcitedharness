@@ -367,7 +367,12 @@ def build_grid(record: dict[str, Any], vendor_by_sha: dict[str, str] | None = No
         label = fact["verbatim"]
         if fact["kind"] == "packages":
             label = ", ".join(fact["value"])
-        emit(group, cls, label, pages=[fact["receipt"]["page"]], verbatim=fact["verbatim"], tier="grid" if len(label) <= _GRID_MAX_LEN else "below_grid", value=fact.get("value") if fact["kind"] != "packages" else None, unit=fact.get("unit"), qualifier=fact.get("qualifier_verbatim"), section=fact["kind"], flags={"packages": fact["value"]} if fact["kind"] == "packages" else None)
+        flags: dict[str, Any] = {}
+        if fact["kind"] == "packages":
+            flags["packages"] = fact["value"]
+        if fact.get("context"):
+            flags["context"] = fact["context"]
+        emit(group, cls, label, pages=[fact["receipt"]["page"]], verbatim=fact["verbatim"], tier="grid" if len(label) <= _GRID_MAX_LEN else "below_grid", value=fact.get("value") if fact["kind"] != "packages" else None, unit=fact.get("unit"), qualifier=fact.get("qualifier_verbatim"), section=fact["kind"], flags=flags or None)
 
     # 5b. Package-qualified I/O counts. One row per (pin count, package); the
     #     I/O number is a value only under that package qualifier. CR: never a
@@ -387,6 +392,9 @@ def build_grid(record: dict[str, Any], vendor_by_sha: dict[str, str] | None = No
     not_observed = sorted(set(CLASS_GROUPS) - observed)
 
     rows = _dedupe(rows)
+    for row in rows:
+        row["quantity_qualifier"] = quantity_qualifier(row)
+    sram_check = _sram_bank_check(rows)
     grid_rows = [r for r in rows if r["tier"] == "grid"]
     populated = Counter(r["group"] for r in grid_rows)
     return {
@@ -398,8 +406,93 @@ def build_grid(record: dict[str, Any], vendor_by_sha: dict[str, str] | None = No
         "rows": rows,
         "class_presence": presence,
         "not_observed": not_observed,
-        "flags": {"npu_group_undecided": "npu" in observed},
+        "flags": {"npu_group_undecided": "npu" in observed, **sram_check},
+        "quantity_qualifiers": dict(Counter(r["quantity_qualifier"] for r in grid_rows if r.get("value") is not None)),
     }
+
+
+# Which QUANTITY a numeric row is (CR reversal-extract-qualifiers-20260908).
+# Sibling of qualifier_verbatim: that one says which bound ("Up to"), this one
+# says which quantity (code flash vs data flash, Ta vs Tj). Anchored on the
+# document's own words; a bare "flash" is left null, never called code flash.
+_QQ_CODE_FLASH = re.compile(r"\bcode\s+flash|\bprogram\s+(?:flash|memory)|\bflash\s+program\s+memory|\bapplication\s+(?:flash|code)|\bmain\s+flash|\bembedded\s+flash\s+memory\s+\(.*code|\binstruction\s+flash|\bcode\s+memory|\bcode\s+storage|\bprogram\s+space", re.I)
+_QQ_DATA_FLASH = re.compile(r"\bdata\s+flash|\beeprom|\bdata\s+memory\b(?!\s*\(sram)|\bemulated\s+eeprom|\bee\s+memory", re.I)
+# A bank has a designator the vendor gave it; special-purpose RAMs (backup,
+# cache, message, DMA, USB, retention) are neither bank nor total.
+_QQ_SRAM_BANK = re.compile(r"\bsram\s?\d\b|\bsram[A-D]\b|\bsram\s+bank|\bbank\s*\d|\bitcm|\bdtcm|\btcm\b|\bccm\b|\baxi\s+sram|\bahb\s+sram|\bmain\s+internal\s+sram|\bauxiliary\s+internal\s+sram|\bd\d\s+domain", re.I)
+_QQ_SRAM_SPECIAL = re.compile(r"\bbackup\b|\bretention\b|\bcache\b|\bmessage\s+ram|\bdma\s+ram|\bdpsram|\busb\s+ram|\bstandby\s+sram|\bparity\s+ram|\becc\s+ram|\bflexram|\bocram|\bperipheral\s+ram|\bmailbox", re.I)
+_QQ_AMBIENT = re.compile(r"\bTa\b|\bT\s*A\b|ambient", re.I)
+_QQ_JUNCTION = re.compile(r"\bTj\b|\bT\s*J\b|junction", re.I)
+_QQ_STORAGE = re.compile(r"\bstorage\b|\bTstg\b", re.I)
+_QQ_ABS_MAX = re.compile(r"absolute\s+max|\babs\.?\s*max|\bmaximum\s+ratings?", re.I)
+_QQ_RATED = re.compile(r"operating\s+(?:voltage|range|conditions?)|supply\s+voltage|power\s+supply|\bV(?:DD|CC)\b|recommended", re.I)
+_QQ_TYPICAL = re.compile(r"\btyp(?:ical|\.)?\b", re.I)
+_QQ_MINIMUM = re.compile(r"\bmin(?:imum|\.)?\b", re.I)
+_QQ_MAXIMUM = re.compile(r"\bmax(?:imum|\.)?\b|\bup\s+to\b", re.I)
+
+
+def quantity_qualifier(row: dict[str, Any]) -> str | None:
+    if row.get("value") is None:
+        return None
+    text = f"{row.get('label') or ''} {row.get('verbatim') or ''} {row.get('context') or ''}"
+    unit = (row.get("unit") or "").lower()
+    cls = row.get("peripheral_class")
+    section = row.get("section") or ""
+    if unit in ("kb", "mb", "kbyte", "kbytes", "mbyte", "mbytes", "bytes", "kbit", "mbit") or cls in ("flash", "sram", "memory_map"):
+        if _QQ_DATA_FLASH.search(text):
+            return "data_flash"
+        if _QQ_CODE_FLASH.search(text):
+            return "code_flash"
+        if re.search(r"\bs?ram(?:\s?\d|[A-D]\b|\b)", text, re.I) and not re.search(r"\bflash\b", text, re.I):
+            if _QQ_SRAM_BANK.search(text):
+                return "sram_bank"
+            if _QQ_SRAM_SPECIAL.search(text):
+                return None
+            return "total_sram"
+        return None  # bare "flash": the document did not say which
+    if unit in ("°c", "ºc", "c") or section == "temperature_range":
+        if _QQ_STORAGE.search(text):
+            return None
+        if _QQ_JUNCTION.search(text):
+            return "junction"
+        if _QQ_AMBIENT.search(text):
+            return "ambient"
+        return None
+    if unit == "v" or section == "supply_range":
+        if _QQ_ABS_MAX.search(text):
+            return "absolute_maximum"
+        if _QQ_RATED.search(text):
+            return "rated"
+        return None
+    if unit in ("mhz", "khz", "ghz"):
+        if row.get("qualifier_verbatim") and _QQ_MAXIMUM.search(row["qualifier_verbatim"]):
+            return "maximum"
+        if _QQ_TYPICAL.search(text):
+            return "typical"
+        if _QQ_MINIMUM.search(text):
+            return "minimum"
+        if _QQ_MAXIMUM.search(text):
+            return "maximum"
+        return None
+    return None
+
+
+def _sram_bank_check(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    """Banks must sum to the stated total; if they do not, the total row is
+    refused (moved below the grid with a reason) rather than reconciled."""
+    totals = [r for r in rows if r.get("quantity_qualifier") == "total_sram" and r["tier"] == "grid" and (r.get("unit") or "").lower() == "kb"]
+    banks = [r for r in rows if r.get("quantity_qualifier") == "sram_bank" and r["tier"] == "grid" and (r.get("unit") or "").lower() == "kb" and isinstance(r.get("value"), (int, float))]
+    if not totals or not banks:
+        return {"sram_banks_checked": False}
+    bank_sum = sum(float(r["value"]) for r in {r["label"]: r for r in banks}.values())
+    result: dict[str, Any] = {"sram_banks_checked": True, "sram_bank_sum_kb": bank_sum, "sram_totals_kb": sorted({float(r["value"]) for r in totals})}
+    matched = any(abs(float(t["value"]) - bank_sum) < 0.5 for t in totals)
+    result["sram_banks_sum_to_total"] = matched
+    if not matched:
+        for t in totals:
+            t["tier"] = "below_grid"
+            t["refused"] = "sram_banks_do_not_sum_to_total"
+    return result
 
 
 def _dedupe(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:

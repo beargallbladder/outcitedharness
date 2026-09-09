@@ -181,7 +181,7 @@ INSTANCE_GRAMMAR: tuple[tuple[str, re.Pattern[str]], ...] = (
 _BULLET = re.compile(r"^\s*(?:[•·▪◦■●\-–]|)\s*(.+)$")
 _QUALIFIER = re.compile(r"\b(up\s+to|maximum|max\.?|minimum|min\.?|typical|typ\.?|at\s+least|as\s+low\s+as|down\s+to)\b", re.I)
 _NUM_UNIT = re.compile(
-    r"(\d+(?:\.\d+)?)\s*(Mbytes?|Kbytes?|MB|KB|Kbit|Mbit|MHz|kHz|GHz|bits?|bytes?|channels?|V|mA|µA|uA|nA|°C|ms|µs|us|ns|I/Os?|pins?|x|×)?\b",
+    r"(\d+(?:\.\d+)?)[\s-]*(Mbytes?|Kbytes?|MB|KB|Kbit|Mbit|MHz|kHz|GHz|bits?|bytes?|channels?|V|mA|µA|uA|nA|°C|ms|µs|us|ns|I/Os?|pins?|x|×)?\b",
     re.I,
 )
 _SIZE = re.compile(r"(\d+(?:\.\d+)?)\s*(Mbytes?|Kbytes?|MB|KB|Kbit|Mbit|bytes?)\b", re.I)
@@ -523,14 +523,22 @@ def read_prose_facts(page_texts: dict[int, str], max_pages: int = 160) -> list[d
     out: list[dict[str, Any]] = []
     seen: set[tuple[str, str]] = set()
 
-    def add(kind: str, verbatim: str, page: int, value: Any = None, unit: str | None = None, qualifier: str | None = None, key_text: str | None = None) -> None:
+    def add(kind: str, verbatim: str, page: int, value: Any = None, unit: str | None = None, qualifier: str | None = None, key_text: str | None = None, context: str | None = None) -> None:
         key = (kind, re.sub(r"[^a-z0-9.]+", "", (key_text or verbatim).lower()))
         if key in seen:
             return
         seen.add(key)
-        out.append({"kind": kind, "verbatim": _norm(verbatim), "value": value, "unit": unit, "qualifier_verbatim": qualifier, "receipt": {"page": page}})
+        row = {"kind": kind, "verbatim": _norm(verbatim), "value": value, "unit": unit, "qualifier_verbatim": qualifier, "receipt": {"page": page}}
+        if context:
+            row["context"] = _norm(context)[:240]
+        out.append(row)
 
-    supply_candidates: list[tuple[float, float, str, int]] = []
+    def line_of(text: str, pos: int) -> str:
+        start = text.rfind("\n", 0, pos) + 1
+        end = text.find("\n", pos)
+        return text[start: end if end != -1 else len(text)]
+
+    supply_candidates: list[tuple[float, float, str, int, str]] = []
     for pno in range(1, min(max_pages, max(page_texts) if page_texts else 0) + 1):
         text = page_texts.get(pno) or ""
         for match in _CORE.finditer(text):
@@ -555,16 +563,24 @@ def read_prose_facts(page_texts: dict[int, str], max_pages: int = 160) -> list[d
             for match in _SUPPLY.finditer(line):
                 lo, hi = float(match.group(1)), float(match.group(2))
                 if 0.9 <= lo < hi <= 6.0:
-                    supply_candidates.append((lo, hi, match.group(0), pno))
+                    supply_candidates.append((lo, hi, match.group(0), pno, line))
         for match in _TEMP.finditer(text):
-            add("temperature_range", match.group(0), pno, [-40, int(match.group(1))], "°C", key_text=match.group(1))
+            context = line_of(text, match.start())
+            # Ta / Tj distinguish two attributes; keep them as separate rows.
+            axis = "j" if re.search(r"\bTj\b|junction", context, re.I) else "a" if re.search(r"\bTa\b|ambient", context, re.I) else "-"
+            add("temperature_range", match.group(0), pno, [-40, int(match.group(1))], "°C", key_text=f"{match.group(1)}{axis}", context=context)
         packages = sorted({m.group(1).replace(" ", "") for m in _PACKAGE.finditer(text)})
         if packages and pno <= 12:
             add("packages", ", ".join(packages), pno, packages, None)
     if supply_candidates:
-        # The widest range stated with a supply word is the family's operating range.
-        lo, hi, verbatim, pno = max(supply_candidates, key=lambda c: (c[1] - c[0], -c[3]))
-        add("supply_range", verbatim, pno, [lo, hi], "V")
+        # Rated (operating) and absolute-maximum are two attributes: the widest
+        # range of each kind, with its line as context.
+        rated = [c for c in supply_candidates if not re.search(r"absolute|abs\.?\s*max|maximum ratings?", c[4], re.I)]
+        absolute = [c for c in supply_candidates if c not in rated]
+        for group in (rated, absolute):
+            if group:
+                lo, hi, verbatim, pno, line = max(group, key=lambda c: (c[1] - c[0], -c[3]))
+                add("supply_range", verbatim, pno, [lo, hi], "V", key_text=f"{lo}-{hi}", context=line)
     return out[:80]
 
 
