@@ -214,11 +214,24 @@ def read_identity(document: Any, page_texts: dict[int, str]) -> dict[str, Any]:
     # Microchip-style masks: dsPIC33EPXXX(GP/MC/MU)806/810/814, PIC24EPXXX(GP/GU)810/814.
     covered_tokens += [m for m in re.findall(r"\b(?:ds)?PIC\d{2}[A-Z]{1,3}X{2,3}(?:\([A-Z/]+\))?[0-9/]+", cover) if m not in covered_tokens]
     # Family words like "STM32H5 series", "MSPM0 G-Series", "RA2E1 Group", "TMS320F28P65x Real-Time Microcontrollers".
-    family_phrases = re.findall(
-        r"\b([A-Z][A-Za-z0-9]{1,12}(?:[ -][A-Za-z0-9]{1,10}){0,2}[ -](?:series|family|families|group|line|MCUs?|microcontrollers))\b",
-        cover,
-        re.I,
-    )
+    family_phrases = [
+        p for p in re.findall(
+            r"\b([A-Z][A-Za-z0-9]{1,12}(?:[ -][A-Za-z0-9]{1,10}){0,2}[ -](?:series|family|families|group|line|MCUs?|microcontrollers))\b",
+            cover,
+            re.I,
+        )
+        if not _generic_scope(p)
+    ]
+    # "RA4C1 Group", "RX231 Group", "RL78/G13", "MSPM0 G-Series": the vendor's
+    # own family token, the thing a document is bound to.
+    group_tokens: list[str] = []
+    for match in re.finditer(r"\b((?:[A-Z]{1,5}\d[A-Z0-9]{1,8})|RL78/[A-Z]\d{1,2}[A-Z]?)\s+(?:Group|Series|Family|Line)\b", cover):
+        token = match.group(1)
+        if token not in group_tokens and not _DOC_ID.fullmatch(token):
+            group_tokens.append(token)
+    # Filename as last resort: ra_ra4c1.pdf -> RA4C1, RA4W1_Group_Datasheet.pdf -> RA4W1.
+    stem = Path(getattr(document, "name", "") or "").stem
+    filename_tokens = [t.upper() for t in re.findall(r"(?i)\b([a-z]{1,5}\d[a-z0-9]{1,8})\b", stem.replace("_", " ").replace("-", " ")) if not _DOC_ID.fullmatch(t.upper())]
     metadata = document.metadata or {}
     return {
         "document_id": doc_id,
@@ -228,10 +241,21 @@ def read_identity(document: Any, page_texts: dict[int, str]) -> dict[str, Any]:
         "lines_covered": {
             "wildcards": covered_tokens[:40],
             "parts": covered_parts[:80],
+            "group_tokens": group_tokens[:8],
             "family_phrases": sorted(set(_norm(p) for p in family_phrases))[:12],
+            "filename_tokens": filename_tokens[:4],
         },
         "receipt": {"page": 1},
     }
+
+
+_GENERIC_SCOPE_WORDS = {"bit", "mcu", "mcus", "microcontroller", "microcontrollers", "group", "series", "family", "families", "line", "arm", "based", "advanced", "renesas", "the", "of", "and", "32", "16", "8", "risc", "flash", "real", "time", "dual", "core", "wireless", "soc", "socs"}
+
+
+def _generic_scope(phrase: str) -> bool:
+    """"32-Bit MCU", "Renesas RA Family", "family of microcontrollers": not a scope."""
+    tokens = [t for t in re.split(r"[\s\-/]+", phrase.lower()) if t]
+    return all(t in _GENERIC_SCOPE_WORDS for t in tokens) or not any(re.search(r"\d", t) for t in tokens)
 
 
 def read_chapters(document: Any, page_texts: dict[int, str]) -> dict[str, Any]:

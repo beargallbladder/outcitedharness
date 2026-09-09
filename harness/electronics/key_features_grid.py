@@ -77,7 +77,7 @@ CLASS_GROUPS: dict[str, tuple[str, ...]] = {
     "display": ("graphics_vision_touch_hmi",),
     "dcmi": ("graphics_vision_touch_hmi",),
     "touch": ("graphics_vision_touch_hmi",),
-    "audio": ("graphics_vision_touch_hmi",),
+    "audio": ("connectivity",),  # CR decision 2026-09-08: SAI/I2S are buses
 }
 
 # Instance class (from INSTANCE_GRAMMAR) -> (peripheral_class, display label).
@@ -224,13 +224,26 @@ def _single_number(numbers: list[dict[str, Any]]) -> tuple[Any, str | None]:
     return None, None
 
 
-def build_grid(record: dict[str, Any]) -> dict[str, Any]:
+def build_grid(record: dict[str, Any], vendor_by_sha: dict[str, str] | None = None) -> dict[str, Any]:
     meta = record["_meta"]
     identity = record["identity"]
     artifact = meta["source_path"].rsplit("/", 1)[-1]
     scope = _scope_as_printed(identity)
-    grain = "family" if not identity["lines_covered"]["wildcards"] and not identity["lines_covered"]["parts"] else "series"
-    base = {"vendor": meta.get("vendor"), "grain": grain, "scope_as_printed": scope, "source_artifact": artifact, "document_sha256": meta["document_sha256"]}
+    lines = identity["lines_covered"]
+    grain = "series" if (lines.get("group_tokens") or lines["wildcards"] or lines["parts"]) else "family"
+    vendor = normalize_vendor(meta.get("vendor")) or normalize_vendor((vendor_by_sha or {}).get(meta["document_sha256"]))
+    vendor_inferred = None
+    if not vendor:
+        vendor_inferred = infer_vendor(identity.get("document_id"), scope, artifact)
+    base = {"vendor": vendor, "grain": grain, "scope_as_printed": scope, "source_artifact": artifact, "document_sha256": meta["document_sha256"]}
+    if vendor_inferred:
+        base["vendor_inferred"] = vendor_inferred
+    chapter_titles: dict[str, str] = {}
+    for cls, entries in record.get("chapters", {}).get("peripheral_classes", {}).items():
+        for entry in entries:
+            if entry.get("level") == 1:
+                chapter_titles.setdefault(cls, re.sub(r"^\s*\d{1,2}(?:\.\d+)*\s+", "", entry["title"]))
+                break
     rows: list[dict[str, Any]] = []
 
     def emit(group: str, cls: str | None, label: str, *, pages: list[int], verbatim: str, tier: str, instances: int | None = None, value: Any = None, unit: str | None = None, qualifier: str | None = None, section: str | None = None, flags: dict | None = None) -> None:
@@ -243,7 +256,9 @@ def build_grid(record: dict[str, Any]) -> dict[str, Any]:
             "value": value,
             "unit": unit,
             "qualifier_verbatim": qualifier,
-            "varies_by_part": varies_by_part(verbatim),
+            # A supply range is the envelope of every member (CR decision);
+            # temperature and anything "depending on MPN" varies by part.
+            "varies_by_part": False if section == "supply_range" else varies_by_part(verbatim),
             "tier": tier,
             "source_pages": sorted(set(pages))[:12],
             "verbatim": verbatim[:300],
@@ -259,10 +274,18 @@ def build_grid(record: dict[str, Any]) -> dict[str, Any]:
         strong = [i for i in data["instances"] if not i["weak"]]
         if not strong or icls not in INSTANCE_CLASS:
             continue
-        pcls, label = INSTANCE_CLASS[icls]
+        pcls, group_label = INSTANCE_CLASS[icls]
         names = [i["instance"] for i in strong]
+        # Label is the vendor's: the chapter title when the document has one for
+        # this class, else the vendor's own instance stem. Our synthesized
+        # wording stays in `group_label` as a grouping aid only.
+        stem = _vendor_stem(names, icls)
+        title = chapter_titles.get(pcls)
+        # The chapter title is the label only when it names this stem (SPI's
+        # chapter is not I2S's label; USART's chapter is not UART's).
+        label = title if title and re.search(rf"(?<![A-Za-z]){re.escape(stem.split(' / ')[0])}(?![A-Za-z])", title) else stem
         for group in CLASS_GROUPS.get(pcls, ()):
-            emit(group, pcls, label, pages=[i["first_page"] for i in strong], verbatim=", ".join(names), tier="grid", instances=len(strong), flags={"instance_names": names, "weak_instance_names": [i["instance"] for i in data["instances"] if i["weak"]][:16]})
+            emit(group, pcls, label, pages=[i["first_page"] for i in strong], verbatim=", ".join(names), tier="grid", instances=len(strong), flags={"group_label": group_label, "instance_names": names, "weak_instance_names": [i["instance"] for i in data["instances"] if i["weak"]][:16]})
 
     # 2. Cover features: the vendor's own short list (family data sheets).
     #    The vendor's section heading ("■ Memory", "■ Connectivity") decides the
@@ -322,7 +345,9 @@ def build_grid(record: dict[str, Any]) -> dict[str, Any]:
             continue
         value, unit = _single_number(feature.get("numbers", []))
         sizing = unit is not None and unit.lower().rstrip("s") in _SIZING_UNITS
-        tier = "grid" if (_grid_eligible(text) and len(text) <= 56 and sizing) else "below_grid"
+        # Only capacity/speed facts of the memory and core chapters render;
+        # a peripheral chapter's bit rates are detail.
+        tier = "grid" if (_grid_eligible(text) and len(text) <= 56 and sizing and cls in ("flash", "sram", "memory_map", "cpu_core")) else "below_grid"
         for group in groups:
             emit(group, cls, text, pages=[feature["receipt"]["page"]], verbatim=text, tier=tier, value=value, unit=unit, qualifier=feature.get("qualifier_verbatim"), section=feature.get("section"))
 
@@ -392,7 +417,55 @@ def _dedupe(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
         if row.get("section") in ("max_frequency", "supply_range", "temperature_range") and (row["group"], json_value(row["value"]), (row["unit"] or "").lower()) in valued:
             continue
         final.append(row)
-    return final
+    return _prefer_specific(final)
+
+
+_STOP_TOKENS = {"module", "modules", "with", "and", "the", "of", "a", "an", "for", "x", "×", "interface", "interfaces", "controller", "controllers", "unit", "units", "core", "cpu", "bus", "up", "to"}
+_SOURCE_RANK = {"features": 3, "features_heading": 3, "memory": 2, "chapter": 1}
+
+
+def _tokens(label: str) -> frozenset[str]:
+    return frozenset(t for t in re.split(r"[^a-z0-9.]+", _label_key(label)) if t and t not in _STOP_TOKENS)
+
+
+def _prefer_specific(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Within one group and tier, when two rows of the same peripheral class
+    say the same thing (one label's tokens inside the other's, or equal token
+    sets), keep the more specific label, carry the count and pages, and park
+    the discarded label in `also_printed`. Different classes never merge."""
+    by_bucket: dict[tuple, list[dict[str, Any]]] = {}
+    for row in rows:
+        by_bucket.setdefault((row["group"], row["tier"], row.get("peripheral_class")), []).append(row)
+    out: list[dict[str, Any]] = []
+    for bucket in by_bucket.values():
+        if len(bucket) == 1:
+            out.extend(bucket)
+            continue
+        toks = [_tokens(r["label"]) for r in bucket]
+        keep = [True] * len(bucket)
+        for i, a in enumerate(bucket):
+            for j, b in enumerate(bucket):
+                if i == j or not keep[i] or not toks[i]:
+                    continue
+                if toks[i] < toks[j] or (toks[i] == toks[j] and _specificity(a) < _specificity(b)) or (toks[i] == toks[j] and _specificity(a) == _specificity(b) and i > j):
+                    keep[i] = False
+                    b.setdefault("also_printed", [])
+                    if a["label"] not in b["also_printed"]:
+                        b["also_printed"].append(a["label"])
+                    b["source_pages"] = sorted(set(b["source_pages"]) | set(a["source_pages"]))[:12]
+                    if b.get("instances") is None and a.get("instances") is not None:
+                        b["instances"] = a["instances"]
+                    if b.get("value") is None and a.get("value") is not None:
+                        b["value"], b["unit"] = a["value"], a["unit"]
+                    if not b.get("qualifier_verbatim") and a.get("qualifier_verbatim"):
+                        b["qualifier_verbatim"] = a["qualifier_verbatim"]
+                    break
+        out.extend(r for r, k in zip(bucket, keep) if k)
+    return out
+
+
+def _specificity(row: dict[str, Any]) -> tuple[int, int]:
+    return (_SOURCE_RANK.get(row.get("section") or "", 0), len(row["label"]))
 
 
 def json_value(value: Any) -> str:
@@ -401,21 +474,77 @@ def json_value(value: Any) -> str:
     return json.dumps(value, sort_keys=True)
 
 
+def _vendor_stem(names: list[str], icls: str) -> str:
+    """"SPI1, SPI2, SPI6" -> "SPI"; "OTG_FS, OTG_HS" -> "OTG_FS / OTG_HS"; "GPIOA..GPIOK" -> "GPIO"."""
+    stems = []
+    for name in names:
+        stem = re.sub(r"(?<=[A-Za-z])[0-9]{1,2}$|(?<=GPIO)[A-Z]$|(?<=GIO)[A-H]$|(?<=SCI)[A-D]$|(?<=ADC)[A-D]$|(?<=DAC)[A-D]$", "", name)
+        if stem not in stems:
+            stems.append(stem)
+    return " / ".join(stems[:4]) if len(stems) <= 4 else icls
+
+
 def _label_key(label: str) -> str:
     text = re.sub(r"[®™©]", "", label.lower())
     text = re.sub(r"[\s\-–_]+", " ", text)
     return re.sub(r"[^a-z0-9 ./()+]", "", text).strip()
 
 
+_NON_SCOPE = re.compile(r"^(?:\d{1,2}-?bit\s+)?(?:mcu|mcus|bit mcu|microcontrollers?|group|series|family|arm|based)$", re.I)
+
+
 def _scope_as_printed(identity: dict[str, Any]) -> str:
+    """Bind-to-catalogue token: the vendor's group token first ("RA4C1"), then
+    wildcards, then concrete parts, then a family phrase with a designator,
+    then the filename, then the title. Generic words are never a scope."""
     lines = identity["lines_covered"]
-    if lines["wildcards"]:
-        return ", ".join(lines["wildcards"][:8])
-    if lines["parts"]:
-        return ", ".join(lines["parts"][:8])
-    if lines["family_phrases"]:
-        return lines["family_phrases"][0]
-    return identity.get("pdf_title") or identity.get("title_verbatim") or ""
+    for candidates in (lines.get("group_tokens", []), lines["wildcards"], lines["parts"]):
+        good = [c for c in candidates if not _NON_SCOPE.match(c)]
+        if good:
+            return ", ".join(good[:8])
+    for phrase in lines.get("family_phrases", []):
+        if not _NON_SCOPE.match(phrase) and re.search(r"\d", phrase):
+            return phrase
+    if lines.get("filename_tokens"):
+        return lines["filename_tokens"][0]
+    title = identity.get("pdf_title") or identity.get("title_verbatim") or ""
+    return "" if _NON_SCOPE.match(title.strip()) else title
+
+
+VENDOR_DOMAIN: dict[str, str] = {
+    "ti": "ti.com", "texas instruments": "ti.com", "st": "st.com", "stmicroelectronics": "st.com", "stm": "st.com",
+    "microchip": "microchip.com", "atmel": "microchip.com", "renesas": "renesas.com", "nxp": "nxp.com", "freescale": "nxp.com",
+    "gigadevice": "gigadevice.com", "gd": "gigadevice.com", "silabs": "silabs.com", "silicon labs": "silabs.com",
+    "infineon": "infineon.com", "cypress": "infineon.com", "nuvoton": "nuvoton.com", "espressif": "espressif.com",
+    "adi": "analog.com", "analog devices": "analog.com", "ambiq": "ambiq.com", "nordic": "nordicsemi.com",
+}
+_VENDOR_HINTS: tuple[tuple[re.Pattern[str], str], ...] = (
+    (re.compile(r"^(?:RM|UM|PM|DS|AN|ES)\d{4}$|^STM32|^STM8"), "st.com"),
+    (re.compile(r"^(?:SLAU|SLAS|SPRU|SPRS|SPNU|SPNS|SLVS|SLLS|SPMU|SPMS)[A-Z0-9]+$|^(?:TMS320|TMS570|MSP430|MSPM0|TM4C|AM2|RM4|CC\d{4})"), "ti.com"),
+    (re.compile(r"^R01(?:UH|DS|AN)\d{4}|^(?:RA\d|RX\d|RL78|RZ|RH850)"), "renesas.com"),
+    (re.compile(r"^DS\d{8}[A-Z]?$|^DS\d{5}[A-Z]$|^(?:PIC|dsPIC|AT(?:SAM|mega|tiny|xmega)|SAM[A-Z]\d)"), "microchip.com"),
+    (re.compile(r"^GD32"), "gigadevice.com"),
+    (re.compile(r"^(?:EFM32|EFR32|EFM8|C8051|SiM3|Si\d{4})"), "silabs.com"),
+    (re.compile(r"^(?:MK|MKL|MKV|MKE|MKW|LPC|MIMXRT|i\.MX|MCX|S32|KL\d)[A-Z0-9]*"), "nxp.com"),
+    (re.compile(r"^(?:XMC|PSoC|CY8C|TLE|AURIX|TC3)"), "infineon.com"),
+)
+
+
+def normalize_vendor(vendor: str | None) -> str | None:
+    if not vendor:
+        return None
+    key = vendor.strip().lower()
+    if "." in key:
+        return key
+    return VENDOR_DOMAIN.get(key, key)
+
+
+def infer_vendor(document_id: str | None, scope: str, artifact: str) -> str | None:
+    for probe in (document_id or "", scope.split(",")[0].strip(), artifact.split(".")[0]):
+        for pattern, domain in _VENDOR_HINTS:
+            if probe and pattern.search(probe):
+                return domain
+    return None
 
 
 def _package_or_temp(text: str) -> bool:
