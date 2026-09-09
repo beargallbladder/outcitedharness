@@ -62,11 +62,12 @@ _ROLE = (
     (re.compile(r"^\s*thermal\s+metric", re.I), "parameter"),
 )
 _VALUE_ROLES = ("min", "typ", "max", "value", "limit", "value_unit")
-_VALUE_UNIT = re.compile(r"^[-−–+±]?\s?\d+(?:\.\d+)?\s?[pnuµμmkM]?(?:Ω|Ohm|V|A|W|°C|ºC|C|Hz|s|F|H|J|%)(?:\s*(?:to|–|-)\s*[-−–+]?\d+(?:\.\d+)?\s?[pnuµμmkM]?(?:Ω|Ohm|V|A|W|°C|ºC|C|Hz|s|F|H|J|%))?(?:\s*\(\d\))?$")
+_VALUE_UNIT = re.compile(r"^[-−–+±]?\s?\d+(?:\.\d+)?\s?[pnuµμmkM]?(?:Ω|Ohm|V|A|W|°C|ºC|C|Hz|s|F|H|J|%)(?:\s*(?:to|–|-|≤\s*[A-Za-z()/_]+\s*≤)\s*[-−–+]?\d+(?:\.\d+)?\s?[pnuµμmkM]?(?:Ω|Ohm|V|A|W|°C|ºC|C|Hz|s|F|H|J|%))?(?:\s*\(\d\))?$")
+_VALUE_UNIT_UPPER = re.compile(r"^[A-Za-z()/_]+\s*≤\s*[-−–+]?\d+(?:\.\d+)?\s?[pnuµμmkM]?(?:Ω|Ohm|V|A|W|°C|ºC|C|Hz|s|F|H|J|%)(?:\s*\(\d\))?$")  # "ISWITCH ≤ 3.0A"
 _HEADER_CONDITION = re.compile(r"\b(T[AJC]|V[A-Z]{1,3})\s*=\s*[-+]?\d", re.I)
 
 _TITLE_ABS_MAX = re.compile(r"absolute\s+maximum|abs\.?\s*max", re.I)
-_TITLE_RECOMMENDED = re.compile(r"recommended\s+operating|operating\s+conditions|operating\s+range", re.I)
+_TITLE_RECOMMENDED = re.compile(r"recommended\s+operating|operating\s+conditions|operating\s+range|operating\s+ratings", re.I)
 _TITLE_THERMAL = re.compile(r"thermal\s+(?:information|characteristics|resistance|data)", re.I)
 _TITLE_SUMMARY = re.compile(r"product\s+summary|key\s+(?:specifications|parameters)|summary", re.I)
 _TITLE_EC = re.compile(r"electrical\s+characteristics|electrical\s+specifications|static\s+characteristics|dynamic\s+characteristics|characteristics", re.I)
@@ -364,7 +365,7 @@ def _infer_columns_by_content(table: Any, spans: list[dict[str, Any]], data_star
                 stats[ci][0] += 1
             elif _UNIT_TOKEN.match(text.strip()) or re.fullmatch(r"[pnuµμmkM]?(?:Ω|Ohm|V|A|W|°C|C|Hz|s|F|H|J|%|dB|C/W|°C/W)(?:\s*/\s*[°]?[CW])?", text.strip()):
                 stats[ci][1] += 1
-            elif _VALUE_UNIT.match(text.strip()):
+            elif _VALUE_UNIT.match(text.strip()) or _VALUE_UNIT_UPPER.match(text.strip()):
                 stats[ci][3] += 1
             else:
                 stats[ci][2] += 1
@@ -601,9 +602,13 @@ def read_characteristic_tables(document: Any) -> list[dict[str, Any]]:
                             continue
                         verbatim_parts.append(text)
                         if role == "value_unit":
-                            m_vu = _VALUE_UNIT.match(text.strip())
+                            m_vu = _VALUE_UNIT.match(text.strip()) or _VALUE_UNIT_UPPER.match(text.strip())
                             if not m_vu:
                                 continue
+                            if "≤" in text and not condition:
+                                inner = re.search(r"≤\s*([A-Za-z()/_]+)\s*≤|^([A-Za-z()/_]+)\s*≤", text.strip())
+                                if inner and not symbol:
+                                    symbol = (inner.group(1) or inner.group(2)).strip()
                             unit_hits = re.findall(r"[pnuµμmkM]?(?:Ω|Ohm|V|A|W|°C|ºC|C|Hz|s|F|H|J|%)(?=\s|$|\s*\(|\s*to|\s*–|\s*-)", text)
                             nums_vu = [float(x.replace("−", "-").replace("–", "-")) for x in re.findall(r"[-−–]?\d+(?:\.\d+)?", re.sub(r"\(\d\)$", "", text))]
                             if unit_hits:
