@@ -1,0 +1,59 @@
+{
+ "schema": "harness.electronics-key-features-gold-report.v1",
+ "documents": [
+  {
+   "source_artifact": "GD32F403xx_Datasheet_Rev3.1.pdf",
+   "expected": 22,
+   "found": 22,
+   "recall": 1.0,
+   "misses": [],
+   "forbidden_on_grid": []
+  },
+  {
+   "source_artifact": "KL25P80M48SF0RM.pdf",
+   "expected": 24,
+   "found": 24,
+   "recall": 1.0,
+   "misses": [],
+   "forbidden_on_grid": []
+  },
+  {
+   "source_artifact": "ra_ra4c1.pdf",
+   "expected": 41,
+   "found": 41,
+   "recall": 1.0,
+   "misses": [],
+   "forbidden_on_grid": []
+  },
+  {
+   "source_artifact": "Atmel-42242-SAM-D10_Datasheet.pdf",
+   "expected": 29,
+   "found": 28,
+   "recall": 0.966,
+   "misses": [
+    {
+     "group": "power_clock_reset",
+     "label": "DFLL48M",
+     "near": []
+    }
+   ],
+   "forbidden_on_grid": []
+  },
+  {
+   "source_artifact": "stm32f103c4.pdf",
+   "expected": 29,
+   "found": 29,
+   "recall": 1.0,
+   "misses": [],
+   "forbidden_on_grid": []
+  },
+  {
+   "source_artifact": "Tiva_C_Series_TM4C123GH6PM_Microcontroller_Data_Sheet_datasheet_Rev._E.pdf",
+   "expected": 23,
+   "found": 23,
+   "recall": 1.0,
+   "misses": [],
+   "forbidden_on_grid": []
+  }
+ ]
+}

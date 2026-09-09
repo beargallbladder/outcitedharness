@@ -1,0 +1,428 @@
+{
+  "schema": "harness.electronics-family-grain-agreement-report.v1",
+  "generated_at": "2026-09-09T07:02:48.242234+00:00",
+  "grids": "results/key-features-grid-20260908/grids.jsonl",
+  "grids_sha256": "d25ba5efd229be430e9d3f71763abf2f40f321db22a3ded2e3ef2d4e71a422c6",
+  "documents": 549,
+  "documents_with_family_key": 371,
+  "family_keys_with_two_or_more_documents": 96,
+  "pairs_compared": 76,
+  "overall": {
+    "compared": 871,
+    "agree": 837,
+    "agreement_rate": 0.961
+  },
+  "per_attribute": {
+    "adc_instances": {
+      "compared": 17,
+      "agree": 17,
+      "disagree": 0,
+      "agreement_rate": 1.0,
+      "passes_95": true,
+      "instance_sets": {
+        "equal": 7,
+        "a_subset": 2,
+        "b_subset": 8
+      }
+    },
+    "audio_instances": {
+      "compared": 23,
+      "agree": 23,
+      "disagree": 0,
+      "agreement_rate": 1.0,
+      "passes_95": true,
+      "instance_sets": {
+        "equal": 23
+      }
+    },
+    "can_instances": {
+      "compared": 35,
+      "agree": 35,
+      "disagree": 0,
+      "agreement_rate": 1.0,
+      "passes_95": true,
+      "instance_sets": {
+        "equal": 27,
+        "a_subset": 1,
+        "b_subset": 7
+      }
+    },
+    "comparator_instances": {
+      "compared": 31,
+      "agree": 31,
+      "disagree": 0,
+      "agreement_rate": 1.0,
+      "passes_95": true,
+      "instance_sets": {
+        "equal": 11,
+        "a_subset": 1,
+        "b_subset": 19
+      }
+    },
+    "core": {
+      "compared": 6,
+      "agree": 6,
+      "disagree": 0,
+      "agreement_rate": 1.0,
+      "passes_95": true
+    },
+    "crypto_instances": {
+      "compared": 38,
+      "agree": 37,
+      "disagree": 1,
+      "agreement_rate": 0.9737,
+      "passes_95": true,
+      "instance_sets": {
+        "equal": 14,
+        "a_subset": 3,
+        "b_subset": 20,
+        "conflict": 1
+      }
+    },
+    "dac_instances": {
+      "compared": 17,
+      "agree": 17,
+      "disagree": 0,
+      "agreement_rate": 1.0,
+      "passes_95": true,
+      "instance_sets": {
+        "equal": 4,
+        "b_subset": 13
+      }
+    },
+    "display_instances": {
+      "compared": 25,
+      "agree": 25,
+      "disagree": 0,
+      "agreement_rate": 1.0,
+      "passes_95": true,
+      "instance_sets": {
+        "equal": 21,
+        "b_subset": 4
+      }
+    },
+    "dma_count": {
+      "compared": 1,
+      "agree": 1,
+      "disagree": 0,
+      "agreement_rate": 1.0,
+      "passes_95": true
+    },
+    "dma_instances": {
+      "compared": 15,
+      "agree": 15,
+      "disagree": 0,
+      "agreement_rate": 1.0,
+      "passes_95": true,
+      "instance_sets": {
+        "equal": 14,
+        "b_subset": 1
+      }
+    },
+    "ethernet_instances": {
+      "compared": 5,
+      "agree": 5,
+      "disagree": 0,
+      "agreement_rate": 1.0,
+      "passes_95": true,
+      "instance_sets": {
+        "equal": 5
+      }
+    },
+    "flash_kb_max": {
+      "compared": 24,
+      "agree": 23,
+      "disagree": 1,
+      "agreement_rate": 0.9583,
+      "passes_95": true,
+      "agree_as_manual_envelope": 10
+    },
+    "fmc_instances": {
+      "compared": 35,
+      "agree": 35,
+      "disagree": 0,
+      "agreement_rate": 1.0,
+      "passes_95": true,
+      "instance_sets": {
+        "equal": 17,
+        "b_subset": 18
+      }
+    },
+    "hrtim_instances": {
+      "compared": 5,
+      "agree": 5,
+      "disagree": 0,
+      "agreement_rate": 1.0,
+      "passes_95": true,
+      "instance_sets": {
+        "equal": 5
+      }
+    },
+    "i2c_instances": {
+      "compared": 37,
+      "agree": 37,
+      "disagree": 0,
+      "agreement_rate": 1.0,
+      "passes_95": true,
+      "instance_sets": {
+        "equal": 21,
+        "b_subset": 16
+      }
+    },
+    "i3c_instances": {
+      "compared": 6,
+      "agree": 6,
+      "disagree": 0,
+      "agreement_rate": 1.0,
+      "passes_95": true,
+      "instance_sets": {
+        "equal": 5,
+        "b_subset": 1
+      }
+    },
+    "interrupts_instances": {
+      "compared": 1,
+      "agree": 1,
+      "disagree": 0,
+      "agreement_rate": 1.0,
+      "passes_95": true,
+      "instance_sets": {
+        "equal": 1
+      }
+    },
+    "io_by_package_port_pins_listed": {
+      "compared": 6,
+      "agree": 3,
+      "disagree": 3,
+      "agreement_rate": 0.5,
+      "passes_95": false
+    },
+    "lptim_instances": {
+      "compared": 33,
+      "agree": 33,
+      "disagree": 0,
+      "agreement_rate": 1.0,
+      "passes_95": true,
+      "instance_sets": {
+        "equal": 29,
+        "b_subset": 4
+      }
+    },
+    "max_freq_mhz": {
+      "compared": 39,
+      "agree": 38,
+      "disagree": 1,
+      "agreement_rate": 0.9744,
+      "passes_95": true,
+      "agree_as_manual_envelope": 4
+    },
+    "opamp_instances": {
+      "compared": 16,
+      "agree": 16,
+      "disagree": 0,
+      "agreement_rate": 1.0,
+      "passes_95": true,
+      "instance_sets": {
+        "equal": 15,
+        "b_subset": 1
+      }
+    },
+    "pin_counts": {
+      "compared": 3,
+      "agree": 3,
+      "disagree": 0,
+      "agreement_rate": 1.0,
+      "passes_95": true
+    },
+    "rtc_count": {
+      "compared": 1,
+      "agree": 1,
+      "disagree": 0,
+      "agreement_rate": 1.0,
+      "passes_95": true
+    },
+    "rtc_instances": {
+      "compared": 22,
+      "agree": 22,
+      "disagree": 0,
+      "agreement_rate": 1.0,
+      "passes_95": true,
+      "instance_sets": {
+        "equal": 22
+      }
+    },
+    "safety_count": {
+      "compared": 1,
+      "agree": 1,
+      "disagree": 0,
+      "agreement_rate": 1.0,
+      "passes_95": true
+    },
+    "safety_instances": {
+      "compared": 36,
+      "agree": 36,
+      "disagree": 0,
+      "agreement_rate": 1.0,
+      "passes_95": true,
+      "instance_sets": {
+        "equal": 36
+      }
+    },
+    "sdmmc_instances": {
+      "compared": 25,
+      "agree": 25,
+      "disagree": 0,
+      "agreement_rate": 1.0,
+      "passes_95": true,
+      "instance_sets": {
+        "equal": 21,
+        "b_subset": 4
+      }
+    },
+    "spi_count": {
+      "compared": 2,
+      "agree": 1,
+      "disagree": 1,
+      "agreement_rate": 0.5,
+      "passes_95": false
+    },
+    "spi_instances": {
+      "compared": 55,
+      "agree": 55,
+      "disagree": 0,
+      "agreement_rate": 1.0,
+      "passes_95": true,
+      "instance_sets": {
+        "equal": 29,
+        "a_subset": 1,
+        "b_subset": 25
+      }
+    },
+    "sram_kb_max": {
+      "compared": 4,
+      "agree": 4,
+      "disagree": 0,
+      "agreement_rate": 1.0,
+      "passes_95": true,
+      "agree_as_manual_envelope": 2
+    },
+    "supply_v": {
+      "compared": 34,
+      "agree": 25,
+      "disagree": 9,
+      "agreement_rate": 0.7353,
+      "passes_95": false
+    },
+    "temp_max_c": {
+      "compared": 4,
+      "agree": 3,
+      "disagree": 1,
+      "agreement_rate": 0.75,
+      "passes_95": false
+    },
+    "timer_count": {
+      "compared": 2,
+      "agree": 1,
+      "disagree": 1,
+      "agreement_rate": 0.5,
+      "passes_95": false
+    },
+    "timer_instances": {
+      "compared": 71,
+      "agree": 69,
+      "disagree": 2,
+      "agreement_rate": 0.9718,
+      "passes_95": true,
+      "instance_sets": {
+        "equal": 27,
+        "a_subset": 4,
+        "b_subset": 38,
+        "conflict": 2
+      }
+    },
+    "touch_instances": {
+      "compared": 16,
+      "agree": 16,
+      "disagree": 0,
+      "agreement_rate": 1.0,
+      "passes_95": true,
+      "instance_sets": {
+        "equal": 16
+      }
+    },
+    "usart_count": {
+      "compared": 1,
+      "agree": 0,
+      "disagree": 1,
+      "agreement_rate": 0.0,
+      "passes_95": false
+    },
+    "usart_instances": {
+      "compared": 65,
+      "agree": 58,
+      "disagree": 7,
+      "agreement_rate": 0.8923,
+      "passes_95": false,
+      "instance_sets": {
+        "equal": 20,
+        "a_subset": 2,
+        "b_subset": 36,
+        "conflict": 7
+      }
+    },
+    "usb_instances": {
+      "compared": 37,
+      "agree": 31,
+      "disagree": 6,
+      "agreement_rate": 0.8378,
+      "passes_95": false,
+      "instance_sets": {
+        "equal": 21,
+        "a_subset": 2,
+        "b_subset": 8,
+        "conflict": 6
+      }
+    },
+    "watchdog_count": {
+      "compared": 1,
+      "agree": 1,
+      "disagree": 0,
+      "agreement_rate": 1.0,
+      "passes_95": true
+    },
+    "watchdog_instances": {
+      "compared": 64,
+      "agree": 64,
+      "disagree": 0,
+      "agreement_rate": 1.0,
+      "passes_95": true,
+      "instance_sets": {
+        "equal": 51,
+        "a_subset": 1,
+        "b_subset": 12
+      }
+    },
+    "xspi_instances": {
+      "compared": 12,
+      "agree": 12,
+      "disagree": 0,
+      "agreement_rate": 1.0,
+      "passes_95": true,
+      "instance_sets": {
+        "equal": 12
+      }
+    }
+  },
+  "adjudication_count": 34,
+  "method": "Two documents pair when they share a family key (from scope, title, filename) and vendor, and differ in content hash. Only facts both grids type are compared, exactly; cores and pin counts agree on intersection; instance-name sets agree when one contains the other (a manual names the family's full set, a datasheet its parts'); a scalar maximum agrees when the manual's is at least the datasheet's (reported as manual_envelope); package-qualified I/O compares only under the same package and the same quantity qualifier (stated vs port pins listed). Nothing is promoted by this report.",
+  "pairs_by_scope_relation": {
+    "equal": 10,
+    "overlap": 43,
+    "disjoint_as_printed": 23
+  },
+  "pairs_by_genre": {
+    "datasheet/manual": 70,
+    "manual/manual": 2,
+    "datasheet/datasheet": 4
+  }
+}

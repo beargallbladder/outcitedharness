@@ -607,24 +607,154 @@ def _n(text: str) -> float | int:
     return int(value) if value.is_integer() else value
 
 
+# Processing: the core as printed, its clock, its performance and its options.
+_CORE_NAME = re.compile(r"\b(Cortex[®™]?-?\s?[MRA]\d{1,2}\+?F?|C8051|CIP-51|8051|RISC-V|C28x|RXv[123]|RL78|MIPS32|MIPS\s+M\d{1,2}[Kk]|microAptiv|AVR|PIC18|PIC16|TriCore|Xtensa|ARM7TDMI|ARM9|ARM926)\b", re.I)
+_CORE_MHZ = re.compile(r"(?:up\s+to\s+|@\s*|at\s+|of\s+)?(\d{1,4}(?:\.\d+)?)\s*-?\s*MHz", re.I)
+_DMIPS = re.compile(r"(\d{2,4}(?:\.\d+)?)\s*DMIPS(?!/MHz)|(\d(?:\.\d+)?)\s*DMIPS/MHz", re.I)
+_COREMARK = re.compile(r"(\d{2,4}(?:\.\d+)?)\s*CoreMark", re.I)
+_FPU = re.compile(r"\b(?:FPU|floating[- ]point(?:\s+unit)?)\b", re.I)
+_FPU_PRECISION = re.compile(r"\b(single|double)[- ]precision", re.I)
+_CORE_WIDTH = re.compile(r"\b(8|16|32|64)[- ]bit\b", re.I)
+_MULTI_CORE = re.compile(r"\b(dual|two|2|quad|four|4|triple|three|3)[- ]?cores?\b|\b(dual|quad)[- ]core\b", re.I)
+_MEMORY_KIND = (
+    ("eeprom", re.compile(r"\beeprom\b", re.I)),
+    ("data_flash", re.compile(r"\bdata\s+flash\b", re.I)),
+    ("flash", re.compile(r"\bflash\b|\bprogram\s+memory\b|\bcode\s+memory\b", re.I)),
+    ("rom", re.compile(r"\bROM\b|\bboot\s+rom\b|\bmask\s+rom\b", re.I)),
+    ("sram", re.compile(r"\bs?ram\b|\bTCM\b|\bCCM\b", re.I)),
+)
+_OSC = re.compile(
+    r"\b(HSI48|HSI|HSE|LSI|LSE|MSI|CSI|HSI16|IRC48M|IRC8M|IRC40K|IRC32K|LOCO|HOCO|MOCO|SOSC|MOSC|FRO|IRC|LPOSC|OSC32K|XOSC32K|XOSC|DFLL48M|DFLL|OSC8M|OSC16M|OSC48M|HFRCO|LFRCO|AUXHFRCO|HFXO|LFXO|ULFRCO|PLL\d?|SYSOSC|LFOSC|BLPE|ROSC|SIRC|FIRC|SOSC|MCG)\b"
+    r"|\b(internal|on-chip|external|low[- ]speed|high[- ]speed|low[- ]frequency|high[- ]frequency|low[- ]power)\s+(?:\w+\s+){0,2}?(?:RC\s+)?(?:oscillator|crystal|clock|reference\s+clock)\b",
+    re.I,
+)
+_OSC_FREQ = re.compile(r"(\d+(?:\.\d+)?)\s*-?\s*(MHz|kHz|Hz)\b", re.I)
+_LP_MODE = re.compile(r"\b(Sleep|Stop\s?\d?|Standby|Shutdown|Deep[- ]?Sleep|Deep\s+power[- ]down|Power[- ]down|Hibernate|Snooze|Idle|Halt|Wait|Backup|VBAT|Low[- ]power\s+run|Low[- ]power\s+sleep|LPRUN|LPSLEEP|EM[1-4]|VLLS\d?|LLS\d?|VLPS|VLPR|VLPW|Software\s+standby|Deep\s+software\s+standby)\b", re.I)
+_PROTOCOL_FLAGS = (
+    ("lin", re.compile(r"\bLIN\b", re.I)),
+    ("irda", re.compile(r"\bIrDA\b", re.I)),
+    ("smartcard", re.compile(r"\bsmart\s?card\b|ISO\s?7816", re.I)),
+    ("modbus", re.compile(r"\bModbus\b", re.I)),
+    ("ieee1588", re.compile(r"IEEE\s?1588|\bPTP\b", re.I)),
+    ("rs485", re.compile(r"RS-?485", re.I)),
+    ("i2c_fm_plus", re.compile(r"fast[- ]mode\s+plus|\bFm\+|1\s*Mbit/s\s*(?:\(fast\s+mode\s+plus\))?", re.I)),
+    ("smbus", re.compile(r"\bSMBus\b", re.I)),
+    ("pmbus", re.compile(r"\bPMBus\b", re.I)),
+    ("i2s", re.compile(r"\bI2S\b", re.I)),
+    ("spdif", re.compile(r"S/PDIF|\bSPDIF", re.I)),
+    ("quad_spi", re.compile(r"quad[- ]?SPI|\bQSPI\b|\bQUADSPI\b", re.I)),
+    ("octo_spi", re.compile(r"octo[- ]?SPI|\bOSPI\b|\bOCTOSPI\b|\bXSPI\b|hexadeca", re.I)),
+    ("usb_type_c", re.compile(r"type[- ]C|\bUCPD\b|power\s+delivery", re.I)),
+    ("hdmi_cec", re.compile(r"HDMI[- ]CEC|\bCEC\b", re.I)),
+    ("sdio", re.compile(r"\bSDIO\b|\bSDMMC\b|\bSD/MMC|\bSDHC\b|\beMMC\b", re.I)),
+    ("can_fd", re.compile(r"CAN[- ]?FD|FDCAN|flexible\s+data", re.I)),
+    ("tt_can", re.compile(r"TT-?CAN|time[- ]triggered", re.I)),
+)
+_TIMER_CHANNELS = re.compile(r"(\d{1,2})(?:\s+or\s+(\d{1,2}))?[- ]channels?\b|(\d{1,2})(?:\s+or\s+(\d{1,2}))?\s+(?:compare/capture(?:/PWM)?|capture/compare(?:/PWM)?|input\s+capture|output\s+compare|IC/OC(?:/PWM)?|PWM)\s+channels?", re.I)
+_TIMER_MHZ = re.compile(r"(?:up\s+to\s+|@\s*|at\s+)?(\d{1,4})\s*MHz", re.I)
+_VREF = re.compile(r"(?:reference\s+voltage|voltage\s+reference|VREF(?:INT|BUF)?)[^.\n]{0,25}?\(?\s*(\d(?:\.\d+)?)\s*V\b|(\d(?:\.\d+)?)\s*V\s+(?:internal\s+)?(?:reference|VREF)", re.I)
+_CONVERSION_TIME = re.compile(r"(\d+(?:\.\d+)?)\s*(µs|us|μs|ns)\s*(?:conversion|conv\.)|conversion(?:\s+time)?[^.\n]{0,20}?(\d+(?:\.\d+)?)\s*(µs|us|μs|ns)", re.I)
+
+
+def _core_facts(text: str, row: dict[str, Any]) -> list[dict[str, Any]]:
+    facts: list[dict[str, Any]] = []
+    core = _CORE_NAME.search(text)
+    if core:
+        printed = core.group(1)
+        facts.append({"kind": "core_name", "value": re.sub(r"[®™]", "", printed), "value_normalized": re.sub(r"[®™\s]", "", printed).upper().replace("CORTEX", "Cortex").replace("CORTEX-", "Cortex-")})
+    mhz = _CORE_MHZ.search(text)
+    if mhz and not re.search(r"oscillator|crystal|\bRC\b|\bHSI\b|\bHSE\b|\bLSE\b|\bLSI\b|\bIRC\b|\bPLL\b|flash|SPI|USB|Ethernet|timer|ADC|bus|APB|AHB", text, re.I):
+        value = _n(mhz.group(1))
+        if 1 <= value <= 3000:
+            facts.append({"kind": "core_max_mhz", "value": value, "qualifier_verbatim": "up to" if re.search(r"up\s+to|maximum|max\.?", text, re.I) else None})
+    dmips = _DMIPS.search(text)
+    if dmips:
+        if dmips.group(1):
+            facts.append({"kind": "dmips", "value": _n(dmips.group(1))})
+        else:
+            facts.append({"kind": "dmips_per_mhz", "value": _n(dmips.group(2))})
+    coremark = _COREMARK.search(text)
+    if coremark:
+        facts.append({"kind": "coremark", "value": _n(coremark.group(1))})
+    if _FPU.search(text):
+        precision = _FPU_PRECISION.search(text)
+        facts.append({"kind": "fpu", "value": True, "precision": precision.group(1).lower() if precision else None})
+    if re.search(r"\bMPU\b|memory\s+protection\s+unit", text, re.I):
+        facts.append({"kind": "mpu", "value": True})
+    if re.search(r"\bDSP\b(?!\s*/)|DSP\s+instructions|digital\s+signal\s+processing", text, re.I):
+        facts.append({"kind": "dsp_extension", "value": True})
+    if re.search(r"TrustZone", text, re.I):
+        facts.append({"kind": "trustzone", "value": True})
+    multi = _MULTI_CORE.search(text)
+    if multi:
+        word = (multi.group(1) or multi.group(2)).lower()
+        facts.append({"kind": "core_count", "value": {"dual": 2, "two": 2, "2": 2, "triple": 3, "three": 3, "3": 3, "quad": 4, "four": 4, "4": 4}[word]})
+    width = _CORE_WIDTH.search(text)
+    if width and core:
+        facts.append({"kind": "core_width_bits", "value": int(width.group(1))})
+    return facts
+
+
+def _memory_facts(text: str, row: dict[str, Any]) -> list[dict[str, Any]]:
+    """A memory size typed in KB with its kind, bound and quantity qualifier.
+    Multi-valued cells keep every member (never expanded to a scalar)."""
+    unit = (row.get("unit") or "").lower()
+    value = row.get("value")
+    if value is None or unit not in ("kb", "mb", "gb", "bytes", "byte", "b", "kbytes", "kbyte", "mbytes", "mbyte", "kbit", "mbit"):
+        return []
+    scale = {"kb": 1, "kbytes": 1, "kbyte": 1, "mb": 1024, "mbytes": 1024, "mbyte": 1024, "gb": 1024 * 1024, "bytes": 1 / 1024, "byte": 1 / 1024, "b": 1 / 1024, "kbit": 1 / 8, "mbit": 128}[unit]
+    members = value if isinstance(value, list) else [value]
+    if not all(isinstance(m, (int, float)) for m in members):
+        return []
+    kind = next((name for name, pattern in _MEMORY_KIND if pattern.search(text)), None)
+    if kind is None:
+        return []
+    sizes = [_n(str(round(m * scale, 4))) for m in members]
+    return [{
+        "kind": f"{kind}_kb",
+        "value": sizes if isinstance(value, list) else sizes[0],
+        "quantity_qualifier": row.get("quantity_qualifier"),
+        "qualifier_verbatim": row.get("qualifier_verbatim"),
+        "varies_by_part": bool(row.get("varies_by_part")),
+    }]
+
+
 def typed_facts(row: dict[str, Any]) -> list[dict[str, Any]]:
     text = f"{row.get('label') or ''} — {row.get('verbatim') or ''}"
     cls = row.get("peripheral_class") or ""
     group = row["group"]
     facts: list[dict[str, Any]] = []
 
-    if group == "analogue":
+    if group == "processing":
+        facts.extend(_core_facts(text, row))
+
+    elif group == "memory":
+        facts.extend(_memory_facts(text, row))
+
+    elif group == "analogue":
         bits = _BITS.search(text)
         if bits and cls in ("adc", "dac", "comparator", "opamp", ""):
             kind = "dac" if re.search(r"\bDAC|D/A", text, re.I) else "adc" if re.search(r"\bADC|A/D|S12AD|analog[- ]to[- ]digital|SAR|sigma", text, re.I) else cls or None
             if kind in ("adc", "dac"):
-                facts.append({"kind": f"{kind}_resolution_bits", "value": int(bits.group(1))})
+                # "3× 12-bit ADC": the count rides with the resolution, as for timers.
+                facts.append({"kind": f"{kind}_resolution_bits", "value": int(bits.group(1)), "count": row.get("instances")})
         ch = _CHANNELS.search(text)
-        if ch and re.search(r"\bADC|A/D|S12AD|analog", text, re.I):
+        if ch and re.search(r"\bADC|A/D|S12AD|analog", text, re.I) and not re.search(r"\bDAC|D/A", text, re.I):
             facts.append({"kind": "adc_channels", "value": int(ch.group(1)), "qualifier_verbatim": "Up to" if re.search(r"up\s+to", ch.group(0), re.I) else None})
+        elif ch and re.search(r"\bDAC|D/A", text, re.I):
+            facts.append({"kind": "dac_channels", "value": int(ch.group(1)), "qualifier_verbatim": "Up to" if re.search(r"up\s+to", ch.group(0), re.I) else None})
         rate = _SAMPLE_RATE.search(text)
         if rate:
             facts.append({"kind": "adc_sample_rate", "value": _n(rate.group(1)), "unit": rate.group(2)})
+        conv = _CONVERSION_TIME.search(text)
+        if conv and re.search(r"\bADC|A/D|analog", text, re.I):
+            value, unit = (conv.group(1), conv.group(2)) if conv.group(1) else (conv.group(3), conv.group(4))
+            facts.append({"kind": "adc_conversion_time", "value": _n(value), "unit": unit.replace("u", "µ").replace("μ", "µ")})
+        vref = _VREF.search(text)
+        if vref:
+            facts.append({"kind": "internal_reference_v", "value": _n(vref.group(1) or vref.group(2))})
+        if re.search(r"temp(?:erature)?\s+sensor", text, re.I):
+            facts.append({"kind": "temperature_sensor", "value": True})
         if row.get("instances") and cls in ("adc", "dac", "comparator", "opamp"):
             facts.append({"kind": f"{cls}_instances", "value": row["instances"]})
 
@@ -637,8 +767,51 @@ def typed_facts(row: dict[str, Any]) -> list[dict[str, Any]]:
         pwm = _PWM_CH.search(text)
         if pwm:
             facts.append({"kind": "pwm_channels", "value": int(pwm.group(1) or pwm.group(2)), "qualifier_verbatim": "Up to" if re.search(r"up\s+to", text, re.I) else None})
+        chans = _TIMER_CHANNELS.search(text)
+        if chans and cls in ("timer", "lptim", "hrtim", ""):
+            lo = int(chans.group(1) or chans.group(3))
+            hi = chans.group(2) or chans.group(4)
+            facts.append({"kind": "timer_channels", "value": [lo, int(hi)] if hi else lo, "per_instance": True})
+        tmhz = _TIMER_MHZ.search(text)
+        if tmhz and cls in ("timer", "lptim", "hrtim"):
+            facts.append({"kind": "timer_clock_mhz", "value": int(tmhz.group(1)), "qualifier_verbatim": "up to" if re.search(r"up\s+to", text, re.I) else None})
+        if cls == "rtc" or re.search(r"\bRTC\b|real[- ]time\s+clock", text, re.I):
+            if re.search(r"calendar", text, re.I):
+                facts.append({"kind": "rtc_calendar", "value": True})
+            if re.search(r"sub-?second|tamper|alarm", text, re.I):
+                facts.append({"kind": "rtc_features", "value": sorted({m.lower().replace("-", "") for m in re.findall(r"sub-?second|tamper|alarms?", text, re.I)})})
+        if re.search(r"motor[- ]control|complementary\s+outputs?|dead[- ]time", text, re.I) and cls in ("timer", "hrtim", ""):
+            facts.append({"kind": "motor_control_timer", "value": True})
+        if re.search(r"quadrature|encoder\s+interface|\bQEI\b|\bQDEC\b", text, re.I):
+            facts.append({"kind": "encoder_interface", "value": True})
 
     elif group == "power_clock_reset":
+        for match in _OSC.finditer(text):
+            name = match.group(1) or match.group(0)
+            window = text[match.start(): match.end() + 40]
+            before = text[max(0, match.start() - 30): match.start()]
+            freq = _OSC_FREQ.search(window) or _OSC_FREQ.search(before)
+            fact: dict[str, Any] = {"kind": "oscillator", "name": re.sub(r"\s+", " ", name.strip()), "internal": bool(re.search(r"internal|on-chip|\bRC\b|HSI|LSI|MSI|CSI|IRC|LOCO|HOCO|MOCO|FRO|SIRC|FIRC|HFRCO|LFRCO|ULFRCO|DFLL|OSC8M|OSC16M|OSC48M", name + " " + window[:20], re.I)) or None}
+            if freq:
+                fact["value"], fact["unit"] = _n(freq.group(1)), freq.group(2)
+            facts.append(fact)
+            if len([f for f in facts if f["kind"] == "oscillator"]) >= 6:
+                break
+        modes = sorted({re.sub(r"\s+", " ", m.group(1)).strip() for m in _LP_MODE.finditer(text)}, key=str.lower)  # as printed
+        if modes and re.search(r"mode|power|energy|sleep|stop|standby", text, re.I):
+            facts.append({"kind": "low_power_modes", "value": modes})
+        if re.search(r"brown-?out|\bBOR\b|\bBOD\b", text, re.I):
+            facts.append({"kind": "brown_out_reset", "value": True})
+        if re.search(r"\bPVD\b|programmable\s+voltage\s+detector|\bLVD\b|low[- ]voltage\s+detect", text, re.I):
+            facts.append({"kind": "voltage_detector", "value": True})
+        if re.search(r"\bPOR\b|power[- ]on\s+reset", text, re.I):
+            facts.append({"kind": "power_on_reset", "value": True})
+        if re.search(r"\bVBAT\b|battery\s+backup|backup\s+domain", text, re.I):
+            facts.append({"kind": "vbat_domain", "value": True})
+        if re.search(r"\bSMPS\b|\bDC-?DC\b|step[- ]down\s+converter|buck\s+converter", text, re.I):
+            facts.append({"kind": "integrated_smps", "value": True})
+        if re.search(r"\bLDO\b|voltage\s+regulator", text, re.I):
+            facts.append({"kind": "integrated_ldo", "value": True})
         per_mhz = _CURRENT_PER_MHZ.search(text)
         if per_mhz:
             facts.append({"kind": "active_current_per_mhz", "value": _n(per_mhz.group(1)), "unit": "µA/MHz"})
@@ -681,6 +854,11 @@ def typed_facts(row: dict[str, Any]) -> list[dict[str, Any]]:
                 facts.append({"kind": "ethernet_speed", "value": "10/100"})
             if re.search(r"gigabit|1000\s*Mb|\bGb\b", text, re.I):
                 facts.append({"kind": "ethernet_speed", "value": "gigabit"})
+        for flag, pattern in _PROTOCOL_FLAGS:
+            if flag == "can_fd" and any(f["kind"] == "can_fd" for f in facts):
+                continue
+            if pattern.search(text):
+                facts.append({"kind": "protocol_support", "value": flag, "peripheral_class": cls or None})
 
     elif group == "graphics_vision_touch_hmi":
         seg = _LCD_SEG.search(text)
