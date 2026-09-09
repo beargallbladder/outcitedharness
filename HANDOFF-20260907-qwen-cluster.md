@@ -35,6 +35,50 @@ through subagents. A fresh session should have a working shell.
 - Qualifier scripts (local, not in repo): `/tmp/qualify_qwen38.py`, `/tmp/qualify_radix.py`
   (also copied to asus2:/tmp). Need `QWEN_API_KEY` env.
 
+### INCIDENT 2026-09-09 16:28Z — both ranks died on NaN in sampler (42h uptime)
+- Signature: `TensorCompare.cu:109 Assertion probability tensor contains inf/nan` on TP0 and
+  TP1 simultaneously, then `device-side assert` → NCCL watchdog → both containers `Exited (0)`.
+  One running request (Sam's M4, ~104K ctx, radix hit 102,784 tokens), no queue, no OOM,
+  no disconnect, no reboot. Turn was a 2-chunk prefill (1024+448) then ~6 s of decode at
+  accept 0.86–0.96 before the assert. Head log line ~7091–7097 in the incident capture.
+- This is upstream sglang#37052 (OPEN, no maintainer reply). Same hardware/model/commit
+  operator (hellojiaru) WITHDREW their NEXTN 3/1/4 profile on 2026-09-01 after recurrences at
+  29K and 50K with graphs/overlap/radix all off and one request running. Root kernel unproven;
+  suspect = repeated long-prefill → spec-decode transition across NEXTN + GDN state + QSA +
+  NVFP4. #37110 (baked in Sep 7) fixed one bug in that path, not this one.
+  `--enable-nan-detection` does not exist in our dev build (d91c3682b).
+- **Watchdog had never worked.** `/etc/systemd/system/qwen38-watchdog.timer` (1-min tick,
+  3 failures → `start.sh stop && serve`) was installed Aug 31 05:28 and failed with exit 127
+  on every tick since, because `/usr/local/libexec/qwen38-watchdog` `source`d `.env`, and
+  `CUDA_GRAPH_BS=1 2 3 4 5 6` / the JSON in `EXTRA_ARGS` are not valid shell. Fixed 16:47Z:
+  line-based `.env` parse (same as start.sh, only API_KEY/WORKER_SSH/PORT), incident-capture
+  ssh target `samkimasus4@10.10.10.2` (stale, unreachable) → `$WORKER_SSH` (10.77.0.6).
+  Backup `/usr/local/libexec/qwen38-watchdog.bak-20260909`. First real run: detected →
+  captured `~/.local/state/qwen38-watchdog/incidents/20260909T164819Z/` (head/worker logs,
+  key redacted) → coordinated restart → `healthy` at 16:56:46Z. Recovery ≈ 8.5 min + up to
+  3 min detection. Log: `~/.local/state/qwen38-watchdog/watchdog.log`.
+  NOTE: start.sh itself was never at fault — its own SSH gate (`wrun "echo ssh-ok" || exit 1`,
+  line 471) uses `WORKER_SSH` from `.env` and fails closed; the worker rank loaded fine.
+- **Upstream moved (checked 17:00Z):** sglang#37500 "support qwen 3.8 flash next" MERGED to
+  main 2026-09-08 20:56Z (91 files): official model, `arg_groups/model_overrides/qwen4_exp.py`,
+  and a dedicated **SM121 packed-QSA decode kernel** (`kernels/kda_kernels/qwen38_qsa_sm121/`,
+  validated TP1+TP2 on GB10, 2.07x over the Triton fallback). arm64 images containing it:
+  `lmsysorg/sglang:nightly-dev-cu13-20260909-db272201` (main+5) and
+  `nightly-cu134-20260909-708f51e` (main+32). Untested here. Our image is the pre-merge dev
+  branch + 4 hand patches; some may not apply or may be superseded.
+- **Alternative stack:** the most-starred dual-Spark recipe (MiaAI-Lab/Qwen3.8-Flash-Next-
+  Dual-DGX-Sparks, 314★, pushed 09-09) switched from SGLang to **vLLM** TP2+EP+MTP3, eager,
+  `FULL_DECODE_ONLY` graphs, 52 tok/s batch-1 (24.5 without MTP). x00byte recipe (vLLM, mp,
+  eager, MTP4): "SGLang ones have not worked consistently for my agentic work". Official
+  image `vllm/vllm-openai:qwen38-flash-next`. Caveats: vllm#54629 (>100K prefills hang a
+  worker at TP4+EP — same traffic shape as ours, spec decode NOT required); prefix-cache
+  fixes vllm#48375 and vllm#53142 are both still OPEN, so growing-history soak with prefix
+  cache ON is unproven there too.
+- Decision pending with Sam: (a) stay on current image + working watchdog; (b) trial sglang
+  nightly (main, SM121 kernel) in a maintenance window with a growing-history soak
+  (15–30 turns, each turn = full history + new turn, 30K→120K); (c) trial vLLM recipe same
+  soak; (d) SPECULATIVE=0 on current image (spec is everyone's prime suspect; ~40 → ~20 tok/s).
+
 ### Open watch items
 1. **Prefix cache hits on Sam's real traffic**: at 12:06 the only cache hits were from
    my qualifier; his turns (up to 148k tokens) had 0 cached tokens. Likely just first
