@@ -30,6 +30,16 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--maximum-pages-per-lane", type=int, default=12)
     parser.add_argument("--workers", type=int, default=6)
     parser.add_argument("--maximum-documents", type=int)
+    parser.add_argument(
+        "--enable-ocr-fallback",
+        action="store_true",
+        help="Attempt local OCR for pages that have no text layer.",
+    )
+    parser.add_argument(
+        "--ocr-language",
+        default="eng",
+        help="Language passed to PyMuPDF OCR when --enable-ocr-fallback is set.",
+    )
     return parser
 
 
@@ -48,9 +58,9 @@ def _load_profiles(root: Path) -> tuple[dict[str, Any], list[dict[str, Any]]]:
 
 
 def _extract_one(
-    task: tuple[dict[str, Any], int],
+    task: tuple[dict[str, Any], int, bool, str],
 ) -> tuple[list[dict[str, Any]], dict[str, Any] | None]:
-    profile, maximum_pages_per_lane = task
+    profile, maximum_pages_per_lane, enable_ocr_fallback, ocr_language = task
     path = Path(profile["source_path"])
     try:
         if sha256_file(path) != profile["document_sha256"]:
@@ -63,6 +73,8 @@ def _extract_one(
                     document,
                     profile,
                     maximum_pages_per_lane=maximum_pages_per_lane,
+                    enable_ocr_fallback=enable_ocr_fallback,
+                    ocr_language=ocr_language,
                 )
             )
         return rows, None
@@ -102,7 +114,13 @@ def main() -> int:
     processed = 0
     try:
         tasks = [
-            (profile, args.maximum_pages_per_lane) for profile in profiles
+            (
+                profile,
+                args.maximum_pages_per_lane,
+                bool(args.enable_ocr_fallback),
+                str(args.ocr_language),
+            )
+            for profile in profiles
         ]
         with evidence_path.open("xb") as evidence_handle, error_path.open(
             "xb"
@@ -135,7 +153,8 @@ def main() -> int:
             "policy": {
                 "extractor": "pymupdf",
                 "network_used": False,
-                "ocr_used": False,
+                "ocr_fallback_enabled": bool(args.enable_ocr_fallback),
+                "ocr_language": str(args.ocr_language),
                 "maximum_pages_per_lane": args.maximum_pages_per_lane,
                 "model_escalation": "only_after_local_attempt",
             },
