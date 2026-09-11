@@ -16,14 +16,25 @@ the document max grabbed pulsed IDM rows, output-characteristic points and
 silicon-limited (chip-limited) currents. This version normalises every row
 into the field's canonical unit before diffing and admits only spec-grade rows
 for id_a (absolute-maximum plus prose continuous-drain, never pulsed/peak/
-silicon-limited). A label whose numeral matches a normalised document value is
-a unit/identity match, not a disagreement; for rds_on_mohm the label is also
-tried as a plain mOhm numeral because ROHM selector exports are known to
-carry mOhm numerals under an "Ohm" unit string.
+silicon-limited). Declared units are authoritative.
 
-Kinds: unit_identity_match | label_document_disagree | no_spec_row |
+Verdicts (unit_identity_match / label_document_disagree) require verifiable
+label context: equal quantity qualifier and the label's condition contained
+in the row's condition (the lane's agreed semantics, CR
+power-gold-fixtures-20260909). Absent label context, qualifier mismatch,
+condition mismatch, or multiple conflicting comparable values hold the row as
+ambiguous_comparison — never a guess. Selector-derived fixtures carry no
+qualifiers, so such rows stay held until re-labeled fixtures land; the payload
+now preserves the full row context (verbatim source line, qualifier,
+conditions, table caption, section, also_printed) so CR's decomposition can
+rule on them without re-opening every PDF.
+
+Kinds: ambiguous_comparison | unit_identity_match | label_document_disagree | no_spec_row |
 reader_miss. document_values is normalised to the canonical unit;
-document_values_raw keeps the as-printed numbers for traceability.
+document_values_raw keeps the as-printed numbers; document_values_comparable
+holds the context-verified subset; each payload row carries its context_gate
+reason (pass | label_qualifier_absent | row_qualifier_mismatch |
+label_condition_absent | row_condition_absent | row_condition_mismatch).
 
     python3 scripts/power_gold_adjudication.py \
         --grids results/power-grids-20260909/grids.jsonl \
@@ -37,6 +48,7 @@ import argparse
 import json
 import math
 import re
+import unicodedata
 from collections import Counter
 from pathlib import Path
 
@@ -85,23 +97,11 @@ def _clean_unit(unit: str | None) -> str:
 
 
 def _ohm_kind(unit: str) -> str | None:
-    """Classify a resistance unit string as 'milli' or 'plain' (Ohm).
-
-    The Omega glyph reaches us in several encodings (Ω, Ω, mojibake Â) and the
-    extractor sometimes reads it as W, so inside an RDS(on) row mW means mΩ
-    and W means Ω. A bare 'm' (or m# / m\\x00) is a milli prefix whose Omega
-    glyph was eaten.
-    """
-    u = _clean_unit(unit).lower().replace("µ", "u")
-    if not u:
-        return None
-    u = u.replace("ω", "ohm").replace("ω", "ohm").replace("â", "ohm")
-    if u.startswith("m"):
-        rest = u[1:]
-        if not rest or "ohm" in rest or rest in ("w", "#"):
-            return "milli"
-        return None
-    if "ohm" in u or u in ("w",):
+    """Accept explicit resistance units, not damaged or compound units."""
+    u = _clean_unit(unicodedata.normalize("NFKC", unit)).replace("Ω", "Ohm")
+    if u in ("mOhm", "mohm"):
+        return "milli"
+    if u in ("Ohm", "ohm"):
         return "plain"
     return None
 
@@ -116,7 +116,7 @@ _METRIC = {
 def normalize(field: str, unit: str | None, value: float) -> float | None:
     """Convert one as-printed number into the field's canonical unit."""
     canonical = CANONICAL_UNIT.get(field)
-    if canonical is None or not isinstance(value, (int, float)):
+    if canonical is None or isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
         return None
     u = _clean_unit(unit).lower().replace("µ", "u").replace("°", "")
     if canonical == "mOhm":
@@ -137,22 +137,13 @@ def normalize(field: str, unit: str | None, value: float) -> float | None:
 
 
 def label_readings(field: str, unit: str | None, value) -> list[tuple[str, float]]:
-    """Plausible canonical readings of a fixture label value.
-
-    Every field gets its proper conversion. rds_on_mohm additionally gets the
-    raw numeral read as mOhm, because ROHM selector exports carry mOhm
-    numerals under an "Ohm" unit string (CR adjudicator-fixes-20260911).
-    """
+    """Use only the label's declared unit; never reinterpret its numeral."""
     if not isinstance(value, (int, float)):
         return []
     proper = normalize(field, unit, value)
     readings = []
     if proper is not None:
         readings.append(("as_printed", proper))
-    if field == "rds_on_mohm" and isinstance(value, (int, float)):
-        numeral = float(value)
-        if not any(math.isclose(numeral, v, rel_tol=1e-9) for _, v in readings):
-            readings.append(("as_mohm_numeral", numeral))
     return readings
 
 
@@ -176,8 +167,8 @@ def spec_grade(field: str, row: dict) -> bool:
     if field != "id_a":
         return True
     symbol = row.get("symbol") or ""
-    hay = f"{symbol} {row.get('parameter') or ''} {row.get('label') or ''}"
-    if "IDM" in symbol.upper():
+    hay = " ".join(str(row.get(k) or "") for k in ("symbol", "parameter", "label", "condition_verbatim", "table_condition", "qualifier_verbatim"))
+    if "IDM" in hay.upper():
         return False
     if NOT_CONTINUOUS_ID.search(hay):
         return False
@@ -191,6 +182,46 @@ def spec_grade(field: str, row: dict) -> bool:
 
 def close(a: float, b: float) -> bool:
     return math.isclose(a, b, rel_tol=1e-6, abs_tol=1e-9)
+
+
+def norm_condition(text) -> str:
+    """Whitespace/case/=/:-insensitive condition text, matching the scorer's
+    established containment semantics (score_key_features_gold.py, CR
+    power-gold-fixtures-20260909)."""
+    return re.sub(r"\s+|[:=]", "", unicodedata.normalize("NFKC", str(text or ""))).lower().replace("ω", "ohm").replace("Ω", "ohm").replace("°", "")
+
+
+def context_gate(miss: dict, row: dict) -> str:
+    """Why the row can or cannot be compared to the label.
+
+    Selector-derived fixtures often carry no qualifier or condition; that
+    absence is unverifiable context, not a match. A row may state MORE
+    context than the label (lane contract: the label's condition is
+    contained in the row's), never less. table_condition is ambient table
+    context: it is emitted in the payload, not treated as a conflict.
+    """
+    label_qualifier = miss.get("quantity_qualifier")
+    if label_qualifier is None:
+        return "label_qualifier_absent"
+    if row.get("quantity_qualifier") != label_qualifier:
+        return "row_qualifier_mismatch"
+    label_condition = miss.get("condition_verbatim")
+    if label_condition is None:
+        return "label_condition_absent"
+    if row.get("condition_verbatim") is None:
+        return "row_condition_absent"
+    if norm_condition(label_condition) not in norm_condition(row.get("condition_verbatim")):
+        return "row_condition_mismatch"
+    return "pass"
+
+
+def same_context(miss: dict, row: dict) -> bool:
+    """True only when the label's stated context is verifiably restated by
+    the row: equal quantity qualifier and the label's condition contained in
+    the row's. Absent label context cannot be verified and never produces a
+    verdict. This is conservative textual matching, not an inferred
+    electrical equivalence."""
+    return context_gate(miss, row) == "pass"
 
 
 def main() -> int:
@@ -228,42 +259,71 @@ def main() -> int:
                 kind = "reader_miss"
                 doc_values: list[float] = []
                 doc_raw: list[float] = []
+                comparable_values: list[float] = []
                 payload_rows = []
                 label_match = None
             else:
                 spec_rows = [r for r in same_quantity if spec_grade(field, r)]
+                # CR adjudicator-retraction-ack-20260911: hold full row context
+                # so their decomposition can rule on held rows — the verbatim
+                # source line carries qualifiers the constructed label omits
+                # (e.g. ROHM "RDS(on)(Max.) 44 mΩ" front-page outline boxes).
+                ordered = spec_rows + [r for r in same_quantity if r not in spec_rows]
                 payload_rows = [
                     {
-                        "label": r["label"][:100],
+                        "label": r.get("label"),
+                        "verbatim": r.get("verbatim"),
+                        "symbol": r.get("symbol"),
+                        "symbol_as_printed": r.get("symbol_as_printed"),
+                        "parameter": r.get("parameter"),
                         "table_kind": r.get("table_kind"),
+                        "table_title": r.get("table_title"),
+                        "section": r.get("section"),
                         "quantity_qualifier": r.get("quantity_qualifier"),
-                        "pages": r.get("source_pages"),
+                        "qualifier_verbatim": r.get("qualifier_verbatim"),
+                        "condition_verbatim": r.get("condition_verbatim"),
+                        "table_condition": r.get("table_condition"),
+                        "also_printed": r.get("also_printed"),
                         "value": r.get("value"),
                         "unit": r.get("unit"),
+                        "pages": r.get("source_pages"),
                         "spec_grade": spec_grade(field, r),
+                        "same_context": same_context(miss, r),
+                        "context_gate": context_gate(miss, r),
                     }
-                    for r in (spec_rows + [r for r in same_quantity if r not in spec_rows])[:4]
+                    for r in ordered[:8]
                 ]
                 norm: set[float] = set()
                 raw: set[float] = set()
+                comparable: set[float] = set()
                 for r in spec_rows:
                     for v in values(r):
                         raw.add(v)
-                        n = normalize(field, r.get("unit"), v)
+                        unit = r.get("unit")
+                        # CR's bounded glyph correction applies to RDS document
+                        # rows only, never to a fixture's declared unit.
+                        if field == "rds_on_mohm" and unit == "mW":
+                            unit = "mOhm"
+                        n = normalize(field, unit, v)
                         if n is not None:
                             norm.add(n)
+                            if same_context(miss, r):
+                                comparable.add(n)
                 doc_values = sorted(norm)
                 doc_raw = sorted(raw)
+                comparable_values = sorted(comparable)
                 readings = label_readings(field, miss.get("unit"), miss.get("value"))
                 label_match = None
                 for name, n in readings:
-                    if any(close(n, d) for d in norm):
+                    if len(comparable) == 1 and any(close(n, d) for d in comparable):
                         label_match = name
                         break
                 if label_match is not None:
                     kind = "unit_identity_match"
-                elif norm:
+                elif len(comparable) == 1 and readings:
                     kind = "label_document_disagree"
+                elif norm:
+                    kind = "ambiguous_comparison"
                 else:
                     kind = "no_spec_row"
             kinds[kind] += 1
@@ -273,10 +333,12 @@ def main() -> int:
                 "label_value": miss.get("value"),
                 "label_unit": miss.get("unit"),
                 "label_condition": miss.get("condition_verbatim"),
+                "label_quantity_qualifier": miss.get("quantity_qualifier"),
                 "kind": kind,
                 "canonical_unit": CANONICAL_UNIT.get(field),
                 "document_values": doc_values[:12],
                 "document_values_raw": doc_raw[:12],
+                "document_values_comparable": comparable_values[:12],
                 "document_rows": payload_rows,
             }
             if label_match is not None:
@@ -286,7 +348,7 @@ def main() -> int:
     by_field = Counter((r["source_field"], r["kind"]) for r in out_rows)
     print(f"misses {len(out_rows)}: {dict(kinds)}")
     for field in sorted({r["source_field"] for r in out_rows}):
-        parts = [f"{k.split('_')[0]} {by_field[(field, k)]}" for k in ("unit_identity_match", "label_document_disagree", "no_spec_row", "reader_miss") if by_field[(field, k)]]
+        parts = [f"{k} {by_field[(field, k)]}" for k in ("ambiguous_comparison", "unit_identity_match", "label_document_disagree", "no_spec_row", "reader_miss") if by_field[(field, k)]]
         print(f"  {field:14} {'  '.join(parts)}")
     return 0
 
