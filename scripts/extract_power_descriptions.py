@@ -87,7 +87,7 @@ def _page_lines(page) -> list[dict]:
             y = line["bbox"][1]
             if y > height - 55:  # footer: page numbers, copyright, doc ids
                 continue
-            lines.append({"text": text, "y": y, "x": line["bbox"][0], "x1": line["bbox"][2], "size": max(s["size"] for s in line["spans"])})
+            lines.append({"text": text, "y": y, "x": line["bbox"][0], "x1": line["bbox"][2], "size": max(s["size"] for s in line["spans"]), "h": height})
     lines.sort(key=lambda l: (l["y"], l["x"]))
     return lines
 
@@ -242,6 +242,18 @@ def page1_description(pdf_path: Path, part_number: str) -> dict:
     sentence = _description_first_sentence(lines)
     if sentence and not _is_part_numberish(sentence, part_number):
         return {"description_verbatim": sentence, "candidate": "description_section"}
+    # Last chance: a smaller tagline under the part number (ROHM SiC covers
+    # print "N-channel SiC power MOSFET" at ~10.5pt). Only when nothing else
+    # qualified, and only in the page's header region.
+    if lines:
+        top = lines[0]["h"] * 0.35
+        small = [l for l in lines if l["y"] <= top and l["size"] >= 10.0
+                 and len(l["text"]) >= MIN_LINE_CHARS
+                 and not BOILERPLATE.search(l["text"])
+                 and not _is_part_numberish(l["text"], part_number)]
+        if small:
+            best = max(small, key=lambda l: (l["size"], -l["y"]))
+            return {"description_verbatim": best["text"], "candidate": "sub_tagline"}
     return {"no_description_line": True}
 
 
