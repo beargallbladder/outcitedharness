@@ -50,7 +50,13 @@ def values_equal(exp: dict, row: dict) -> bool:
     if isinstance(got, list) and len(got) == 2 and not isinstance(want, list):
         return any(values_equal({**exp, "value": want}, {**row, "value": g}) for g in got)
     if "unit" in exp and exp["unit"] and row.get("unit"):
-        a, b = to_base(want, exp["unit"]), to_base(got, row.get("unit"))
+        row_unit = row.get("unit")
+        # CR adjudicator-fixes-20260911, bounded: the extractor's Omega->W
+        # glyph confusion — inside an RDS(on) row, mW means mOhm. Document
+        # rows only; the fixture's declared unit is never reinterpreted.
+        if exp.get("source_field") == "rds_on_mohm" and (row_unit or "").strip() == "mW":
+            row_unit = "mΩ"
+        a, b = to_base(want, exp["unit"]), to_base(got, row_unit)
         if a and b and a[1] == b[1]:
             if abs(a[0] - b[0]) <= 1e-9 * max(1.0, abs(a[0])):
                 return True
