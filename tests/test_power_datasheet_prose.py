@@ -120,6 +120,15 @@ def test_infineon_operating_and_storage_is_kept():
     assert [-55.0, 175.0] in _of(facts, "temp_range")
 
 
+def test_gate_charge_total_prose():
+    facts = _facts(
+        "Gate Charge Characteristics\n"
+        "Gate to source charge Q gs - 0.05 0.1 nC\n"
+        "Gate charge total Q g - 0.4 0.6\n"
+    )
+    assert 0.4 in _of(facts, "qg_typ")
+
+
 def test_optimos_product_summary_vds_rds():
     facts = _facts(
         "Product Summary\n"

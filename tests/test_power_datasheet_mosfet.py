@@ -6,8 +6,13 @@ from pathlib import Path
 
 from harness.electronics.power_datasheet import (
     _header_looks_fragmented,
+    _header_looks_like_data_row,
+    _headers_align,
     _is_characteristics_header,
+    _looks_like_symbol,
+    _roles_for_header,
     _rows_from_fact,
+    _split_multi_role_header,
     _unit_from_symbol,
     canonical_symbols,
     classify,
@@ -124,3 +129,52 @@ def test_vdss_parameter_recovers_switching_symbol():
 
 def test_continuous_dc_drain_current_is_id():
     assert "ID" in canonical_symbols("Continuous DC drain current")
+
+
+def test_typ_max_units_header_cell_splits():
+    cols = _split_multi_role_header("Typ. Max. Units", 339.6, 425.5)
+    assert [c[2] for c in cols] == ["Typ.", "Max.", "Units"]
+    roles, _ = _roles_for_header([n for _, _, n in cols], [])
+    assert set(roles.values()) == {"typ", "max", "unit"}
+
+
+def test_continuation_qg_row_is_not_a_header():
+    assert _header_looks_like_data_row(["Q/g", "Total Gate Charge", "–––", "150", "210", "nC"])
+    assert _header_looks_like_data_row(["Q\ngs", "V DD=50 V, I D=85 A", "-", "23", "30"])
+    assert _header_looks_like_data_row(["C\niss", "V GS=0 V", "-", "4927", "6405"])
+    assert _header_looks_like_data_row(["Qg Qgs Qgd", "Total Gate Charge Gate-to-Source Charge", "150 35 43", "210 ––– –––", "nC"])
+    assert _header_looks_like_data_row(["Ciss Coss Crss", "VGS=0 V", "- - -", "4927 791 32", "6405 1029 48"])
+    assert not _header_looks_like_data_row(["Symbol", "Conditions", "Values"])
+    assert not _header_looks_like_data_row(["Parameter", "Min.", "Typ.", "Max.", "Units"])
+    assert not _header_looks_like_data_row(["ID", "Continuous drain current", "11.4", "A"])
+    assert _looks_like_symbol("Q/g")
+    assert _looks_like_symbol("Ciss")
+    assert not _looks_like_symbol("Gate charge total")
+    assert _headers_align([(218.3, 250.0, "Symbol"), (400.0, 493.6, "max")], [(218.0, 249.0, "Qgs"), (401.0, 494.0, "30")])
+    assert not _headers_align([(50.0, 80.0, "A"), (500.0, 560.0, "B")], [(218.0, 250.0, "Qgs"), (400.0, 493.0, "30")])
+
+
+def test_qg_typ_recovers_switching_symbol():
+    from harness.electronics.power_datasheet import _recover_symbol
+
+    assert _recover_symbol("", "Qg,typ", "Qg,typ 41 nC") == "Qg"
+    rows = _rows_from_fact(
+        {
+            "symbol": "",
+            "symbol_as_printed": "",
+            "parameter": "Qg,typ",
+            "section": "",
+            "table_kind": "summary",
+            "table_title": "Key performance parameters",
+            "table_condition": None,
+            "condition_verbatim": None,
+            "unit": "nC",
+            "value": 41.0,
+            "verbatim": "Qg,typ 41 nC",
+            "page": 1,
+        },
+        {"vendor": "infineon.com"},
+    )
+    assert rows[0]["symbol"] == "Qg"
+    assert rows[0]["group"] == "switching"
+    assert rows[0]["value"] == 41.0

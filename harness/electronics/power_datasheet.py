@@ -70,7 +70,7 @@ _TITLE_ABS_MAX = re.compile(r"absolute\s+maximum|abs\.?\s*max|maximum\s+ratings"
 _TITLE_RECOMMENDED = re.compile(r"recommended\s+operating|operating\s+conditions|operating\s+range|operating\s+ratings", re.I)
 _TITLE_THERMAL = re.compile(r"thermal\s+(?:information|characteristics|resistance|data)", re.I)
 _TITLE_SUMMARY = re.compile(r"product\s+summary|key\s+(?:performance\s+)?(?:specifications|parameters)|summary", re.I)
-_TITLE_EC = re.compile(r"electrical\s+characteristics|electrical\s+specifications|static\s+characteristics|dynamic\s+characteristics|characteristics", re.I)
+_TITLE_EC = re.compile(r"electrical\s+characteristics|electrical\s+specifications|static\s+characteristics|dynamic\s+characteristics|gate\s+charge\s+characteristics|characteristics", re.I)
 _TITLE_ORDER = re.compile(r"ordering|package\s+information|packaging|device\s+information|revision\s+history|pin\s+(?:functions?|configuration)", re.I)
 
 _SYMBOL_LEAD = re.compile(r"^\s*([A-Z][A-Za-z]{0,3}(?:\([A-Za-z0-9. ]{1,8}\))?(?:[A-Za-z0-9]{0,4}))\s+(?=[A-Z(])")
@@ -108,6 +108,7 @@ _UNIT_BY_SYMBOL: tuple[tuple[re.Pattern[str], str], ...] = (
     (re.compile(r"^(?:pd)$"), "W"),
     (re.compile(r"^(?:tj|ta|tstg|tc)$"), "°C"),
     (re.compile(r"^rds"), "mΩ"),
+    (re.compile(r"^qg(?:s|d)?$"), "nC"),
 )
 
 
@@ -260,6 +261,47 @@ def _is_characteristics_header(roles: dict[int, str]) -> bool:
     )
 
 
+_HEADER_WORD = re.compile(r"^(?:parameter|symbol|conditions?|values?|min|typ|max|units?|characteristics)$", re.I)
+_DATA_ROW_SYMBOL = re.compile(
+    r"^(?:Q/?g(?:s|d)?|C/?(?:iss|oss|rss))",
+    re.I,
+)
+
+
+def _header_looks_like_data_row(names: list[str]) -> bool:
+    """find_tables promoted the first data row of a continuation table
+    (IR Hexfet Qg block, OptiMOS Gate Charge after Ciss) to header."""
+    cleaned = [_normalize_pdf_text((n or "").replace("\n", "/")).strip() for n in names]
+    cleaned = [c for c in cleaned if c]
+    if len(cleaned) < 3 or _HEADER_WORD.match(cleaned[0]):
+        return False
+    nums = 0
+    for n in cleaned:
+        parsed = _parse_number(n)
+        if parsed is not None:
+            nums += 1
+        else:
+            nums += len(re.findall(r"[-+]?\d+(?:\.\d+)?", n))
+    has_sym = any(_DATA_ROW_SYMBOL.search(re.sub(r"[\s\n]+", "", n)) for n in cleaned[:2])
+    return has_sym and nums >= 1
+
+
+def _looks_like_symbol(text: str) -> bool:
+    """A cell is a datasheet symbol (Qg, Ciss), not a phrase (Gate charge total)."""
+    raw = _normalize_pdf_text((text or "").replace("\n", "/")).strip()
+    compact = re.sub(r"[\s/]+", "", raw)
+    if _DATA_ROW_SYMBOL.search(compact):
+        return True
+    return bool(compact) and " " not in raw and len(compact) <= 14 and re.match(r"^[A-Za-z]", compact)
+
+
+def _headers_align(prev: list[tuple[float, float, str]], curr: list[tuple[float, float, str]], tol: float = 10.0) -> bool:
+    """Same x-span as the previous characteristics table on this page."""
+    if not prev or not curr:
+        return False
+    return abs(prev[0][0] - curr[0][0]) <= tol and abs(prev[-1][1] - curr[-1][1]) <= tol
+
+
 def _header_looks_fragmented(names: list[str]) -> bool:
     """find_tables splits 'PARAMETER' into 'PA'+'RAMETER' and a Q1/Q2 MOSFET
     header into a dozen one- and two-letter cells. Those headers assign the
@@ -395,6 +437,24 @@ def _split_values_min_typ_max(
     new_header = header[:vi] + pieces + header[vi + 1:]
     new_roles, _ = _roles_for_header([n for _, _, n in new_header], [])
     return new_header, new_roles, nxt
+
+
+_MULTI_ROLE_WORD = re.compile(r"min(?:imum)?\.?|typ(?:ical)?\.?|max(?:imum)?\.?|units?", re.I)
+
+
+def _split_multi_role_header(name: str, x0: float, x1: float) -> list[tuple[float, float, str]]:
+    """'Typ. Max. Units' in one cell (IR Hexfet) is three header columns."""
+    parts = list(_MULTI_ROLE_WORD.finditer(name or ""))
+    if len(parts) < 2:
+        return [(x0, x1, name)]
+    width = x1 - x0
+    n = max(len(name), 1)
+    out = []
+    for i, match in enumerate(parts):
+        left = x0 + width * match.start() / n
+        right = x0 + width * (parts[i + 1].start() if i + 1 < len(parts) else n) / n
+        out.append((left, right, match.group(0)))
+    return out
 
 
 def _row_as_header(table: Any, spans: list[dict[str, Any]], row_index: int) -> tuple[list[tuple[float, float, str]], int]:
@@ -534,8 +594,26 @@ def read_characteristic_tables(document: Any) -> list[dict[str, Any]]:
                 names = [n for _, _, n in header if n.strip()]
                 in_table = len(names) == 1 and (_kind_of(re.sub(r"^\(\d\)\s*", "", names[0])) or re.match(r"over\s+operating", names[0], re.I))
                 above = _title_above(page_lines, table.bbox)
+                # Infineon OptiMOS/IAUC: find_tables names the header as the
+                # part number; the real Parameter/Symbol/Min/Typ/Max row is
+                # gone (continuation of Dynamic / Gate Charge). Infer by cell
+                # contents instead of skipping the page.
+                part_number_header = (
+                    len(names) == 1
+                    and not _kind_of(names[0])
+                    and len(table.rows) >= 8
+                    and len(names[0]) <= 48
+                )
+                # IR Hexfet / OptiMOS page-5: find_tables starts a new table on
+                # Qg / Qgs / Ciss; the previous table on this page already had
+                # Parameter|Min|Typ|Max or Symbol|Conditions|Values.
+                data_row_header = _header_looks_like_data_row(names)
                 if in_table:
                     title_in_table = re.sub(r"^\(\d\)\s*", "", names[0])
+                elif part_number_header:
+                    pass
+                elif data_row_header:
+                    data_start = 0
                 elif not (_kind_of(above.split(" | ")[0]) and len(table.rows) >= 3):
                     continue
                 if in_table:
@@ -680,11 +758,25 @@ def read_characteristic_tables(document: Any) -> list[dict[str, Any]]:
                 if not paired and n_lines > 1 and all(len(v) in (n_lines, 1) for v in value_lines.values()):
                     # Several values, one label, no way to tell the lines apart:
                     # one fact per value line, all carrying the full label.
+                    # Continuation tables glue Qg/Qgs/Qgd into one find_tables
+                    # row; pair when the symbol (or short parameter) line count
+                    # matches the value lines.
                     paired = True
                     cond_lines = [(" ; ".join(t for t, _ in cond_lines), "")] * n_lines if cond_lines else []
                 for k in range(n_lines if paired else 1):
                     condition = cond_lines[k][0] if paired and cond_lines else (" ; ".join(t for t, _ in cond_lines) if not paired else "")
                     row_parameter = parameter if not line_params else " ".join(p for p in (parameter, line_params[k]) if p)
+                    line_symbol = symbol
+                    line_marked = symbol_marked
+                    if paired and len(sym_lines) == n_lines and _looks_like_symbol(sym_lines[k][0]):
+                        line_symbol, line_marked = sym_lines[k]
+                    elif paired and not line_params and len(par_lines) == n_lines:
+                        cand = par_lines[k][0]
+                        row_parameter = cand
+                        if _looks_like_symbol(cand):
+                            line_symbol, row_parameter = cand, ""
+                    line_symbol = re.sub(r"\*\d+", "", line_symbol)
+                    line_symbol = re.sub(r"[\s/]+", "", line_symbol)
                     cells: dict[str, Any] = {}
                     verbatim_parts = []
                     for role, lines in value_lines.items():
@@ -728,19 +820,20 @@ def read_characteristic_tables(document: Any) -> list[dict[str, Any]]:
                             cells[f"{role}_text"] = text
                     if not any(k2 in cells for k2 in _VALUE_ROLES):
                         continue
+                    line_unit = unit_text or last_unit or _unit_from_symbol(line_symbol) or unit
                     facts.append({
                         "page": pno + 1,
                         "table_title": title,
                         "table_kind": kind,
                         "table_condition": header_condition,
                         "section": section,
-                        "symbol": symbol,
-                        "symbol_as_printed": symbol_marked or symbol,
+                        "symbol": line_symbol,
+                        "symbol_as_printed": line_marked or line_symbol,
                         "parameter": row_parameter,
                         "condition_verbatim": condition or None,
-                        "unit": unit,
+                        "unit": line_unit,
                         **cells,
-                        "verbatim": " | ".join(p for p in [symbol, row_parameter, condition, *verbatim_parts, unit or ""] if p),
+                        "verbatim": " | ".join(p for p in [line_symbol, row_parameter, condition, *verbatim_parts, line_unit or ""] if p),
                     })
     return facts
 
@@ -808,6 +901,8 @@ _PROSE_PATTERNS: tuple[tuple[re.Pattern[str], str, str], ...] = (
     (re.compile(r"\bV\s*DS\s+([-+]?\d+(?:\.\d+)?)\s+(?:\d+(?:\.\d+)?\s+)?V\b", re.I), "vds", "VDS"),
     (re.compile(r"R\s*DS\s*\(?on\)?\s*,?\s*max\b.*?(\d+(?:\.\d+)?)\s*(?:m\s*[WΩΩω]|mΩ)", re.I), "rds_max", "RDS(on)"),
     (re.compile(rf"(?:static|over\s+full\s+T|operating).{{0,48}}T\s*[jvc]?\s*=\s*{_SNUM}(?:{_C})?{_TO}{_SNUM}{_C}", re.I), "temp_range", "TJ"),
+    (re.compile(r"Gate\s+charge\s+total\s+Q\s*g\b.{0,32}?(\d+(?:\.\d+)?)", re.I | re.DOTALL), "qg_typ", "Qg"),
+    (re.compile(r"\bQg,typ\s+(\d+(?:\.\d+)?)\s*nC", re.I), "qg_typ", "Qg"),
 )
 _PROSE_STOP = re.compile(r"absolute\s+maximum\s+ratings|pin\s+configuration|electrical\s+characteristics|specifications", re.I)
 _PROSE_PARAM = {
@@ -820,6 +915,7 @@ _PROSE_PARAM = {
     "vds": "Drain-to-source voltage",
     "id_max": "Drain current",
     "rds_max": "Drain-to-source on-resistance",
+    "qg_typ": "Total gate charge",
 }
 _PROSE_UNIT = {
     "vin_range": "V",
@@ -831,6 +927,7 @@ _PROSE_UNIT = {
     "vds": "V",
     "id_max": "A",
     "rds_max": "Ohm",
+    "qg_typ": "nC",
 }
 _FIXED_VOUT_HEAD = re.compile(r"output voltage options|available in output voltage|fixed output voltages?\b", re.I)
 _FIXED_VOUT_VALUE = re.compile(r"(\d+(?:\.\d+)?)\s*-?V\b", re.I)
@@ -900,6 +997,10 @@ def _prose_value(kind: str, nums: list[float], matched: str) -> Any | None:
         if re.search(r"\bm\s*[ΩΩωohmW]|mΩ", matched, re.I):
             value = value / 1000.0
         return value
+    if kind == "qg_typ":
+        if not nums or nums[0] <= 0 or nums[0] > 5000:
+            return None
+        return nums[0]
     if not nums or nums[0] > 1000:
         return None
     value = nums[0]
@@ -978,7 +1079,8 @@ def read_front_page_facts(document: Any, max_pages: int = 3) -> list[dict[str, A
 # ---------------------------------------------------------------------------
 
 _SYMBOL_IN_TEXT = re.compile(
-    r"\b(V\s*\(?\s*BR\s*\)?\s*DSS|VDSS|VDS|RDS\s*\(?\s*on\s*\)?|IDDC|ID,pulse|IDM|ID)\b",
+    r"\b(V\s*\(?\s*BR\s*\)?\s*DSS|VDSS|VDS|RDS\s*\(?\s*on\s*\)?|IDDC|ID,pulse|IDM|ID|"
+    r"QG(?:\([^)]{0,16}\))?|Qg,typ|Q\s*g(?![a-z]))\b",
     re.I,
 )
 
@@ -1003,7 +1105,10 @@ def _recover_symbol(symbol: str, parameter: str, verbatim: str = "") -> str:
         "IDPULSE": "ID,pulse",
         "IDM": "IDM",
         "ID": "ID",
-    }.get(raw, raw)
+        "QG": "Qg",
+        "QG,TYP": "Qg",
+        "QGTYP": "Qg",
+    }.get(raw if not raw.startswith("QG(") else "QG", raw)
 
 
 def _rows_from_fact(fact: dict[str, Any], base: dict[str, Any]) -> list[dict[str, Any]]:
