@@ -41,7 +41,12 @@ BOILERPLATE = re.compile(
     r"infineon\s+technologies|rohm\s+co|texas\s+instruments|product\s+structure|"
     r"monolithic\s+integrated|sourcing|interconnection|solderable|^\s*[•l○·]\s*|"
     r"product\s+validation|preliminary|engineering\s+sample|"
-    r"rds\s*\(\s*on\s*\)|\bvdss\b|\bidm\b|\bvgs\b",
+    r"rds\s*\(\s*on\s*\)|\bvdss\b|\bidm\b|\bvgs\b|"
+    r"^\s*applications?\s*$|^\s*connection\s+diagrams?\s*$|^\s*pin\s+(configuration|assignments?)\s*$|"
+    r"^\s*(absolute\s+maximum\s+(ratings?|conditions?)|electrical\s+characteristics|thermal\s+(information|characteristics)|"
+    r"package\s+(information|outline)|ordering\s+information|revision\s+history|"
+    r"device\s+comparison|schematics?|applications?\s+information)\s*$|"
+    r"^\s*qualified\s+for\s+automotive",
     re.I,
 )
 MIN_LINE_CHARS = 10
