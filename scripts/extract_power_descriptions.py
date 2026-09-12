@@ -46,15 +46,13 @@ BOILERPLATE = re.compile(
     r"^\s*(absolute\s+maximum\s+(ratings?|conditions?)|electrical\s+characteristics|thermal\s+(information|characteristics)|"
     r"package\s+(information|outline)|ordering\s+information|revision\s+history|"
     r"device\s+comparison|schematics?|applications?\s+information)\s*$|"
-    r"^\s*qualified\s+for\s+automotive",
+    r"^\s*qualified\s+for\s+automotive|^\s*related\s+literature\s*$",
     re.I,
 )
 MIN_LINE_CHARS = 10
 FLOOR_CHARS = 32
 TAGLINE_MIN_SIZE = 11.0
 TAGLINE_MAX_GAP = 40.0
-HEADER_FRACTION = 0.45
-DESC_HEADERS = re.compile(r"^(general\s+|product\s+)?description$", re.I)
 
 
 def meets_floor(line: str) -> bool:
@@ -89,8 +87,8 @@ def _page_lines(page) -> list[dict]:
             y = line["bbox"][1]
             if y > height - 55:  # footer: page numbers, copyright, doc ids
                 continue
-            lines.append({"text": text, "y": y, "size": max(s["size"] for s in line["spans"])})
-    lines.sort(key=lambda l: (l["y"], l["text"]))
+            lines.append({"text": text, "y": y, "x": line["bbox"][0], "x1": line["bbox"][2], "size": max(s["size"] for s in line["spans"])})
+    lines.sort(key=lambda l: (l["y"], l["x"]))
     return lines
 
 
@@ -101,39 +99,114 @@ def _is_part_numberish(text: str, part_number: str) -> bool:
 
 
 def _merge_tagline(lines: list[dict], start: int) -> str:
-    """Merge same-size, vertically-adjacent tagline lines (ROHM prints
-    '35V Voltage Resistance' / '1A LDO Regulators' as a two-line tagline)."""
+    """Merge same-size, vertically-adjacent tagline lines in the same column
+    (ROHM prints '35V Voltage Resistance' / '1A LDO Regulators' as a two-line
+    tagline). The x guard keeps two-column pages from merging across columns."""
     first = lines[start]
     parts = [first["text"]]
-    y = first["y"]
+    y, x = first["y"], first["x"]
     for nxt in lines[start + 1:]:
-        if 0 <= nxt["y"] - y <= TAGLINE_MAX_GAP and abs(nxt["size"] - first["size"]) <= 1.0 and len(nxt["text"]) >= MIN_LINE_CHARS:
+        if (
+            0 <= nxt["y"] - y <= TAGLINE_MAX_GAP
+            and abs(nxt["size"] - first["size"]) <= 1.0
+            and abs(nxt["x"] - x) <= 30.0
+            and len(nxt["text"]) >= MIN_LINE_CHARS
+        ):
             parts.append(nxt["text"])
-            y = nxt["y"]
+            y, x = nxt["y"], nxt["x"]
         else:
             break
     return " ".join(parts)
 
 
+def _first_sentence(text: str) -> str:
+    m = re.match(r".{20,}?\.(?=\s|$)", text, re.S)
+    return (m.group(0) if m else text).strip()
+
+
+def _visual_segments(lines: list[dict]) -> list[dict]:
+    """Reconstruct visual text segments: y-bucket the extraction entries,
+    sort by x, and split where the whitespace between printed extents
+    exceeds 25pt (a column gap, not a word space). Justified text extracts
+    as word-level fragments; this restores the printed line per column."""
+    buckets: list[dict] = []
+    for ln in lines:
+        if buckets and abs(ln["y"] - buckets[-1]["y"]) <= 2.5:
+            buckets[-1]["parts"].append(ln)
+        else:
+            buckets.append({"y": ln["y"], "parts": [ln]})
+    segments = []
+    for b in buckets:
+        parts = sorted(b["parts"], key=lambda p: p["x"])
+        seg_parts = [parts[0]]
+        for part in parts[1:]:
+            if part["x"] - seg_parts[-1]["x1"] > 25.0:
+                segments.append({"y": b["y"], "x": seg_parts[0]["x"], "text": " ".join(p["text"] for p in seg_parts)})
+                seg_parts = [part]
+            else:
+                seg_parts.append(part)
+        segments.append({"y": b["y"], "x": seg_parts[0]["x"], "text": " ".join(p["text"] for p in seg_parts)})
+    segments.sort(key=lambda s: (s["y"], s["x"]))
+    return segments
+
+
+def _paragraph_from_segments(segments: list[dict], anchor_x: float, start_y: float) -> str | None:
+    """First sentence from the column anchored at anchor_x, beginning at
+    start_y (the header line, or the opener line itself). Stops at
+    bullet-like fragments, boilerplate, and visual paragraph breaks."""
+    paragraph = []
+    prev_y = None
+    for seg in segments:
+        if seg["y"] < start_y - 5.0 or abs(seg["x"] - anchor_x) > 30.0:
+            continue
+        text = seg["text"]
+        if prev_y is not None and seg["y"] - prev_y > 60.0:
+            break
+        if len(text) < 12 or BOILERPLATE.search(text) or text.lstrip()[:1] in "−•▪◦l·":
+            break
+        paragraph.append(text)
+        prev_y = seg["y"]
+        if text.endswith("."):
+            break
+        if len(" ".join(paragraph)) > 400:
+            break
+    if not paragraph:
+        return None
+    return _first_sentence(" ".join(paragraph))
+
+
+DESC_HEADERS = re.compile(r"^(general\s+|product\s+)?description$", re.I)
+# Renesas covers open with the description paragraph under the title, no
+# header: "The RAA210130 is a fully PMBus enabled DC/DC ...".
+PARAGRAPH_OPENER = re.compile(r"^The\s+[A-Za-z0-9][\w./-]*\s+(?:is|are|provides|offers|features|delivers|combines)\b")
+
+
+def _column_lines(lines: list[dict], start: int, x: float) -> list[dict]:
+    return [l for l in lines[start:] if abs(l["x"] - x) <= 30.0]
+
+
 def _description_first_sentence(lines: list[dict]) -> str | None:
-    """First sentence of a page-1 Description section, verbatim substring."""
-    for i, ln in enumerate(lines):
+    """First sentence of a page-1 Description section, from the visual
+    segment anchored in the header's column (two-column Features text and
+    justified word fragments never splice in); falls back to a headerless
+    paragraph opener in its own column (Renesas-style covers)."""
+    segments = _visual_segments(lines)
+    for ln in lines:
         if not DESC_HEADERS.match(ln["text"]):
             continue
-        paragraph = []
-        for nxt in lines[i + 1:]:
-            if DESC_HEADERS.match(nxt["text"]) or BOILERPLATE.search(nxt["text"]) or len(nxt["text"]) < 12:
-                break
-            paragraph.append(nxt["text"])
-            if nxt["text"].endswith("."):
-                break
-            if len(" ".join(paragraph)) > 400:
-                break
-        text = " ".join(paragraph).strip()
-        if not text:
-            continue
-        m = re.match(r".{20,}?\.(?=\s|$)", text, re.S)
-        return (m.group(0) if m else text).strip()
+        # The header's own segment must not enter the paragraph loop (it is
+        # short and would end it); everything else in its column follows.
+        remaining = [s for s in segments if not (DESC_HEADERS.match(s["text"]) and abs(s["x"] - ln["x"]) <= 30.0)]
+        sentence = _paragraph_from_segments(remaining, ln["x"], ln["y"] - 5.0)
+        if sentence:
+            return sentence
+    for ln in lines:
+        if PARAGRAPH_OPENER.match(ln["text"]):
+            # -5 keeps the opener's own segment (bucket y can sit slightly
+            # above the raw line's y).
+            sentence = _paragraph_from_segments(segments, ln["x"], ln["y"] - 5.0)
+            if sentence:
+                return sentence
     return None
 
 

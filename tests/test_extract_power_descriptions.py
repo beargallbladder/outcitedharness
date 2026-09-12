@@ -17,12 +17,15 @@ from extract_power_descriptions import (  # noqa: E402
 )
 
 
-def _pdf_with_lines(tmp_path, name, lines):
-    """lines: list of (text, size, y)."""
+def _pdf_with_lines(tmp_path, name, lines, right_column=None):
+    """lines: list of (text, size, y). right_column: same shape, placed in a
+    second column (x=350) to exercise two-column layouts."""
     doc = pymupdf.open()
     page = doc.new_page()
     for text, size, y in lines:
         page.insert_text((72, y), text, fontsize=size)
+    for text, size, y in (right_column or []):
+        page.insert_text((350, y), text, fontsize=size)
     path = tmp_path / name
     doc.save(path)
     doc.close()
@@ -101,3 +104,41 @@ class TestPage1Description:
             ("Rev. 2.1, 2020-10-23", 8, 790),
         ])
         assert page1_description(pdf, "BSC0921NDI") == {"no_description_line": True}
+
+    def test_two_column_features_never_splice_into_description(self, tmp_path):
+        """CR remaining-527-ack-20260912: the y-sorted join spliced Features
+        bullets (right column) into the description sentence (left column).
+        Block-aware extraction must keep the columns apart."""
+        pdf = _pdf_with_lines(tmp_path, "e.pdf", [
+            ("LM2578A", 14, 40),
+            ("Description", 10, 120),
+            ("The LM2578A is a switching regulator which can", 10, 135),
+            ("Inverting and Non-Inverting", 10, 150),
+            ("Feedback Inputs", 10, 165),
+            ("be configured as a buck, boost, or inverting", 10, 195),
+            ("converter with a single ended primary.", 10, 210),
+        ], right_column=[
+            ("− Inverting and Non-Inverting Feedback Inputs", 10, 135),
+            ("− Ideal Load and Line Transient Responses", 10, 150),
+        ])
+        result = page1_description(pdf, "LM2578A")
+        assert result["candidate"] == "description_section"
+        assert result["description_verbatim"].startswith("The LM2578A is a switching regulator which can")
+        assert "Feedback Inputs" not in result["description_verbatim"] or "converter" in result["description_verbatim"]
+
+    def test_headerless_paragraph_opener_renesas_style(self, tmp_path):
+        """Renesas covers open with the description paragraph directly under
+        the title, no Description header (CR recovered +14 gold from our own
+        fetch cache that our picker keyed past)."""
+        pdf = _pdf_with_lines(tmp_path, "f.pdf", [
+            ("Datasheet", 16, 43),
+            ("The RAA210130 is a fully PMBus enabled DC/DC", 10, 140),
+            ("step-down power supply capable of delivering up to", 10, 153),
+            ("30A of current from a compact BGA package.", 10, 166),
+        ])
+        result = page1_description(pdf, "RAA210130")
+        assert result["candidate"] == "description_section"
+        assert result["description_verbatim"] == (
+            "The RAA210130 is a fully PMBus enabled DC/DC step-down power supply "
+            "capable of delivering up to 30A of current from a compact BGA package."
+        )
