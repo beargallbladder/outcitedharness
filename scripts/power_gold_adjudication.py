@@ -36,6 +36,13 @@ holds the context-verified subset; each payload row carries its context_gate
 reason (pass | label_qualifier_absent | row_qualifier_mismatch |
 label_condition_absent | row_condition_absent | row_condition_mismatch).
 
+With --gold-dir, the rebuilt fixture set is joined onto each miss by
+(source_artifact, source_field, value): the lenient gold report strips
+quantity_qualifier via --ignore-key, so the fixture is authoritative for the
+label's qualifier; source_qualifier (what the selector export stated,
+header-derived) is emitted as fixture_source_qualifier so every run measures
+the qualifier gap itself (CR qualifier-encoding-answer-20260912).
+
     python3 scripts/power_gold_adjudication.py \
         --grids results/power-grids-20260909/grids.jsonl \
         --gold-report results/power-grids-20260909/gold-report-lenient.json \
@@ -229,6 +236,7 @@ def main() -> int:
     ap.add_argument("--grids", type=Path, required=True)
     ap.add_argument("--gold-report", type=Path, required=True)
     ap.add_argument("--out", type=Path, required=True)
+    ap.add_argument("--gold-dir", type=Path, default=None, help="rebuilt fixture dir; joins quantity_qualifier and source_qualifier back onto misses (the lenient report strips quantity_qualifier via --ignore-key; CR qualifier-encoding-answer-20260912: fixture_source_qualifier makes the qualifier gap measurable and TI-100-style recoveries automatic)")
     args = ap.parse_args()
 
     grids = {}
@@ -236,6 +244,13 @@ def main() -> int:
         if line.strip():
             g = json.loads(line)
             grids[g["_meta"]["source_artifact"]] = g
+    fixtures: dict[tuple, dict] = {}
+    if args.gold_dir is not None:
+        for path in sorted(args.gold_dir.glob("*.json")):
+            fixture = json.loads(path.read_text())
+            for exp in fixture["expected"]:
+                if isinstance(exp.get("value"), (int, float)) and not isinstance(exp.get("value"), bool):
+                    fixtures[(fixture["source_artifact"], exp.get("source_field"), exp["value"])] = exp
     report = json.loads(args.gold_report.read_text())
     out_rows = []
     kinds: Counter = Counter()
@@ -245,6 +260,15 @@ def main() -> int:
             continue
         for miss in doc["misses"]:
             field = miss.get("source_field") or ""
+            # The fixture join restores qualifier context the lenient report
+            # stripped; the fixture is authoritative for what the label states.
+            label_ctx = dict(miss)
+            joined = fixtures.get((doc["source_artifact"], field, miss.get("value")))
+            if joined is not None:
+                if joined.get("quantity_qualifier") is not None:
+                    label_ctx["quantity_qualifier"] = joined["quantity_qualifier"]
+                if "source_qualifier" in joined:
+                    label_ctx["source_qualifier"] = joined["source_qualifier"]
             pattern = QUANTITY.get(field)
             same_quantity = []
             if pattern:
@@ -288,8 +312,8 @@ def main() -> int:
                         "unit": r.get("unit"),
                         "pages": r.get("source_pages"),
                         "spec_grade": spec_grade(field, r),
-                        "same_context": same_context(miss, r),
-                        "context_gate": context_gate(miss, r),
+                        "same_context": same_context(label_ctx, r),
+                        "context_gate": context_gate(label_ctx, r),
                     }
                     for r in ordered[:8]
                 ]
@@ -307,7 +331,7 @@ def main() -> int:
                         n = normalize(field, unit, v)
                         if n is not None:
                             norm.add(n)
-                            if same_context(miss, r):
+                            if same_context(label_ctx, r):
                                 comparable.add(n)
                 doc_values = sorted(norm)
                 doc_raw = sorted(raw)
@@ -332,8 +356,9 @@ def main() -> int:
                 "source_field": field,
                 "label_value": miss.get("value"),
                 "label_unit": miss.get("unit"),
-                "label_condition": miss.get("condition_verbatim"),
-                "label_quantity_qualifier": miss.get("quantity_qualifier"),
+                "label_condition": label_ctx.get("condition_verbatim"),
+                "label_quantity_qualifier": label_ctx.get("quantity_qualifier"),
+                "fixture_source_qualifier": label_ctx.get("source_qualifier"),
                 "kind": kind,
                 "canonical_unit": CANONICAL_UNIT.get(field),
                 "document_values": doc_values[:12],

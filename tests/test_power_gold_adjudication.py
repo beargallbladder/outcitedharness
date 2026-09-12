@@ -197,3 +197,42 @@ def test_cli_holds_verdicts_when_selector_label_lacks_qualifier(tmp_path):
     assert result["document_values_comparable"] == []
     assert result["document_rows"][0]["context_gate"] == "label_qualifier_absent"
     assert result["document_rows"][0]["quantity_qualifier"] == "maximum"
+
+
+def test_cli_fixture_join_restores_stripped_qualifier(tmp_path):
+    """The lenient report strips quantity_qualifier; --gold-dir joins it back
+    from the rebuilt fixture, so the gate can rule and the source qualifier
+    (what the selector export stated) is emitted for the gap measurement."""
+    grids = [{"_meta": {"source_artifact": "a"}, "rows": [{
+        "symbol": "RDS(on)", "label": "RDS(on)(Max.) 3.5 mΩ", "group": "switching",
+        "table_kind": "characteristics", "unit": "mOhm", "value": 3.5,
+        "quantity_qualifier": "rated", "condition_verbatim": "VGS = 10 V",
+    }]}]
+    documents = [{"source_artifact": "a", "misses": [{
+        # What the lenient report emits: qualifier stripped by --ignore-key.
+        "source_field": "rds_on_mohm", "value": 0.0035, "unit": "Ohm",
+        "condition_verbatim": "VGS = 10 V",
+    }]}]
+    gold_dir = tmp_path / "gold"
+    gold_dir.mkdir()
+    (gold_dir / "a.json").write_text(json.dumps({
+        "source_artifact": "a",
+        "expected": [{
+            "group": "switching", "source_field": "rds_on_mohm",
+            "value": 0.0035, "unit": "Ohm",
+            "quantity_qualifier": "rated", "source_qualifier": "typical",
+        }],
+    }))
+    grid_file, report, output = (tmp_path / n for n in ("grids.jsonl", "report.json", "out.jsonl"))
+    grid_file.write_text(json.dumps(grids[0]))
+    report.write_text(json.dumps({"documents": documents}))
+    subprocess.run([sys.executable, str(SCRIPT_ROOT / "power_gold_adjudication.py"),
+                    "--grids", str(grid_file), "--gold-report", str(report),
+                    "--gold-dir", str(gold_dir), "--out", str(output)], check=True)
+    result = json.loads(output.read_text())
+    assert result["kind"] == "unit_identity_match"
+    assert result["label_reading_matched"] == "as_printed"
+    assert result["label_quantity_qualifier"] == "rated"
+    assert result["fixture_source_qualifier"] == "typical"
+    assert result["document_values_comparable"] == [3.5]
+    assert result["document_rows"][0]["context_gate"] == "pass"
