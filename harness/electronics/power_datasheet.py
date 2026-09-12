@@ -441,6 +441,45 @@ def _split_values_min_typ_max(
 
 _MULTI_ROLE_WORD = re.compile(r"min(?:imum)?\.?|typ(?:ical)?\.?|max(?:imum)?\.?|units?", re.I)
 
+_INLINE_CONDITION = re.compile(
+    r"\b(?:VGS|VDS|VCE|VGE|VEE|VCC|VBE|VIN|VOUT|VDD|VSS|VBS"
+    r"|ID|IC|IE|TJ|Tvj|TC|TA|fpw|tr|tf|tp|tw)"
+    r"(?:\s*\(\s*[A-Za-z0-9.]+\s*\))?"
+    r"\s*=\s*[-+]?\d+(?:[.,]\d+)?"
+    r"(?:\s*(?:m|k|M|µ|u|n)?\s*(?:V|A|W|°C|C|Hz|kHz|MHz|s|ms|µs|us|ns))?"
+    r"(?:\s*[,;]\s*[-+]?\d+(?:[.,]\d+)?"
+    r"(?:\s*(?:m|k|M|µ|u|n)?\s*(?:V|A|W|°C|C|Hz|kHz|MHz|s|ms|µs|us|ns))?)?",
+    re.I,
+)
+
+
+def _inline_conditions(
+    *texts: str | None,
+    excluded_symbol: str | None = None,
+) -> str | None:
+    """Conditions printed inside a parameter cell, not a conditions column.
+
+    Infineon OptiMOS/IAUC EC tables state the test point inside the
+    parameter text ("... on-state resistance VGS = 20 V" / "ID = 1 A,
+    Tvj = 25 C"). Captured verbatim, deduplicated in print order. A
+    condition naming the row's own symbol is the row's value context,
+    not a condition, and is skipped.
+    """
+
+    own = re.sub(r"[^A-Za-z]", "", excluded_symbol or "").upper()
+    found: list[str] = []
+    for text in texts:
+        if not text:
+            continue
+        for match in _INLINE_CONDITION.finditer(text):
+            token = " ".join(match.group(0).split())
+            head = re.sub(r"[^A-Za-z]", "", token.split("=")[0]).upper()
+            if own and head and head.startswith(own):
+                continue
+            if token not in found:
+                found.append(token)
+    return "; ".join(found) if found else None
+
 
 def _split_multi_role_header(name: str, x0: float, x1: float) -> list[tuple[float, float, str]]:
     """'Typ. Max. Units' in one cell (IR Hexfet) is three header columns."""
@@ -830,7 +869,14 @@ def read_characteristic_tables(document: Any) -> list[dict[str, Any]]:
                         "symbol": line_symbol,
                         "symbol_as_printed": line_marked or line_symbol,
                         "parameter": row_parameter,
-                        "condition_verbatim": condition or None,
+                        "condition_verbatim": (
+                            condition
+                            or _inline_conditions(
+                                row_parameter,
+                                line_symbol,
+                                excluded_symbol=line_symbol,
+                            )
+                        ),
                         "unit": line_unit,
                         **cells,
                         "verbatim": " | ".join(p for p in [line_symbol, row_parameter, condition, *verbatim_parts, line_unit or ""] if p),

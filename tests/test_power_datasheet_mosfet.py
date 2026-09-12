@@ -8,6 +8,7 @@ from harness.electronics.power_datasheet import (
     _header_looks_fragmented,
     _header_looks_like_data_row,
     _headers_align,
+    _inline_conditions,
     _is_characteristics_header,
     _looks_like_symbol,
     _roles_for_header,
@@ -178,3 +179,29 @@ def test_qg_typ_recovers_switching_symbol():
     assert rows[0]["symbol"] == "Qg"
     assert rows[0]["group"] == "switching"
     assert rows[0]["value"] == 41.0
+
+
+def test_inline_conditions_from_parameter_cell():
+    captured = _inline_conditions(
+        "Drain-source on-state ID = 1 A Tvj = 25 °C, resistance VGS(on) = 20 V"
+    )
+    assert captured == "ID = 1 A; Tvj = 25 °C; VGS(on) = 20 V"
+
+
+def test_inline_conditions_skip_own_symbol():
+    assert (
+        _inline_conditions(
+            "Drain-source voltage VDS = 600 V", excluded_symbol="VDS"
+        )
+        is None
+    )
+    kept = _inline_conditions(
+        "on-state resistance at VDS = 600 V, ID = 10 A",
+        excluded_symbol="RDS(on)",
+    )
+    assert kept == "VDS = 600 V; ID = 10 A"
+
+
+def test_inline_conditions_clean_text_yields_none():
+    assert _inline_conditions("Gate threshold voltage") is None
+    assert _inline_conditions(None, "") is None
