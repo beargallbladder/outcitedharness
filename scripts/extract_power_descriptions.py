@@ -43,6 +43,12 @@ BOILERPLATE = re.compile(
     r"product\s+validation|preliminary|engineering\s+sample|"
     r"rds\s*\(\s*on\s*\)|\bvdss\b|\bidm\b|\bvgs\b|"
     r"^\s*applications?\s*$|^\s*connection\s+diagrams?\s*$|^\s*pin\s+(configuration|assignments?)\s*$|"
+    r"^\s*description\s*/\s*ordering\s+information|^\s*ordering\s+information|"
+    r"^\s*(not\s+)?recommended\s+for\s+new\s+designs?\s*$|^\s*synchronization\s*$|"
+    r"^\s*protection\s*$|^\s*amplifiers?\s*$|^\s*mobile\s+devices\s*$|"
+    r"^\s*(simplified|typical|functional)\s+(schematic|application|applications|block\s+diagram|design)\b|"
+    r"^\s*(application\s+example|block\s+diagram|output\s+voltage\s+ripple|typical\s+operating\s+circuit)\b|"
+    r"^\s*\d+\s+(features?|description|applications?)\b|"
     r"^\s*(absolute\s+maximum\s+(ratings?|conditions?)|electrical\s+characteristics|thermal\s+(information|characteristics)|"
     r"package\s+(information|outline)|ordering\s+information|revision\s+history|"
     r"device\s+comparison|schematics?|applications?\s+information)\s*$|"
@@ -98,10 +104,16 @@ def _is_part_numberish(text: str, part_number: str) -> bool:
     return bool(part) and part in bare and len(bare) <= len(part) + 4
 
 
+_BULLET_START = re.compile(r"^\s*(?:[•l○·*\u2022\u25cf\u2023\u2043]|[-–—]\s)", re.I)
+_FEATURES_BAND = re.compile(r"^\s*features?\b|^\s*key\s+features\b|^\s*applications?\b|^\s*benefits?\b", re.I)
+
+
 def _merge_tagline(lines: list[dict], start: int) -> str:
     """Merge same-size, vertically-adjacent tagline lines in the same column
     (ROHM prints '35V Voltage Resistance' / '1A LDO Regulators' as a two-line
-    tagline). The x guard keeps two-column pages from merging across columns."""
+    tagline). The x guard keeps two-column pages from merging across columns;
+    the walk stops at boilerplate, bullet lines, and feature/application band
+    headers so a tagline never splices into the FEATURES block below it."""
     first = lines[start]
     parts = [first["text"]]
     y, x = first["y"], first["x"]
@@ -112,6 +124,13 @@ def _merge_tagline(lines: list[dict], start: int) -> str:
             and abs(nxt["x"] - x) <= 30.0
             and len(nxt["text"]) >= MIN_LINE_CHARS
         ):
+            if (
+                BOILERPLATE.search(nxt["text"])
+                or _BULLET_START.match(nxt["text"])
+                or _FEATURES_BAND.match(nxt["text"])
+                or len(" ".join(parts)) + len(nxt["text"]) > 240
+            ):
+                break
             parts.append(nxt["text"])
             y, x = nxt["y"], nxt["x"]
         else:
@@ -240,6 +259,8 @@ def page1_description(pdf_path: Path, part_number: str) -> dict:
         best = max(candidates, key=lambda c: (c[0], -c[1]))
         return {"description_verbatim": best[2], "candidate": "tagline"}
     sentence = _description_first_sentence(lines)
+    if sentence:
+        sentence = re.sub(r"^\s*\d*\s*description\s+", "", sentence, flags=re.I)
     if sentence and not _is_part_numberish(sentence, part_number):
         return {"description_verbatim": sentence, "candidate": "description_section"}
     # Last chance: a smaller tagline under the part number (ROHM SiC covers
