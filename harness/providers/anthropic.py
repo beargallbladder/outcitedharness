@@ -9,6 +9,26 @@ from harness.config import ModelConfig
 from harness.providers.base import ChatRequest, ChatResult
 
 
+def _message_blocks(message: Any) -> dict[str, Any]:
+    if not message.images:
+        return {"role": message.role, "content": message.content}
+    blocks: list[dict[str, Any]] = []
+    if message.content:
+        blocks.append({"type": "text", "text": message.content})
+    for image in message.images:
+        blocks.append(
+            {
+                "type": "image",
+                "source": {
+                    "type": "base64",
+                    "media_type": image.mime_type,
+                    "data": image.data_b64,
+                },
+            }
+        )
+    return {"role": message.role, "content": blocks}
+
+
 class AnthropicProvider:
     def __init__(self, model: ModelConfig):
         self.model = model
@@ -31,7 +51,7 @@ class AnthropicProvider:
     async def chat(self, request: ChatRequest) -> ChatResult:
         system_parts = [m.content for m in request.messages if m.role == "system"]
         messages = [
-            {"role": m.role, "content": m.content}
+            _message_blocks(m)
             for m in request.messages
             if m.role != "system"
         ]

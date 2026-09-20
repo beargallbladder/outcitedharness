@@ -91,7 +91,13 @@ async def invoke_model(
     messages: list[ChatMessage] = []
     if packet.system:
         messages.append(ChatMessage(role="system", content=packet.system))
-    messages.append(ChatMessage(role="user", content=prompt_override or packet.user))
+    messages.append(
+        ChatMessage(
+            role="user",
+            content=prompt_override or packet.user,
+            images=packet.images,
+        )
+    )
 
     request = ChatRequest(
         messages=messages,

@@ -32,6 +32,29 @@ model_list:
       mode: chat
       max_input_tokens: 32768
 
+  - model_name: local-dsv41
+    litellm_params:
+      model: openai/deepseek-v4.1-flash
+      api_base: http://100.116.221.82:8888/v1
+      api_key: none
+      timeout: 900
+      stream_timeout: 900
+    model_info:
+      mode: chat
+      max_input_tokens: 1048576
+
+  # Exact model string the Mac mini client sends; same lane as local-dsv41.
+  - model_name: deepseek-v4.1-flash/deepseek-dgx/deepseek-v4.1-flash
+    litellm_params:
+      model: openai/deepseek-v4.1-flash
+      api_base: http://100.116.221.82:8888/v1
+      api_key: none
+      timeout: 900
+      stream_timeout: 900
+    model_info:
+      mode: chat
+      max_input_tokens: 1048576
+
   - model_name: harness-orch
     litellm_params:
       model: openai/harness-orch

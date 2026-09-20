@@ -39,6 +39,24 @@ def _extract_text(payload: dict[str, Any]) -> str:
     return str(content or "")
 
 
+def _message_payload(message: Any) -> dict[str, Any]:
+    if not message.images:
+        return {"role": message.role, "content": message.content}
+    parts: list[dict[str, Any]] = []
+    if message.content:
+        parts.append({"type": "text", "text": message.content})
+    for image in message.images:
+        parts.append(
+            {
+                "type": "image_url",
+                "image_url": {
+                    "url": f"data:{image.mime_type};base64,{image.data_b64}"
+                },
+            }
+        )
+    return {"role": message.role, "content": parts}
+
+
 class OpenAICompatibleProvider:
     def __init__(self, model: ModelConfig):
         self.model = model
@@ -53,7 +71,7 @@ class OpenAICompatibleProvider:
     async def chat(self, request: ChatRequest) -> ChatResult:
         payload: dict[str, Any] = {
             "model": self.model.model,
-            "messages": [{"role": m.role, "content": m.content} for m in request.messages],
+            "messages": [_message_payload(m) for m in request.messages],
             "temperature": request.temperature,
         }
         if request.max_tokens is not None:

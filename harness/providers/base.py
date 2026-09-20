@@ -5,9 +5,16 @@ from typing import Any, Protocol
 
 
 @dataclass
+class ImageAttachment:
+    mime_type: str
+    data_b64: str
+
+
+@dataclass
 class ChatMessage:
     role: str
     content: str
+    images: list[ImageAttachment] = field(default_factory=list)
 
 
 @dataclass

@@ -25,6 +25,8 @@ def test_litellm_routes_are_explicit_and_local_by_default():
     assert set(by_name) == {
         "local-coder",
         "local-qwen38",
+        "local-dsv41",
+        "deepseek-v4.1-flash/deepseek-dgx/deepseek-v4.1-flash",
         "local-critic",
         "harness-orch",
         "frontier-claude",
@@ -74,6 +76,8 @@ def test_travel_gateway_is_local_only_and_has_a_dedicated_key():
     assert set(by_name) == {
         "local-coder",
         "local-qwen38",
+        "local-dsv41",
+        "deepseek-v4.1-flash/deepseek-dgx/deepseek-v4.1-flash",
         "local-critic",
         "harness-orch",
     }

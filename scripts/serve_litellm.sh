@@ -2,17 +2,20 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-VENV="${LITELLM_VENV:-$ROOT/.litellm-venv}"
-CONFIG="${LITELLM_CONFIG:-$ROOT/config/litellm.yaml}"
-HOST="${LITELLM_HOST:-127.0.0.1}"
-PORT="${LITELLM_PORT:-7410}"
 
+# Source .env before resolving overrides below so LITELLM_HOST / LITELLM_PORT /
+# LITELLM_CONFIG / LITELLM_VENV set there actually take effect.
 if [[ -f "$ROOT/.env" ]]; then
   set -a
   # shellcheck disable=SC1091
   source "$ROOT/.env"
   set +a
 fi
+
+VENV="${LITELLM_VENV:-$ROOT/.litellm-venv}"
+CONFIG="${LITELLM_CONFIG:-$ROOT/config/litellm.yaml}"
+HOST="${LITELLM_HOST:-127.0.0.1}"
+PORT="${LITELLM_PORT:-7410}"
 
 : "${LITELLM_MASTER_KEY:?LITELLM_MASTER_KEY must be set in $ROOT/.env}"
 test -x "$VENV/bin/litellm" || {

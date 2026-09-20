@@ -178,6 +178,27 @@ models:
     capabilities:
       vision: false
 
+  # DeepSeek V4.1-Flash TP4/EP4 on four Sparks (dgx2 head + asus1/dgx3/asus3),
+  # SGLang; replaced the GLM-5.3-Flash TP4 lane 2026-09-16. See
+  # deploy/deepseek-v41/README.md. Multimodal — vision validated live against
+  # this endpoint; the 1M ctx ceiling is optimistic under concurrency. No API
+  # key on this endpoint. Enabled for client vision cases (loopback alias
+  # local-dsv41); not yet in the qualification record — no tournament or
+  # escalation claims may rest on it until qualified.
+  dsv41_flash:
+    enabled: true
+    tier: 0
+    display_name: "DeepSeek V4.1-Flash TP4 (four Sparks)"
+    short_name: "DSV41_TP4"
+    provider: openai_compatible
+    base_url: http://100.116.221.82:8888/v1
+    model: deepseek-v4.1-flash
+    temperature: 0
+    timeout_s: 900
+    max_tokens: 32768
+    capabilities:
+      vision: true
+
   dgx_qwen_sc5:
     enabled: false
     tier: 0
